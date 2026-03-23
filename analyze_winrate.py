@@ -1,6 +1,6 @@
 # analyze_winrate.py
 """
-Signal performance analyzer for SOL Flow Radar.
+Signal performance analyzer for SOL Flow Radar (Cuan Sniffer).
 
 Features:
   - R-multiple tracking (actual PnL in units of risk)

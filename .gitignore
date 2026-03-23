@@ -32,3 +32,5 @@ signals_*.csv
 dist/
 build/
 *.egg-info/
+
+last_recap.txt

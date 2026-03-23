@@ -12,13 +12,20 @@ Features:
   - Per-coin error cooldown — no Telegram spam during outages
   - Env validation before feeds start
   - V1 product mode: 15m signals only
+  - Automatic daily recap trigger (no cron needed)
+  - Recap runs in background thread — signal loop never pauses
+  - Daily recap runs once per UTC day
+  - Recap subprocess timeout protection
 """
 
 import os
+import sys
 import time
+import subprocess
+import threading
 from math import fabs
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config import POLL_INTERVAL_SECONDS
 from db import init_db, SessionLocal
@@ -47,12 +54,19 @@ WARMUP_BARS: Dict[str, int] = {
 DEFAULT_WARMUP = 30
 
 # Notify on first error, then every Nth — prevents Telegram spam
-# during exchange outages (at 15s poll = 240 msgs/hr per coin without this)
 ERROR_NOTIFY_EVERY = int(os.getenv("ERROR_NOTIFY_EVERY", "10"))
+
+# Daily recap controls
+RECAP_TRACK_FILE = os.getenv("RECAP_TRACK_FILE", "last_recap.txt")
+RECAP_NO_FETCH = os.getenv("RECAP_NO_FETCH", "1") == "1"
+RECAP_CHART = os.getenv("RECAP_CHART", "winrate_report.png")
+RECAP_TIMEOUT_SECONDS = int(os.getenv("RECAP_TIMEOUT_SECONDS", "300"))
+
+# Guard: only one recap thread at a time
+_recap_running = threading.Event()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-from datetime import datetime, timezone
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -81,6 +95,196 @@ def validate_env() -> bool:
     return ok
 
 
+# ── Recap scheduling ───────────────────────────────────────────────────────────
+
+def read_last_recap_time() -> Optional[datetime]:
+    if not os.path.exists(RECAP_TRACK_FILE):
+        return None
+    try:
+        with open(RECAP_TRACK_FILE, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+        if not raw:
+            return None
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception as e:
+        print(f"[RECAP] Could not read {RECAP_TRACK_FILE}: {e}")
+        return None
+
+
+def write_last_recap_time(dt: datetime):
+    try:
+        with open(RECAP_TRACK_FILE, "w", encoding="utf-8") as f:
+            f.write(dt.isoformat())
+    except Exception as e:
+        print(f"[RECAP] Could not write {RECAP_TRACK_FILE}: {e}")
+
+
+def should_run_recap() -> bool:
+    """
+    Run once per UTC day.
+    Also avoid firing when a recap thread is already running.
+    """
+    if _recap_running.is_set():
+        return False
+
+    now = datetime.now(timezone.utc)
+    last = read_last_recap_time()
+
+    if last is None:
+        return os.path.exists("signals.csv") and os.path.getsize("signals.csv") > 0
+
+    return now.date() > last.date()
+
+
+def extract_recap_summary(stdout: str) -> str:
+    """Pull the most useful lines from analyze_winrate.py output."""
+    if not stdout:
+        return "No analyzer output."
+
+    lines = [line.rstrip() for line in stdout.splitlines()]
+    picked: list[str] = []
+
+    metric_prefixes = (
+        "Fetched:", "Using ", "FILTER:",
+        "  Signals", "  Resolved", "  Timeouts",
+        "  Win rate", "  Total R", "  Mean R",
+        "  Sharpe", "  Sortino", "  Max DD",
+        "  Best streak", "  Worst streak",
+    )
+
+    for line in lines:
+        if line.strip().startswith(metric_prefixes):
+            picked.append(line)
+
+    sections_to_keep = {"By Coin", "By Setup Family", "By Side"}
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped in sections_to_keep:
+            picked.append("")
+            picked.append(stripped)
+            j = i + 1
+            kept_rows = 0
+            while j < len(lines):
+                s = lines[j].strip()
+                if not s:
+                    j += 1
+                    continue
+                if s.startswith("By ") and s not in sections_to_keep:
+                    break
+                if s.startswith("─"):
+                    j += 1
+                    continue
+                picked.append(lines[j])
+                kept_rows += 1
+                if kept_rows >= 5:
+                    break
+                j += 1
+            i = j
+            continue
+        i += 1
+
+    if not picked:
+        picked = lines[:30]
+
+    seen: set[str] = set()
+    final_lines = []
+    for line in picked:
+        key = line.rstrip()
+        if key not in seen:
+            seen.add(key)
+            final_lines.append(line)
+
+    return "\n".join(final_lines).strip()[:3000]
+
+
+def build_trader_grade_recap(summary_text: str) -> str:
+    return (
+        "📊 *Cuan Sniffer Daily Recap*\n\n"
+        f"🕒 Time: `{utc_now()}`\n"
+        f"📈 Chart: `{RECAP_CHART}`\n\n"
+        "```text\n"
+        f"{summary_text}\n"
+        "```"
+    )
+
+
+def _run_recap_worker():
+    """
+    Worker that runs in a daemon thread.
+
+    Notes:
+      - Writes timestamp BEFORE running to prevent retry spam on failure.
+      - Runs in background thread so signal loop never pauses.
+      - Includes timeout so a hung analyzer does not block future recaps forever.
+    """
+    _recap_running.set()
+    try:
+        print("[RECAP] Running automatic daily recap...")
+        notify("📊 *Running daily performance recap...*")
+
+        # Mark immediately so failures do not retry every cycle
+        write_last_recap_time(datetime.now(timezone.utc))
+
+        analyzer_args = ["analyze_winrate.py", "--chart", RECAP_CHART]
+        if RECAP_NO_FETCH:
+            analyzer_args.append("--no-fetch")
+
+        proc = subprocess.run(
+            [sys.executable, *analyzer_args],
+            capture_output=True,
+            text=True,
+            cwd=os.getcwd(),
+            timeout=RECAP_TIMEOUT_SECONDS,
+        )
+
+        if proc.returncode != 0:
+            err_blob = (proc.stderr or proc.stdout or "Unknown error")[:3000]
+            notify(
+                "❌ *Cuan Sniffer Daily Recap Failed*\n\n"
+                f"🕒 Time: `{utc_now()}`\n"
+                f"Exit code: `{proc.returncode}`\n\n"
+                "```text\n"
+                f"{err_blob}\n"
+                "```"
+            )
+            print(f"[RECAP ERROR] analyzer exited with code {proc.returncode}")
+            return
+
+        summary = extract_recap_summary(proc.stdout)
+        msg = build_trader_grade_recap(summary)
+        notify(msg)
+        print("[RECAP] Daily recap sent.")
+
+    except subprocess.TimeoutExpired:
+        print("[RECAP ERROR] analyzer timed out")
+        notify(
+            "❌ *Cuan Sniffer Daily Recap Timed Out*\n\n"
+            f"🕒 Time: `{utc_now()}`\n"
+            f"Timeout: `{RECAP_TIMEOUT_SECONDS}s`"
+        )
+    except Exception as e:
+        print(f"[RECAP ERROR] {e}")
+        notify(
+            "❌ *Cuan Sniffer Recap Exception*\n\n"
+            f"🕒 Time: `{utc_now()}`\n"
+            f"`{str(e)[:250]}`"
+        )
+    finally:
+        _recap_running.clear()
+
+
+def trigger_recap():
+    """Launch recap in a daemon thread — never blocks the signal loop."""
+    if _recap_running.is_set():
+        return
+    t = threading.Thread(target=_run_recap_worker, daemon=True)
+    t.start()
+
+
 # ── Signal message builder ─────────────────────────────────────────────────────
 
 def format_signal_message(
@@ -90,38 +294,50 @@ def format_signal_message(
     sentiment,
     tf_label: str = "15m",
 ) -> str:
-    side  = signal.side
+    side = signal.side
     emoji = "🟢" if side == "LONG" else "🔴"
     arrow = "📈" if side == "LONG" else "📉"
 
     price = float(signal.entry_price)
-    sl    = float(signal.stop_price)
-    tp    = float(signal.tp_price)
-    rr    = fabs((tp - price) / (price - sl)) if price != sl else 0.0
+    sl = float(signal.stop_price)
+    tp = float(signal.tp_price)
+    rr = fabs((tp - price) / (price - sl)) if price != sl else 0.0
 
     whale_pressure = float(flow_snapshot.get("whale_pressure", 0.0)) if flow_snapshot else 0.0
 
-    if whale_pressure   >  0.4:  flow_bias = "Aggressive buyers"
-    elif whale_pressure >  0.15: flow_bias = "Buyers stepping in"
-    elif whale_pressure < -0.4:  flow_bias = "Heavy selling"
-    elif whale_pressure < -0.15: flow_bias = "Sellers active"
-    else:                        flow_bias = "Neutral flow"
+    if whale_pressure > 0.4:
+        flow_bias = "Aggressive buyers"
+    elif whale_pressure > 0.15:
+        flow_bias = "Buyers stepping in"
+    elif whale_pressure < -0.4:
+        flow_bias = "Heavy selling"
+    elif whale_pressure < -0.15:
+        flow_bias = "Sellers active"
+    else:
+        flow_bias = "Neutral flow"
 
     funding = float(getattr(sentiment, "funding_rate", 0.0))
-    oi      = int(getattr(sentiment,   "open_interest", 0) or 0)
+    oi = int(getattr(sentiment, "open_interest", 0) or 0)
 
-    if funding > 0:   funding_txt = "Longs crowded"
-    elif funding < 0: funding_txt = "Shorts crowded"
-    else:             funding_txt = "Balanced"
+    if funding > 0:
+        funding_txt = "Longs crowded"
+    elif funding < 0:
+        funding_txt = "Shorts crowded"
+    else:
+        funding_txt = "Balanced"
 
     reasons = (signal.reason or "").lower()
-    if "sweep"  in reasons: setup = "Liquidity Sweep"
-    elif "choch" in reasons: setup = "Structure Flip"
-    elif "bos"   in reasons: setup = "Breakout"
-    else:                    setup = "Flow Setup"
+    if "sweep" in reasons:
+        setup = "Liquidity Sweep"
+    elif "choch" in reasons:
+        setup = "Structure Flip"
+    elif "bos" in reasons:
+        setup = "Breakout"
+    else:
+        setup = "Flow Setup"
 
-    strength     = int(min(100, max(50, signal.confidence * 100)))
-    regime       = signal.regime.replace("_", " ")
+    strength = int(min(100, max(50, signal.confidence * 100)))
+    regime = signal.regime.replace("_", " ")
     flow_section = f"\n🐋 Flow: {flow_bias}" if coin == "SOL" else ""
 
     return (
@@ -145,7 +361,7 @@ def format_signal_message(
 
 class CoinState:
     def __init__(self, coin: str, flow_ctx: Optional[FlowContext] = None):
-        self.coin     = coin
+        self.coin = coin
         self.flow_ctx = flow_ctx
 
         self.perp_feed = PerpDataFeed(coin=coin, interval="15m", max_candles=400)
@@ -173,7 +389,6 @@ class CoinState:
             cooldown_seconds=900,
         )
 
-        # Per-coin error counter — throttles Telegram error notifications
         self._error_count: int = 0
 
     def start_feeds(self):
@@ -194,11 +409,6 @@ class CoinState:
         self.last_signal[tf] = {"side": side, "price": price}
 
     def on_error(self, e: Exception) -> bool:
-        """
-        Increment error counter.
-        Returns True if Telegram should be notified this time.
-        Notifies on error #1 and every ERROR_NOTIFY_EVERY after.
-        """
         self._error_count += 1
         return (
             self._error_count == 1 or
@@ -206,7 +416,6 @@ class CoinState:
         )
 
     def on_success(self):
-        """Reset error counter after a clean cycle."""
         if self._error_count > 0:
             print(f"[{self.coin}] recovered after {self._error_count} consecutive errors")
         self._error_count = 0
@@ -215,7 +424,7 @@ class CoinState:
 # ── Per-coin processing ────────────────────────────────────────────────────────
 
 def process_coin(state: CoinState) -> bool:
-    coin   = state.coin
+    coin = state.coin
     warmup = WARMUP_BARS.get(coin, DEFAULT_WARMUP)
 
     df = state.perp_feed.get_ohlcv_df()
@@ -224,10 +433,10 @@ def process_coin(state: CoinState) -> bool:
         return False
 
     flow_snapshot = state.get_flow_snapshot()
-    sent          = state.sent_feed.get_snapshot()
-    funding_rate  = float(getattr(sent, "funding_rate", 0.0))
-    open_interest = int(getattr(sent,   "open_interest", 0) or 0)
-    bias          = float(getattr(sent, "bias", 0.0))
+    sent = state.sent_feed.get_snapshot()
+    funding_rate = float(getattr(sent, "funding_rate", 0.0))
+    open_interest = int(getattr(sent, "open_interest", 0) or 0)
+    bias = float(getattr(sent, "bias", 0.0))
 
     if coin == "SOL" and flow_snapshot:
         state.alert_mgr.maybe_alert_large_flow(flow_snapshot)
@@ -263,7 +472,7 @@ def process_coin(state: CoinState) -> bool:
 def build_states(flow_ctx: FlowContext) -> Dict[str, CoinState]:
     states: Dict[str, CoinState] = {}
     for coin in TRACKED_COINS:
-        ctx   = flow_ctx if coin == "SOL" else None
+        ctx = flow_ctx if coin == "SOL" else None
         state = CoinState(coin, ctx)
         state.start_feeds()
         states[coin] = state
@@ -273,14 +482,12 @@ def build_states(flow_ctx: FlowContext) -> Dict[str, CoinState]:
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    # Validate env before starting anything
     validate_env()
-
     init_db()
     init_signal_log()
 
     flow_ctx = FlowContext(SessionLocal)
-    states   = build_states(flow_ctx)
+    states = build_states(flow_ctx)
 
     notify(
         f"🚀 *Cuan Sniffer LIVE*\n"
@@ -300,7 +507,7 @@ def main():
 
                 except Exception as e:
                     err_msg = str(e)[:180]
-                    count   = states[coin]._error_count + 1
+                    count = states[coin]._error_count + 1
                     print(f"[{coin} ERROR #{count}] {err_msg}")
 
                     if states[coin].on_error(e):
@@ -309,6 +516,10 @@ def main():
                             f"{utc_now()}\n"
                             f"`{err_msg}`"
                         )
+
+            # Automatic daily recap — runs in background, never blocks signals
+            if should_run_recap():
+                trigger_recap()
 
             if not any_signal:
                 print(f"[AGENT] No signals this cycle ({utc_now()})")
@@ -327,7 +538,6 @@ def main():
             f"{utc_now()}\n"
             f"`{err_msg}`"
         )
-        # Sleep so the Telegram HTTP request completes before process exits
         time.sleep(5)
 
 
