@@ -1,0 +1,6 @@
+requests
+python-dotenv
+SQLAlchemy
+pandas
+numpy
+matplotlib
