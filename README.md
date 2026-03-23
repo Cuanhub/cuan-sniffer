@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🐶💰 Cuan Sniffer
 
 **Sniffing out high-probability trades before the market moves.**
@@ -222,3 +223,6 @@ matplotlib
 ---
 
 > ⚠️ Built for high-risk leveraged markets. Not financial advice.
+=======
+# cuan-sniffer
+>>>>>>> 19f52c9bb6432d101c636cb961ccf0c901f42f26
