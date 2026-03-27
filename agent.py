@@ -16,6 +16,8 @@ Features:
   - Recap runs in background thread — signal loop never pauses
   - Daily recap runs once per UTC day
   - Recap subprocess timeout protection
+  - Paper trading execution layer wired in
+  - Daily and all-time trade P&L recap via Telegram
 """
 
 import os
@@ -36,6 +38,8 @@ from signal_engine import AdaptiveSignalEngine, Signal
 from notifier import send_telegram_message
 from signal_log import init_signal_log, append_signal
 from alerts import AlertManager
+from executor import Executor
+from trades_recap import run_trades_recap
 
 
 # ── Coin list ──────────────────────────────────────────────────────────────────
@@ -61,6 +65,7 @@ RECAP_TRACK_FILE = os.getenv("RECAP_TRACK_FILE", "last_recap.txt")
 RECAP_NO_FETCH = os.getenv("RECAP_NO_FETCH", "1") == "1"
 RECAP_CHART = os.getenv("RECAP_CHART", "winrate_report.png")
 RECAP_TIMEOUT_SECONDS = int(os.getenv("RECAP_TIMEOUT_SECONDS", "300"))
+RECAP_STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "1000.0"))
 
 # Guard: only one recap thread at a time
 _recap_running = threading.Event()
@@ -83,15 +88,19 @@ def notify(text: str):
 def validate_env() -> bool:
     """Check critical env vars before starting feeds."""
     ok = True
+
     if not os.getenv("TELEGRAM_BOT_TOKEN"):
         print("[ENV] WARNING: TELEGRAM_BOT_TOKEN not set — alerts will not send")
         ok = False
+
     if not os.getenv("TELEGRAM_CHAT_ID"):
         print("[ENV] WARNING: TELEGRAM_CHAT_ID not set — alerts will not send")
         ok = False
+
     if not TRACKED_COINS:
         print("[ENV] ERROR: TRACKED_COINS is empty — nothing to scan")
         ok = False
+
     return ok
 
 
@@ -100,15 +109,19 @@ def validate_env() -> bool:
 def read_last_recap_time() -> Optional[datetime]:
     if not os.path.exists(RECAP_TRACK_FILE):
         return None
+
     try:
         with open(RECAP_TRACK_FILE, "r", encoding="utf-8") as f:
             raw = f.read().strip()
+
         if not raw:
             return None
+
         dt = datetime.fromisoformat(raw)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
+
     except Exception as e:
         print(f"[RECAP] Could not read {RECAP_TRACK_FILE}: {e}")
         return None
@@ -160,12 +173,14 @@ def extract_recap_summary(stdout: str) -> str:
             picked.append(line)
 
     sections_to_keep = {"By Coin", "By Setup Family", "By Side"}
+
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()
         if stripped in sections_to_keep:
             picked.append("")
             picked.append(stripped)
+
             j = i + 1
             kept_rows = 0
             while j < len(lines):
@@ -178,11 +193,13 @@ def extract_recap_summary(stdout: str) -> str:
                 if s.startswith("─"):
                     j += 1
                     continue
+
                 picked.append(lines[j])
                 kept_rows += 1
                 if kept_rows >= 5:
                     break
                 j += 1
+
             i = j
             continue
         i += 1
@@ -259,6 +276,16 @@ def _run_recap_worker():
         notify(msg)
         print("[RECAP] Daily recap sent.")
 
+        # ── Trades P&L recap (daily + all-time) ──────────────────────────
+        try:
+            run_trades_recap(
+                notify_fn=notify,
+                starting_balance=RECAP_STARTING_BALANCE,
+            )
+            print("[RECAP] Trade P&L recap sent.")
+        except Exception as te:
+            print(f"[RECAP] Trade P&L recap failed: {te}")
+
     except subprocess.TimeoutExpired:
         print("[RECAP ERROR] analyzer timed out")
         notify(
@@ -281,6 +308,7 @@ def trigger_recap():
     """Launch recap in a daemon thread — never blocks the signal loop."""
     if _recap_running.is_set():
         return
+
     t = threading.Thread(target=_run_recap_worker, daemon=True)
     t.start()
 
@@ -408,7 +436,7 @@ class CoinState:
     def mark_signal(self, tf: str, side: str, price: float):
         self.last_signal[tf] = {"side": side, "price": price}
 
-    def on_error(self, e: Exception) -> bool:
+    def on_error(self) -> bool:
         self._error_count += 1
         return (
             self._error_count == 1 or
@@ -423,7 +451,7 @@ class CoinState:
 
 # ── Per-coin processing ────────────────────────────────────────────────────────
 
-def process_coin(state: CoinState) -> bool:
+def process_coin(state: CoinState, executor: Executor) -> bool:
     coin = state.coin
     warmup = WARMUP_BARS.get(coin, DEFAULT_WARMUP)
 
@@ -450,9 +478,12 @@ def process_coin(state: CoinState) -> bool:
     if state.is_duplicate("15m", sig.side, price, 0.010):
         return False
 
+    sig_id = int(time.time() * 1000)
+    sig.meta["signal_id"] = sig_id
+
     append_signal(
         coin=coin,
-        sig_id=int(time.time() * 1000),
+        sig_id=sig_id,
         signal=sig,
         flow_snapshot=flow_snapshot,
         funding_rate=funding_rate,
@@ -463,6 +494,15 @@ def process_coin(state: CoinState) -> bool:
     msg = format_signal_message(coin, sig, flow_snapshot, sent, "15m")
     print(f"[{coin}] 15m signal fired")
     notify(msg)
+
+    # Send signal into execution layer
+    try:
+        opened = executor.on_signal(sig, sig_id=sig_id)
+        if opened:
+            print(f"[{coin}] paper trade opened")
+    except Exception as e:
+        print(f"[EXECUTOR ERROR] {coin}: {e}")
+
     state.mark_signal("15m", sig.side, price)
     return True
 
@@ -482,17 +522,22 @@ def build_states(flow_ctx: FlowContext) -> Dict[str, CoinState]:
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    validate_env()
+    if not validate_env():
+        print("[AGENT] Invalid environment. Exiting.")
+        return
+
     init_db()
     init_signal_log()
 
     flow_ctx = FlowContext(SessionLocal)
     states = build_states(flow_ctx)
+    executor = Executor(notify_fn=notify)
 
+    # Boot status — reconstructed from trades.csv, includes open positions
+    notify(executor.boot_status_message())
     notify(
-        f"🚀 *Cuan Sniffer LIVE*\n"
-        f"Coins: {', '.join(TRACKED_COINS)}\n"
-        f"Time: {utc_now()}"
+        f"🎯 Scanning: `{', '.join(TRACKED_COINS)}`\n"
+        f"🕒 `{utc_now()}`"
     )
 
     try:
@@ -501,7 +546,7 @@ def main():
 
             for coin in TRACKED_COINS:
                 try:
-                    if process_coin(states[coin]):
+                    if process_coin(states[coin], executor):
                         any_signal = True
                     states[coin].on_success()
 
@@ -510,12 +555,23 @@ def main():
                     count = states[coin]._error_count + 1
                     print(f"[{coin} ERROR #{count}] {err_msg}")
 
-                    if states[coin].on_error(e):
+                    if states[coin].on_error():
                         notify(
                             f"❌ *{coin} error* (x{states[coin]._error_count})\n"
                             f"{utc_now()}\n"
                             f"`{err_msg}`"
                         )
+
+            # Update paper trader / open positions every cycle
+            try:
+                executor.update()
+            except Exception as e:
+                print(f"[EXECUTOR UPDATE ERROR] {e}")
+                notify(
+                    f"❌ *Executor update error*\n"
+                    f"{utc_now()}\n"
+                    f"`{str(e)[:180]}`"
+                )
 
             # Automatic daily recap — runs in background, never blocks signals
             if should_run_recap():
@@ -527,7 +583,11 @@ def main():
             time.sleep(POLL_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:
-        notify(f"🛑 *Bot stopped cleanly*\n{utc_now()}")
+        notify(
+            f"🛑 *Bot stopped cleanly*\n"
+            f"{utc_now()}\n"
+            f"{executor.paper.session_summary()}"
+        )
         print("[AGENT] Stopped.")
 
     except Exception as e:

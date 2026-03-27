@@ -1,97 +1,207 @@
+# smc_sweeps.py
+"""
+Liquidity sweep and equal-high/low features.
+
+Upgrades included:
+  - multi-bar sweep window
+  - rolling equal-high / equal-low cluster detection
+  - optional ATR-based minimum breach filter
+  - optional minimum reclaim / rejection close filter
+
+Definitions:
+  Bullish sweep:
+    - price trades below a prior swing low
+    - closes back above that level
+    - lower wick is meaningfully larger than body
+    - breach is large enough to matter
+
+  Bearish sweep:
+    - price trades above a prior swing high
+    - closes back below that level
+    - upper wick is meaningfully larger than body
+    - breach is large enough to matter
+"""
+
 import pandas as pd
 import numpy as np
 
 
-def detect_equal_highs_lows(df: pd.DataFrame, threshold_pct: float = 0.1) -> pd.DataFrame:
-    """
-    Identifies equal highs and equal lows (liquidity pools).
+SWEEP_WINDOW = 15          # prior bars used to define the liquidity level
+EQ_CLUSTER_WINDOW = 4      # bars used to detect equal highs/lows clusters
 
-    threshold_pct = % difference allowed between candle highs/lows 
-    to consider them "equal".
+
+def _ensure_atr(df: pd.DataFrame, atr_col: str = "atr_14", period: int = 14) -> pd.DataFrame:
     """
+    Ensure ATR exists. Uses EMA smoothing for consistency with features.py.
+    """
+    if atr_col in df.columns:
+        return df
+
     df = df.copy()
-    highs = df["high"]
-    lows = df["low"]
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    prev_close = close.shift(1)
 
-    eq_high = [False] * len(df)
-    eq_low = [False] * len(df)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
 
-    for i in range(1, len(df)):
-        # percent deviation allowed
-        max_dev_high = highs.iloc[i] * threshold_pct / 100
-        max_dev_low = lows.iloc[i] * threshold_pct / 100
-
-        if abs(highs.iloc[i] - highs.iloc[i - 1]) <= max_dev_high:
-            eq_high[i] = True
-            eq_high[i - 1] = True
-
-        if abs(lows.iloc[i] - lows.iloc[i - 1]) <= max_dev_low:
-            eq_low[i] = True
-            eq_low[i - 1] = True
-
-    df["eq_high"] = eq_high
-    df["eq_low"] = eq_low
-
+    df[atr_col] = tr.ewm(span=period, adjust=False).mean()
     return df
 
 
-def detect_liquidity_sweeps(df: pd.DataFrame, wick_factor: float = 2.0) -> pd.DataFrame:
+def detect_equal_highs_lows(
+    df: pd.DataFrame,
+    threshold_pct: float = 0.10,
+    cluster_window: int = EQ_CLUSTER_WINDOW,
+) -> pd.DataFrame:
     """
-    Detects bullish and bearish liquidity sweeps:
-    
-    Bullish Sweep (grab liquidity below):
-        - Current low < previous swing low
-        - Candle closes back above previous low
-        - Wick size significantly larger than candle body
+    Detect equal highs / lows across a small rolling cluster rather than only
+    adjacent bars.
 
-    Bearish Sweep (grab liquidity above):
-        - Current high > previous swing high
-        - Candle closes back below previous high
-        - Wick size significantly larger than body
+    Two levels are considered "equal" if their distance is within:
+      threshold_pct% of price
+
+    Marks all bars in the matching cluster as eq_high / eq_low.
     """
-
     df = df.copy()
-    bullish_sweep = [False] * len(df)
-    bearish_sweep = [False] * len(df)
+    n = len(df)
 
-    highs = df["high"]
-    lows = df["low"]
-    closes = df["close"]
-    opens = df["open"]
+    eq_high = [False] * n
+    eq_low = [False] * n
 
-    for i in range(1, len(df)):
-        prev_high = highs.iloc[i - 1]
-        prev_low = lows.iloc[i - 1]
+    highs = df["high"].values
+    lows = df["low"].values
 
-        body = abs(closes.iloc[i] - opens.iloc[i])
-        wick_down = opens.iloc[i] - lows.iloc[i] if opens.iloc[i] > closes.iloc[i] else closes.iloc[i] - lows.iloc[i]
-        wick_up = highs.iloc[i] - closes.iloc[i] if closes.iloc[i] > opens.iloc[i] else highs.iloc[i] - opens.iloc[i]
+    for i in range(cluster_window - 1, n):
+        start = i - cluster_window + 1
+        end = i + 1
 
-        # ------------------------
-        # Bullish Liquidity Sweep
-        # ------------------------
-        if lows.iloc[i] < prev_low and closes.iloc[i] > prev_low and wick_down > body * wick_factor:
+        high_window = highs[start:end]
+        low_window = lows[start:end]
+
+        max_h = float(np.max(high_window))
+        min_h = float(np.min(high_window))
+        max_l = float(np.max(low_window))
+        min_l = float(np.min(low_window))
+
+        high_ref = float(np.mean(high_window))
+        low_ref = float(np.mean(low_window))
+
+        max_dev_h = abs(high_ref) * threshold_pct / 100.0
+        max_dev_l = abs(low_ref) * threshold_pct / 100.0
+
+        if (max_h - min_h) <= max_dev_h:
+            for j in range(start, end):
+                eq_high[j] = True
+
+        if (max_l - min_l) <= max_dev_l:
+            for j in range(start, end):
+                eq_low[j] = True
+
+    df["eq_high"] = pd.Series(eq_high, index=df.index, dtype=bool)
+    df["eq_low"] = pd.Series(eq_low, index=df.index, dtype=bool)
+    return df
+
+
+def detect_liquidity_sweeps(
+    df: pd.DataFrame,
+    wick_factor: float = 2.0,
+    window: int = SWEEP_WINDOW,
+    atr_col: str = "atr_14",
+    min_breach_atr_frac: float = 0.05,
+    min_reclaim_body_frac: float = 0.10,
+) -> pd.DataFrame:
+    """
+    Detect liquidity sweeps against multi-bar swing levels.
+
+    Bullish sweep requires:
+      - current low < prior window swing low
+      - current close > swing low
+      - lower wick > body * wick_factor
+      - breach magnitude >= min_breach_atr_frac * ATR
+      - reclaim close above level by at least min_reclaim_body_frac * candle range
+
+    Bearish sweep requires:
+      - current high > prior window swing high
+      - current close < swing high
+      - upper wick > body * wick_factor
+      - breach magnitude >= min_breach_atr_frac * ATR
+      - rejection close below level by at least min_reclaim_body_frac * candle range
+    """
+    df = _ensure_atr(df, atr_col=atr_col).copy()
+    n = len(df)
+
+    bullish_sweep = [False] * n
+    bearish_sweep = [False] * n
+
+    highs = df["high"].values
+    lows = df["low"].values
+    closes = df["close"].values
+    opens = df["open"].values
+    atrs = df[atr_col].values
+
+    for i in range(window, n):
+        prior_window_lows = lows[i - window:i]
+        prior_window_highs = highs[i - window:i]
+
+        swing_low = float(np.min(prior_window_lows))
+        swing_high = float(np.max(prior_window_highs))
+
+        o = float(opens[i])
+        c = float(closes[i])
+        h = float(highs[i])
+        l = float(lows[i])
+        atr_v = float(atrs[i]) if not pd.isna(atrs[i]) else 0.0
+
+        candle_range = h - l
+        body = abs(c - o)
+
+        upper_wick = h - max(o, c)
+        lower_wick = min(o, c) - l
+
+        min_breach = min_breach_atr_frac * atr_v if atr_v > 0 else 0.0
+        reclaim_buffer = min_reclaim_body_frac * candle_range if candle_range > 0 else 0.0
+
+        # Bullish sweep
+        breach_dn = swing_low - l
+        reclaims_level = c > (swing_low + reclaim_buffer)
+
+        if (
+            l < swing_low and
+            breach_dn >= min_breach and
+            reclaims_level and
+            lower_wick > body * wick_factor
+        ):
             bullish_sweep[i] = True
 
-        # ------------------------
-        # Bearish Liquidity Sweep
-        # ------------------------
-        if highs.iloc[i] > prev_high and closes.iloc[i] < prev_high and wick_up > body * wick_factor:
+        # Bearish sweep
+        breach_up = h - swing_high
+        rejects_level = c < (swing_high - reclaim_buffer)
+
+        if (
+            h > swing_high and
+            breach_up >= min_breach and
+            rejects_level and
+            upper_wick > body * wick_factor
+        ):
             bearish_sweep[i] = True
 
-    df["sweep_bull"] = bullish_sweep
-    df["sweep_bear"] = bearish_sweep
-
+    df["sweep_bull"] = pd.Series(bullish_sweep, index=df.index, dtype=bool)
+    df["sweep_bear"] = pd.Series(bearish_sweep, index=df.index, dtype=bool)
     return df
 
 
 def add_sweep_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Full sweep detection engine:
-    - equal highs/lows (liquidity pools)
-    - sweep candles
+    Add equal-high/low and liquidity-sweep features.
     """
-
     df = detect_equal_highs_lows(df)
     df = detect_liquidity_sweeps(df)
     return df

@@ -19,6 +19,8 @@ signals_*.csv
 *.log
 *.sqlite
 *.db
+*.csv
+*.png
 
 # OS / editor
 .DS_Store
