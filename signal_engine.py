@@ -25,20 +25,28 @@ class Signal:
 
 class AdaptiveSignalEngine:
     """
-    Ship-version signal engine.
+    Full-feature signal engine.
 
     Philosophy:
-    - Keep product logic explainable
-    - Use 15m for execution
-    - Use 1h / 4h as context filters
-    - Support only two setup families:
-        1. continuation
-        2. reversal
+    - 15m execution
+    - 1h / 4h context
+    - continuation + reversal families
+    - execution-aware but not over-choked
+    - orthogonal features preferred over stacked duplicates
+
+    Includes:
+    - Volume confirmation
+    - VWAP deviation magnitude
+    - Candle body quality
+    - Flow / funding / OI context
+    - RSI divergence for reversal enhancement
+    - Engine-level dedup with TTL
+    - Swing signal support (1h / 4h)
     """
 
     def __init__(
         self,
-        score_threshold: float = 0.80,
+        score_threshold: float = 0.72,
         atr_stop_mult: float = 1.3,
         atr_tp_mult: float = 3.0,
         min_stop_pct: float = 0.004,
@@ -63,6 +71,8 @@ class AdaptiveSignalEngine:
             "1h": None,
             "4h": None,
         }
+
+        self._last_emitted: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Feature frame
@@ -110,7 +120,7 @@ class AdaptiveSignalEngine:
 
         required_numeric = [
             "time", "open", "high", "low", "close", "volume",
-            "atr_14", "vwap_dev",
+            "atr_14", "vwap_dev", "body_pct", "rsi_14",
         ]
 
         missing_required = [c for c in required_numeric if c not in df.columns]
@@ -121,6 +131,83 @@ class AdaptiveSignalEngine:
 
         df = df.dropna(subset=required_numeric).reset_index(drop=True)
         return df
+
+    # ------------------------------------------------------------------
+    # Engine-level dedup
+    # ------------------------------------------------------------------
+
+    def _is_stale_repeat(
+        self,
+        coin: str,
+        side: str,
+        setup_family: str,
+        entry_price: float,
+        regime: str,
+        atr: float,
+    ) -> bool:
+        """
+        Suppress repeated signals inside the current 15m lifecycle.
+
+        Stale repeat if:
+          - same coin + side
+          - same setup_family
+          - same regime
+          - price still within ATR band
+          - and TTL not expired
+        """
+        DEDUP_EXPIRY_SEC = 900
+        DEDUP_ATR_MULT = 0.75
+
+        last = self._last_emitted.get((coin, side))
+        if last is None:
+            return False
+
+        elapsed = (pd.Timestamp.now(tz="UTC") - last["ts"]).total_seconds()
+        if elapsed > DEDUP_EXPIRY_SEC:
+            return False
+
+        if last["setup_family"] != setup_family:
+            return False
+        if last["regime"] != regime:
+            return False
+
+        ref_atr = float(last["atr"]) if float(last["atr"]) > 0 else float(atr)
+        if ref_atr <= 0:
+            return False
+
+        if abs(entry_price - float(last["entry_price"])) > (ref_atr * DEDUP_ATR_MULT):
+            return False
+
+        if self.debug:
+            print(
+                f"[DEDUP_HIT] {coin}"
+                f" | side={side}"
+                f" | family={setup_family}"
+                f" | regime={regime}"
+                f" | elapsed={elapsed:.1f}s"
+                f" | entry_now={entry_price:.6f}"
+                f" | entry_last={float(last['entry_price']):.6f}"
+                f" | atr_ref={ref_atr:.6f}"
+            )
+
+        return True
+
+    def _record_emitted(
+        self,
+        coin: str,
+        side: str,
+        setup_family: str,
+        entry_price: float,
+        regime: str,
+        atr: float,
+    ):
+        self._last_emitted[(coin, side)] = {
+            "setup_family": setup_family,
+            "entry_price": float(entry_price),
+            "regime": regime,
+            "atr": float(atr),
+            "ts": pd.Timestamp.now(tz="UTC"),
+        }
 
     # ------------------------------------------------------------------
     # Regime helpers
@@ -325,8 +412,244 @@ class AdaptiveSignalEngine:
         }
 
     # ------------------------------------------------------------------
-    # Flow + sentiment scoring
+    # RSI divergence helpers
     # ------------------------------------------------------------------
+
+    def _is_pivot_low(self, df: pd.DataFrame, idx: int, left: int = 2, right: int = 2) -> bool:
+        if idx - left < 0 or idx + right >= len(df):
+            return False
+        center = float(df.iloc[idx]["low"])
+        left_min = float(df.iloc[idx - left:idx]["low"].min())
+        right_min = float(df.iloc[idx + 1:idx + 1 + right]["low"].min())
+        return center <= left_min and center <= right_min
+
+    def _is_pivot_high(self, df: pd.DataFrame, idx: int, left: int = 2, right: int = 2) -> bool:
+        if idx - left < 0 or idx + right >= len(df):
+            return False
+        center = float(df.iloc[idx]["high"])
+        left_max = float(df.iloc[idx - left:idx]["high"].max())
+        right_max = float(df.iloc[idx + 1:idx + 1 + right]["high"].max())
+        return center >= left_max and center >= right_max
+
+    def _get_recent_pivot_lows(
+        self,
+        df: pd.DataFrame,
+        count: int = 2,
+        lookback: int = 40,
+    ) -> List[int]:
+        start = max(2, len(df) - lookback)
+        pivots: List[int] = []
+        for i in range(start, len(df) - 2):
+            if self._is_pivot_low(df, i):
+                pivots.append(i)
+        return pivots[-count:]
+
+    def _get_recent_pivot_highs(
+        self,
+        df: pd.DataFrame,
+        count: int = 2,
+        lookback: int = 40,
+    ) -> List[int]:
+        start = max(2, len(df) - lookback)
+        pivots: List[int] = []
+        for i in range(start, len(df) - 2):
+            if self._is_pivot_high(df, i):
+                pivots.append(i)
+        return pivots[-count:]
+
+    def _score_rsi_divergence(
+        self,
+        df: pd.DataFrame,
+        row: pd.Series,
+        side: str,
+        setup_family: str,
+    ) -> Tuple[float, List[str], Dict[str, Any]]:
+        notes: List[str] = []
+        meta: Dict[str, Any] = {
+            "rsi_divergence_detected": False,
+            "rsi_divergence_type": None,
+        }
+
+        if setup_family != "reversal":
+            return 0.0, notes, meta
+
+        if "rsi_14" not in df.columns or len(df) < 30:
+            return 0.0, notes, meta
+
+        score = 0.0
+
+        if side == "LONG":
+            pivots = self._get_recent_pivot_lows(df, count=2, lookback=40)
+            if len(pivots) < 2:
+                return 0.0, notes, meta
+
+            i1, i2 = pivots[-2], pivots[-1]
+            p1 = float(df.iloc[i1]["low"])
+            p2 = float(df.iloc[i2]["low"])
+            r1 = float(df.iloc[i1]["rsi_14"])
+            r2 = float(df.iloc[i2]["rsi_14"])
+            atr_now = float(row.get("atr_14", 0.0))
+            price_now = float(row.get("close", 0.0))
+
+            made_lower_low = p2 < p1
+            rsi_higher_low = r2 > r1
+            pivot_distance_ok = (i2 - i1) >= 3
+            proximity_ok = abs(price_now - p2) <= max(atr_now * 1.2, price_now * 0.003)
+
+            if made_lower_low and rsi_higher_low and pivot_distance_ok and proximity_ok:
+                rsi_delta = r2 - r1
+                price_delta_pct = (p1 - p2) / p1 if p1 > 0 else 0.0
+
+                score += 0.12
+                if rsi_delta >= 4:
+                    score += 0.05
+                if price_delta_pct >= 0.003:
+                    score += 0.03
+
+                notes.append(f"bullish_rsi_divergence_rsi_{r1:.1f}_to_{r2:.1f}")
+                notes.append(f"bullish_price_lower_low_{p1:.4f}_to_{p2:.4f}")
+
+                meta.update({
+                    "rsi_divergence_detected": True,
+                    "rsi_divergence_type": "bullish",
+                    "rsi_pivot_idx_1": i1,
+                    "rsi_pivot_idx_2": i2,
+                    "rsi_pivot_price_1": p1,
+                    "rsi_pivot_price_2": p2,
+                    "rsi_pivot_rsi_1": r1,
+                    "rsi_pivot_rsi_2": r2,
+                })
+
+        elif side == "SHORT":
+            pivots = self._get_recent_pivot_highs(df, count=2, lookback=40)
+            if len(pivots) < 2:
+                return 0.0, notes, meta
+
+            i1, i2 = pivots[-2], pivots[-1]
+            p1 = float(df.iloc[i1]["high"])
+            p2 = float(df.iloc[i2]["high"])
+            r1 = float(df.iloc[i1]["rsi_14"])
+            r2 = float(df.iloc[i2]["rsi_14"])
+            atr_now = float(row.get("atr_14", 0.0))
+            price_now = float(row.get("close", 0.0))
+
+            made_higher_high = p2 > p1
+            rsi_lower_high = r2 < r1
+            pivot_distance_ok = (i2 - i1) >= 3
+            proximity_ok = abs(price_now - p2) <= max(atr_now * 1.2, price_now * 0.003)
+
+            if made_higher_high and rsi_lower_high and pivot_distance_ok and proximity_ok:
+                rsi_delta = r1 - r2
+                price_delta_pct = (p2 - p1) / p1 if p1 > 0 else 0.0
+
+                score += 0.12
+                if rsi_delta >= 4:
+                    score += 0.05
+                if price_delta_pct >= 0.003:
+                    score += 0.03
+
+                notes.append(f"bearish_rsi_divergence_rsi_{r1:.1f}_to_{r2:.1f}")
+                notes.append(f"bearish_price_higher_high_{p1:.4f}_to_{p2:.4f}")
+
+                meta.update({
+                    "rsi_divergence_detected": True,
+                    "rsi_divergence_type": "bearish",
+                    "rsi_pivot_idx_1": i1,
+                    "rsi_pivot_idx_2": i2,
+                    "rsi_pivot_price_1": p1,
+                    "rsi_pivot_price_2": p2,
+                    "rsi_pivot_rsi_1": r1,
+                    "rsi_pivot_rsi_2": r2,
+                })
+
+        return score, notes, meta
+
+    # ------------------------------------------------------------------
+    # Scoring helpers
+    # ------------------------------------------------------------------
+
+    def _score_volume_context(self, row: pd.Series) -> Tuple[float, List[str]]:
+        score = 0.0
+        notes: List[str] = []
+
+        vol_spike = bool(row.get("vol_spike", 0))
+        vol_collapse = bool(row.get("vol_collapse", 0))
+
+        if vol_spike:
+            score += 0.08
+            notes.append("vol_confirmed_trigger")
+        elif vol_collapse:
+            score -= 0.06
+            notes.append("low_vol_trigger_penalty")
+
+        return score, notes
+
+    def _score_vwap_magnitude(
+        self,
+        row: pd.Series,
+        side: str,
+        setup_family: str,
+    ) -> Tuple[float, List[str]]:
+        score = 0.0
+        notes: List[str] = []
+
+        vwap_dev = float(row.get("vwap_dev", 0.0))
+        close = float(row.get("close", 0.0))
+
+        if close <= 0:
+            return 0.0, []
+
+        abs_dev_pct = abs(vwap_dev) / close
+
+        if setup_family == "reversal":
+            correct_side = (
+                (side == "LONG" and vwap_dev < 0) or
+                (side == "SHORT" and vwap_dev > 0)
+            )
+
+            if correct_side:
+                if abs_dev_pct > 0.020:
+                    score += 0.10
+                    notes.append(f"deep_vwap_reversal_{abs_dev_pct:.3f}")
+                elif abs_dev_pct > 0.010:
+                    score += 0.06
+                    notes.append(f"moderate_vwap_reversal_{abs_dev_pct:.3f}")
+                elif abs_dev_pct > 0.005:
+                    score += 0.03
+                    notes.append(f"mild_vwap_reversal_{abs_dev_pct:.3f}")
+
+        elif setup_family == "continuation":
+            trending_correct = (
+                (side == "LONG" and vwap_dev > 0) or
+                (side == "SHORT" and vwap_dev < 0)
+            )
+
+            if trending_correct:
+                if abs_dev_pct > 0.010:
+                    score += 0.04
+                    notes.append(f"vwap_trend_strength_{abs_dev_pct:.3f}")
+                elif abs_dev_pct > 0.005:
+                    score += 0.02
+                    notes.append(f"vwap_trend_mild_{abs_dev_pct:.3f}")
+
+        return score, notes
+
+    def _score_trigger_quality(self, row: pd.Series) -> Tuple[float, List[str]]:
+        score = 0.0
+        notes: List[str] = []
+
+        body_pct = float(row.get("body_pct", 0.5))
+        if pd.isna(body_pct):
+            body_pct = 0.5
+
+        if body_pct > 0.60:
+            score += 0.05
+            notes.append(f"strong_body_{body_pct:.2f}")
+        elif body_pct < 0.25:
+            score -= 0.05
+            notes.append(f"weak_body_{body_pct:.2f}")
+
+        return score, notes
 
     def _score_flow_context(self, flow_snapshot: Dict[str, Any]) -> Tuple[float, List[str]]:
         score = 0.0
@@ -369,20 +692,7 @@ class AdaptiveSignalEngine:
 
         return score, notes
 
-    def _score_funding_context(
-        self,
-        sentiment: PerpSentimentSnapshot,
-    ) -> Tuple[float, List[str]]:
-        """
-        Contrarian funding score:
-          negative funding -> helps LONG setups
-          positive funding -> helps SHORT setups
-
-        Magnitude tiers:
-          |fr| > 0.01  -> 0.15
-          |fr| > 0.005 -> 0.08
-          |fr| > 0.001 -> 0.05
-        """
+    def _score_funding_context(self, sentiment: PerpSentimentSnapshot) -> Tuple[float, List[str]]:
         score = 0.0
         notes: List[str] = []
 
@@ -417,16 +727,6 @@ class AdaptiveSignalEngine:
         sentiment: PerpSentimentSnapshot,
         side: str,
     ) -> Tuple[float, List[str]]:
-        """
-        Direction-aware open interest scoring.
-
-        Rising OI:
-          supports active participation / conviction in the chosen setup.
-        Falling OI:
-          penalizes setups due to likely unwind / weak participation.
-
-        This is intentionally symmetric by side.
-        """
         score = 0.0
         notes: List[str] = []
 
@@ -495,8 +795,9 @@ class AdaptiveSignalEngine:
         flow_snapshot: Dict[str, Any],
         sentiment: PerpSentimentSnapshot,
     ) -> Tuple[Optional[str], float, List[str]]:
-        if htf_regime == "chop":
-            return None, 0.0, ["continuation_blocked_htf_chop"]
+        htf_chop_penalty = -0.08
+        macro_chop_penalty = -0.03
+        disagreement_penalty = -0.08
 
         notes: List[str] = []
         score = 0.0
@@ -519,12 +820,25 @@ class AdaptiveSignalEngine:
             side = "LONG"
             score += 0.45
             notes.append("continuation_bull_trigger")
+
             if htf_regime == "up":
                 score += 0.20
                 notes.append("htf_up_aligned")
+            elif htf_regime == "chop":
+                score += htf_chop_penalty
+                notes.append("htf_chop_penalty_continuation")
+
             if macro_regime == "up":
                 score += 0.15
                 notes.append("macro_up_aligned")
+            elif macro_regime == "chop":
+                score += macro_chop_penalty
+                notes.append("macro_chop_penalty_continuation")
+
+            if htf_regime == "up" and macro_regime == "down":
+                score += disagreement_penalty
+                notes.append("htf_macro_disagreement_penalty")
+
             if trend == "bull" or trend_up:
                 score += 0.10
                 notes.append("local_bull_trend")
@@ -543,12 +857,25 @@ class AdaptiveSignalEngine:
             side = "SHORT"
             score += 0.45
             notes.append("continuation_bear_trigger")
+
             if htf_regime == "down":
                 score += 0.20
                 notes.append("htf_down_aligned")
+            elif htf_regime == "chop":
+                score += htf_chop_penalty
+                notes.append("htf_chop_penalty_continuation")
+
             if macro_regime == "down":
                 score += 0.15
                 notes.append("macro_down_aligned")
+            elif macro_regime == "chop":
+                score += macro_chop_penalty
+                notes.append("macro_chop_penalty_continuation")
+
+            if htf_regime == "down" and macro_regime == "up":
+                score += disagreement_penalty
+                notes.append("htf_macro_disagreement_penalty")
+
             if trend == "bear" or trend_dn:
                 score += 0.10
                 notes.append("local_bear_trend")
@@ -567,6 +894,18 @@ class AdaptiveSignalEngine:
             rsi_s, rsi_n = self._score_rsi(row, side, "continuation")
             score += rsi_s
             notes.extend(rsi_n)
+
+            vol_s, vol_n = self._score_volume_context(row)
+            score += vol_s
+            notes.extend(vol_n)
+
+            body_s, body_n = self._score_trigger_quality(row)
+            score += body_s
+            notes.extend(body_n)
+
+            vwap_s, vwap_n = self._score_vwap_magnitude(row, side, "continuation")
+            score += vwap_s
+            notes.extend(vwap_n)
 
         return side, score, notes
 
@@ -622,7 +961,6 @@ class AdaptiveSignalEngine:
             score += max(0.0, funding_score)
 
             oi_score, oi_notes = self._score_oi_directional(sentiment, side)
-            # Rising OI into reversal can be useful as crowding / fuel
             if oi_score > 0:
                 score += min(0.10, oi_score + 0.02)
                 notes.append("oi_supports_reversal")
@@ -664,6 +1002,18 @@ class AdaptiveSignalEngine:
             score += rsi_s
             notes.extend(rsi_n)
 
+            vol_s, vol_n = self._score_volume_context(row)
+            score += vol_s
+            notes.extend(vol_n)
+
+            body_s, body_n = self._score_trigger_quality(row)
+            score += body_s
+            notes.extend(body_n)
+
+            vwap_s, vwap_n = self._score_vwap_magnitude(row, side, "reversal")
+            score += vwap_s
+            notes.extend(vwap_n)
+
         return side, score, notes
 
     # ------------------------------------------------------------------
@@ -678,15 +1028,55 @@ class AdaptiveSignalEngine:
     ) -> Tuple[bool, List[str]]:
         notes: List[str] = []
 
-        if session_label == "dead_zone":
-            notes.append("dead_zone_block")
+        if vol_state == "unknown":
+            notes.append("unknown_vol_block")
+            if self.debug:
+                print(
+                    "[QUALITY_DEBUG] blocked"
+                    f" | session={session_label}"
+                    f" | vol_state={vol_state}"
+                    f" | close={float(row.get('close', 0.0)):.6f}"
+                    f" | atr={float(row.get('atr_14', 0.0)):.6f}"
+                    f" | rsi={float(row.get('rsi_14', 50.0)):.2f}"
+                )
             return False, notes
 
-        if vol_state in ("low", "unknown"):
-            notes.append(vol_state + "_vol_block")
+        if vol_state == "low":
+            notes.append("low_vol_block")
+            if self.debug:
+                print(
+                    "[QUALITY_DEBUG] blocked"
+                    f" | session={session_label}"
+                    f" | vol_state={vol_state}"
+                    f" | close={float(row.get('close', 0.0)):.6f}"
+                    f" | atr={float(row.get('atr_14', 0.0)):.6f}"
+                    f" | rsi={float(row.get('rsi_14', 50.0)):.2f}"
+                )
             return False, notes
+
+        if session_label == "dead_zone":
+            notes.append("dead_zone_penalty_only")
+            if self.debug:
+                print(
+                    "[QUALITY_DEBUG] pass_with_penalty"
+                    f" | session={session_label}"
+                    f" | vol_state={vol_state}"
+                    f" | close={float(row.get('close', 0.0)):.6f}"
+                    f" | atr={float(row.get('atr_14', 0.0)):.6f}"
+                    f" | rsi={float(row.get('rsi_14', 50.0)):.2f}"
+                )
+            return True, notes
 
         notes.append("quality_pass")
+        if self.debug:
+            print(
+                "[QUALITY_DEBUG] pass"
+                f" | session={session_label}"
+                f" | vol_state={vol_state}"
+                f" | close={float(row.get('close', 0.0)):.6f}"
+                f" | atr={float(row.get('atr_14', 0.0)):.6f}"
+                f" | rsi={float(row.get('rsi_14', 50.0)):.2f}"
+            )
         return True, notes
 
     # ------------------------------------------------------------------
@@ -764,14 +1154,29 @@ class AdaptiveSignalEngine:
         vol_state, notes_vol, vol_ratio = self._compute_vol_state(row)
         triggers = self._extract_triggers(row)
 
+        if self.debug:
+            print(
+                f"[CANDIDATE_DEBUG] {coin}"
+                f" | session={session_label}"
+                f" | vol_state={vol_state}"
+                f" | htf={htf_regime}"
+                f" | macro={macro_regime}"
+                f" | close={price:.6f}"
+                f" | atr={float(row.get('atr_14', 0.0)):.6f}"
+                f" | rsi={float(row.get('rsi_14', 50.0)):.2f}"
+                f" | vwap_dev={float(row.get('vwap_dev', 0.0)):.6f}"
+                f" | body_pct={float(row.get('body_pct', 0.0)):.2f}"
+                f" | triggers={triggers}"
+            )
+
         session_score_adj = {
             "london_open": +0.05,
             "ny_open": +0.05,
             "asia_open": 0.00,
             "london_late": 0.00,
             "asia_late": 0.00,
-            "ny_pm": -0.05,
-            "dead_zone": -0.10,
+            "ny_pm": -0.01,
+            "dead_zone": -0.01,
         }.get(session_label, 0.0)
 
         quality_ok, quality_notes = self._quality_filter(row, session_label, vol_state)
@@ -792,7 +1197,9 @@ class AdaptiveSignalEngine:
         chosen_notes: List[str] = []
         setup_family: str = "none"
 
-        if cont_side and cont_score >= rev_score:
+        continuation_preference = 0.10
+
+        if cont_side and cont_score >= (rev_score - continuation_preference):
             chosen_side, chosen_score, chosen_notes, setup_family = cont_side, cont_score, cont_notes, "continuation"
         elif rev_side:
             chosen_side, chosen_score, chosen_notes, setup_family = rev_side, rev_score, rev_notes, "reversal"
@@ -802,15 +1209,41 @@ class AdaptiveSignalEngine:
                 print("[SIGNAL_DEBUG] No valid setup family.")
             return None
 
+        divergence_meta: Dict[str, Any] = {
+            "rsi_divergence_detected": False,
+            "rsi_divergence_type": None,
+        }
+
+        if setup_family == "reversal":
+            div_score, div_notes, divergence_meta = self._score_rsi_divergence(
+                df=df,
+                row=row,
+                side=chosen_side,
+                setup_family=setup_family,
+            )
+            chosen_score += div_score
+            chosen_notes.extend(div_notes)
+
         chosen_score += session_score_adj
         if session_score_adj != 0.0 and self.debug:
             print(f"[SIGNAL_DEBUG] session_adj={session_score_adj:+.2f} -> score={chosen_score:.3f}")
 
         effective_threshold = self.score_threshold
         if htf_regime == "chop":
-            effective_threshold += 0.05
+            effective_threshold += 0.01
         if macro_regime == "chop":
-            effective_threshold += 0.03
+            effective_threshold += 0.00
+
+        if self.debug:
+            print(
+                f"[SCORE_DEBUG] {coin}"
+                f" | chosen_side={chosen_side}"
+                f" | family={setup_family}"
+                f" | score={chosen_score:.3f}"
+                f" | threshold={effective_threshold:.3f}"
+                f" | session_adj={session_score_adj:+.2f}"
+                f" | reasons={chosen_notes}"
+            )
 
         if abs(chosen_score) < effective_threshold:
             if self.debug:
@@ -839,6 +1272,31 @@ class AdaptiveSignalEngine:
         reason_text = ", ".join(all_reasons)
         combined_regime = setup_family + "|htf_" + htf_regime + "|macro_" + macro_regime
 
+        if self.debug:
+            print(
+                f"[DEDUP_DEBUG] {coin}"
+                f" | side={chosen_side}"
+                f" | family={setup_family}"
+                f" | regime={combined_regime}"
+                f" | entry={price:.6f}"
+                f" | atr={atr_val:.6f}"
+            )
+
+        if self._is_stale_repeat(
+            coin=coin,
+            side=chosen_side,
+            setup_family=setup_family,
+            entry_price=price,
+            regime=combined_regime,
+            atr=atr_val,
+        ):
+            if self.debug:
+                print(
+                    f"[SIGNAL_DEBUG] {coin} {chosen_side} suppressed — "
+                    f"stale repeat (same setup, price within ATR band and TTL)"
+                )
+            return None
+
         meta = {
             "timeframe": "15m",
             "coin": coin,
@@ -857,6 +1315,7 @@ class AdaptiveSignalEngine:
             "setup_family": setup_family,
             "rr_planned": round(rr, 3),
             "session_score_adj": session_score_adj,
+            **divergence_meta,
         }
 
         if self.debug:
@@ -867,6 +1326,15 @@ class AdaptiveSignalEngine:
                 " session=" + session_label +
                 " vol=" + vol_state
             )
+
+        self._record_emitted(
+            coin=coin,
+            side=chosen_side,
+            setup_family=setup_family,
+            entry_price=price,
+            regime=combined_regime,
+            atr=atr_val,
+        )
 
         return Signal(
             coin=coin,
@@ -989,6 +1457,14 @@ class AdaptiveSignalEngine:
             if self.debug:
                 print("[SWING_DEBUG] No valid " + swing_tf + " swing setup.")
             return None
+
+        vol_s, vol_n = self._score_volume_context(row)
+        score += vol_s
+        reasons.extend(vol_n)
+
+        body_s, body_n = self._score_trigger_quality(row)
+        score += body_s
+        reasons.extend(body_n)
 
         threshold = self.swing_thresholds.get(swing_tf, 0.6)
         if score < threshold:

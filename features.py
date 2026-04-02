@@ -88,6 +88,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
       - ATR volatility state
       - volume spike / collapse
       - session-anchored VWAP
+      - candle body quality (body_pct)
     """
     df = df.copy()
 
@@ -107,7 +108,6 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     df["vol_compression"] = (df["atr_14"] < atr_mean_20).astype(int)
 
     # Volume context
-    # Slightly faster than 50-bar baseline; reacts better intraday
     vol_mean_30 = df["volume"].rolling(30).mean()
     df["vol_spike"] = (df["volume"] > 1.5 * vol_mean_30).astype(int)
     df["vol_collapse"] = (df["volume"] < 0.5 * vol_mean_30).astype(int)
@@ -117,5 +117,12 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     df["above_vwap"] = (df["close"] > df["vwap"]).astype(int)
     df["below_vwap"] = (df["close"] < df["vwap"]).astype(int)
     df["vwap_dev"] = df["close"] - df["vwap"]
+
+    # ── NEW: Candle body quality ───────────────────────────────────────────
+    # body_pct = fraction of candle range that is body (0.0 = doji, 1.0 = marubozu)
+    # Used by signal_engine for trigger quality scoring
+    candle_range = df["high"] - df["low"]
+    df["body_pct"] = (df["close"] - df["open"]).abs() / (candle_range + 1e-9)
+    df["body_pct"] = df["body_pct"].clip(0.0, 1.0)
 
     return df

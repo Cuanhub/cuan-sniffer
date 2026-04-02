@@ -1,4 +1,3 @@
-# agent.py
 """
 Multi-coin signal agent.
 
@@ -11,13 +10,17 @@ Features:
   - Per-coin error isolation
   - Per-coin error cooldown — no Telegram spam during outages
   - Env validation before feeds start
-  - V1 product mode: 15m signals only
-  - Automatic daily recap trigger (no cron needed)
-  - Recap runs in background thread — signal loop never pauses
-  - Daily recap runs once per UTC day
-  - Recap subprocess timeout protection
-  - Paper trading execution layer wired in
-  - Daily and all-time trade P&L recap via Telegram
+  - 15m execution mode
+  - Automatic daily recap trigger
+  - Recap runs in background thread
+  - Paper/live execution layer wired in
+  - Daily and all-time trade recap via Telegram
+
+Optimized version:
+  - Engine threshold pulled from env, not hardcoded
+  - Scan cadence aligned to 15m feed cadence
+  - Rejected-signal cooldown preserved
+  - Duplicate tracking only anchors traded signals
 """
 
 import os
@@ -25,11 +28,10 @@ import sys
 import time
 import subprocess
 import threading
-from math import fabs
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 
-from config import POLL_INTERVAL_SECONDS
+from config import POLL_INTERVAL_SECONDS as CONFIG_POLL_INTERVAL_SECONDS
 from db import init_db, SessionLocal
 from perp_data import PerpDataFeed
 from flow_context import FlowContext
@@ -42,7 +44,28 @@ from executor import Executor
 from trades_recap import run_trades_recap
 
 
+# ── Runtime config ─────────────────────────────────────────────────────────────
+
+ENGINE_SCORE_THRESHOLD = float(os.getenv("MIN_SIGNAL_SCORE", "0.72"))
+ENGINE_ATR_STOP_MULT = float(os.getenv("ENGINE_ATR_STOP_MULT", "1.3"))
+ENGINE_ATR_TP_MULT = float(os.getenv("ENGINE_ATR_TP_MULT", "3.0"))
+ENGINE_MIN_STOP_PCT = float(os.getenv("ENGINE_MIN_STOP_PCT", "0.004"))
+ENGINE_MIN_TP_PCT = float(os.getenv("ENGINE_MIN_TP_PCT", "0.010"))
+ENGINE_SWING_THRESHOLD_1H = float(os.getenv("ENGINE_SWING_THRESHOLD_1H", "0.60"))
+ENGINE_SWING_THRESHOLD_4H = float(os.getenv("ENGINE_SWING_THRESHOLD_4H", "0.65"))
+ENGINE_DEBUG = os.getenv("ENGINE_DEBUG", "true").lower() == "true"
+
+# Agent scan cadence should not be faster than a 15m feed system really needs.
+AGENT_POLL_INTERVAL_SECONDS = int(os.getenv(
+    "AGENT_POLL_INTERVAL_SECONDS",
+    str(max(60, int(os.getenv("POLL_INTERVAL_SECONDS", str(CONFIG_POLL_INTERVAL_SECONDS)))))
+))
+
+PERP_FEED_INTERVAL_SECONDS = int(os.getenv("PERP_FEED_INTERVAL_SECONDS", "60"))
+SENTIMENT_FEED_INTERVAL_SECONDS = int(os.getenv("SENTIMENT_FEED_INTERVAL_SECONDS", "45"))
+
 # ── Coin list ──────────────────────────────────────────────────────────────────
+
 _raw = os.getenv("TRACKED_COINS", "SOL")
 TRACKED_COINS: list[str] = list(dict.fromkeys(
     c.strip().upper() for c in _raw.split(",") if c.strip()
@@ -51,23 +74,26 @@ if "SOL" not in TRACKED_COINS:
     TRACKED_COINS.insert(0, "SOL")
 
 WARMUP_BARS: Dict[str, int] = {
-    "SOL": 40, "ETH": 40, "BTC": 40,
-    "JUP": 30, "JTO": 30,
-    "WIF": 25, "PYTH": 30,
+    "SOL": 40,
+    "ETH": 40,
+    "BTC": 40,
+    "JUP": 30,
+    "JTO": 30,
+    "WIF": 25,
+    "PYTH": 30,
 }
 DEFAULT_WARMUP = 30
 
-# Notify on first error, then every Nth — prevents Telegram spam
 ERROR_NOTIFY_EVERY = int(os.getenv("ERROR_NOTIFY_EVERY", "10"))
+SIGNAL_DETECTION_ALERTS = os.getenv("SIGNAL_DETECTION_ALERTS", "0") == "1"
+REJECTED_SIGNAL_COOLDOWN_SEC = int(os.getenv("REJECTED_SIGNAL_COOLDOWN_SEC", "60"))
 
-# Daily recap controls
 RECAP_TRACK_FILE = os.getenv("RECAP_TRACK_FILE", "last_recap.txt")
 RECAP_NO_FETCH = os.getenv("RECAP_NO_FETCH", "1") == "1"
 RECAP_CHART = os.getenv("RECAP_CHART", "winrate_report.png")
 RECAP_TIMEOUT_SECONDS = int(os.getenv("RECAP_TIMEOUT_SECONDS", "300"))
 RECAP_STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "1000.0"))
 
-# Guard: only one recap thread at a time
 _recap_running = threading.Event()
 
 
@@ -78,7 +104,6 @@ def utc_now() -> str:
 
 
 def notify(text: str):
-    """Fire-and-forget Telegram — never raises."""
     try:
         send_telegram_message(text)
     except Exception as e:
@@ -86,7 +111,6 @@ def notify(text: str):
 
 
 def validate_env() -> bool:
-    """Check critical env vars before starting feeds."""
     ok = True
 
     if not os.getenv("TELEGRAM_BOT_TOKEN"):
@@ -136,10 +160,6 @@ def write_last_recap_time(dt: datetime):
 
 
 def should_run_recap() -> bool:
-    """
-    Run once per UTC day.
-    Also avoid firing when a recap thread is already running.
-    """
     if _recap_running.is_set():
         return False
 
@@ -153,7 +173,6 @@ def should_run_recap() -> bool:
 
 
 def extract_recap_summary(stdout: str) -> str:
-    """Pull the most useful lines from analyze_winrate.py output."""
     if not stdout:
         return "No analyzer output."
 
@@ -230,20 +249,11 @@ def build_trader_grade_recap(summary_text: str) -> str:
 
 
 def _run_recap_worker():
-    """
-    Worker that runs in a daemon thread.
-
-    Notes:
-      - Writes timestamp BEFORE running to prevent retry spam on failure.
-      - Runs in background thread so signal loop never pauses.
-      - Includes timeout so a hung analyzer does not block future recaps forever.
-    """
     _recap_running.set()
     try:
         print("[RECAP] Running automatic daily recap...")
         notify("📊 *Running daily performance recap...*")
 
-        # Mark immediately so failures do not retry every cycle
         write_last_recap_time(datetime.now(timezone.utc))
 
         analyzer_args = ["analyze_winrate.py", "--chart", RECAP_CHART]
@@ -276,7 +286,6 @@ def _run_recap_worker():
         notify(msg)
         print("[RECAP] Daily recap sent.")
 
-        # ── Trades P&L recap (daily + all-time) ──────────────────────────
         try:
             run_trades_recap(
                 notify_fn=notify,
@@ -305,15 +314,12 @@ def _run_recap_worker():
 
 
 def trigger_recap():
-    """Launch recap in a daemon thread — never blocks the signal loop."""
     if _recap_running.is_set():
         return
 
     t = threading.Thread(target=_run_recap_worker, daemon=True)
     t.start()
 
-
-# ── Signal message builder ─────────────────────────────────────────────────────
 
 def format_signal_message(
     coin: str,
@@ -329,7 +335,7 @@ def format_signal_message(
     price = float(signal.entry_price)
     sl = float(signal.stop_price)
     tp = float(signal.tp_price)
-    rr = fabs((tp - price) / (price - sl)) if price != sl else 0.0
+    rr = abs((tp - price) / (price - sl)) if price != sl else 0.0
 
     whale_pressure = float(flow_snapshot.get("whale_pressure", 0.0)) if flow_snapshot else 0.0
 
@@ -366,10 +372,11 @@ def format_signal_message(
 
     strength = int(min(100, max(50, signal.confidence * 100)))
     regime = signal.regime.replace("_", " ")
+
     flow_section = f"\n🐋 Flow: {flow_bias}" if coin == "SOL" else ""
 
     return (
-        f"{emoji} *{coin} {side} SIGNAL* {arrow}\n\n"
+        f"{emoji} *{coin} {side} SIGNAL DETECTED* {arrow}\n\n"
         f"🎯 Setup: *{setup}*\n"
         f"🧭 Regime: `{regime}`\n"
         f"⏱ TF: `{tf_label}`\n\n"
@@ -381,11 +388,9 @@ def format_signal_message(
         f"📈 Funding: {funding_txt}\n"
         f"📦 OI: `{oi}`"
         f"{flow_section}\n\n"
-        f"🧠 _{setup} detected with confluence_"
+        f"🧠 _Signal detected — execution pending_"
     )
 
-
-# ── Per-coin state ─────────────────────────────────────────────────────────────
 
 class CoinState:
     def __init__(self, coin: str, flow_ctx: Optional[FlowContext] = None):
@@ -396,19 +401,21 @@ class CoinState:
         self.sent_feed = PerpSentimentFeed(coin=coin)
 
         self.engine = AdaptiveSignalEngine(
-            score_threshold=0.80,
-            atr_stop_mult=1.3,
-            atr_tp_mult=3.0,
-            min_stop_pct=0.004,
-            min_tp_pct=0.010,
-            swing_threshold_1h=0.55,
-            swing_threshold_4h=0.60,
-            debug=True,
+            score_threshold=ENGINE_SCORE_THRESHOLD,
+            atr_stop_mult=ENGINE_ATR_STOP_MULT,
+            atr_tp_mult=ENGINE_ATR_TP_MULT,
+            min_stop_pct=ENGINE_MIN_STOP_PCT,
+            min_tp_pct=ENGINE_MIN_TP_PCT,
+            swing_threshold_1h=ENGINE_SWING_THRESHOLD_1H,
+            swing_threshold_4h=ENGINE_SWING_THRESHOLD_4H,
+            debug=ENGINE_DEBUG,
         )
 
         self.last_signal: Dict[str, Dict] = {
             "15m": {"side": None, "price": None},
         }
+
+        self.last_rejected_setup: Dict[str, float] = {}
 
         self.alert_mgr = AlertManager(
             min_flow_strength=0.7,
@@ -420,8 +427,8 @@ class CoinState:
         self._error_count: int = 0
 
     def start_feeds(self):
-        self.perp_feed.start(interval_sec=5)
-        self.sent_feed.start(interval_sec=30)
+        self.perp_feed.start(interval_sec=PERP_FEED_INTERVAL_SECONDS)
+        self.sent_feed.start(interval_sec=SENTIMENT_FEED_INTERVAL_SECONDS)
         print(f"[{self.coin}] feeds started")
 
     def get_flow_snapshot(self) -> Dict[str, Any]:
@@ -436,20 +443,36 @@ class CoinState:
     def mark_signal(self, tf: str, side: str, price: float):
         self.last_signal[tf] = {"side": side, "price": price}
 
+    def make_setup_fingerprint(self, signal: Signal) -> str:
+        meta = signal.meta or {}
+        return "|".join([
+            signal.coin,
+            str(signal.side),
+            f"{float(signal.entry_price):.8f}",
+            f"{float(signal.stop_price):.8f}",
+            f"{float(signal.tp_price):.8f}",
+            str(meta.get("setup_family", meta.get("regime_local", ""))),
+            str(meta.get("session", "")),
+            str(meta.get("regime_htf_1h", "")),
+            str(meta.get("regime_macro_4h", "")),
+        ])
+
+    def recently_rejected_setup(self, fingerprint: str) -> bool:
+        last_ts = self.last_rejected_setup.get(fingerprint, 0.0)
+        return (time.time() - last_ts) < REJECTED_SIGNAL_COOLDOWN_SEC
+
+    def mark_rejected_setup(self, fingerprint: str):
+        self.last_rejected_setup[fingerprint] = time.time()
+
     def on_error(self) -> bool:
         self._error_count += 1
-        return (
-            self._error_count == 1 or
-            self._error_count % ERROR_NOTIFY_EVERY == 0
-        )
+        return self._error_count == 1 or self._error_count % ERROR_NOTIFY_EVERY == 0
 
     def on_success(self):
         if self._error_count > 0:
             print(f"[{self.coin}] recovered after {self._error_count} consecutive errors")
         self._error_count = 0
 
-
-# ── Per-coin processing ────────────────────────────────────────────────────────
 
 def process_coin(state: CoinState, executor: Executor) -> bool:
     coin = state.coin
@@ -474,12 +497,57 @@ def process_coin(state: CoinState, executor: Executor) -> bool:
     if sig is None:
         return False
 
-    price = float(sig.entry_price)
-    if state.is_duplicate("15m", sig.side, price, 0.010):
+    theoretical_price = float(sig.entry_price)
+    if state.is_duplicate("15m", sig.side, theoretical_price, 0.010):
+        return False
+
+    fingerprint = state.make_setup_fingerprint(sig)
+    if state.recently_rejected_setup(fingerprint):
+        print(f"[{coin}] identical rejected setup still cooling down")
         return False
 
     sig_id = int(time.time() * 1000)
     sig.meta["signal_id"] = sig_id
+
+    if SIGNAL_DETECTION_ALERTS:
+        msg = format_signal_message(coin, sig, flow_snapshot, sent, "15m")
+        print(f"[{coin}] 15m signal detected")
+        notify(msg)
+    else:
+        print(f"[{coin}] 15m signal detected")
+
+    executor_result_label = "rejected"
+    reject_reason = ""
+    position_id = ""
+    fill_price = 0.0
+    fill_slippage_bps = 0.0
+    fill_ratio = 0.0
+
+    try:
+        exec_result = executor.on_signal(sig, sig_id=sig_id)
+
+        if exec_result.traded:
+            executor_result_label = "traded"
+            position_id = exec_result.position_id
+            fill_price = exec_result.fill_price
+            fill_slippage_bps = exec_result.fill_slippage_bps
+            fill_ratio = exec_result.fill_ratio
+
+            print(f"[{coin}] paper trade opened — {position_id}")
+            state.mark_signal("15m", sig.side, float(fill_price))
+        else:
+            executor_result_label = "rejected"
+            reject_reason = exec_result.reason or "unknown_rejection"
+            print(f"[{coin}] signal rejected — {reject_reason}")
+            state.mark_rejected_setup(fingerprint)
+
+    except Exception as e:
+        err_text = f"executor_exception: {str(e)[:180]}"
+        print(f"[EXECUTOR ERROR] {coin}: {err_text}")
+
+        executor_result_label = "error"
+        reject_reason = err_text
+        state.mark_rejected_setup(fingerprint)
 
     append_signal(
         coin=coin,
@@ -489,25 +557,16 @@ def process_coin(state: CoinState, executor: Executor) -> bool:
         funding_rate=funding_rate,
         open_interest=open_interest,
         long_short_bias=bias,
+        executor_result=executor_result_label,
+        reject_reason=reject_reason,
+        position_id=position_id,
+        fill_price=fill_price,
+        fill_slippage_bps=fill_slippage_bps,
+        fill_ratio=fill_ratio,
     )
 
-    msg = format_signal_message(coin, sig, flow_snapshot, sent, "15m")
-    print(f"[{coin}] 15m signal fired")
-    notify(msg)
+    return executor_result_label == "traded"
 
-    # Send signal into execution layer
-    try:
-        opened = executor.on_signal(sig, sig_id=sig_id)
-        if opened:
-            print(f"[{coin}] paper trade opened")
-    except Exception as e:
-        print(f"[EXECUTOR ERROR] {coin}: {e}")
-
-    state.mark_signal("15m", sig.side, price)
-    return True
-
-
-# ── State construction ─────────────────────────────────────────────────────────
 
 def build_states(flow_ctx: FlowContext) -> Dict[str, CoinState]:
     states: Dict[str, CoinState] = {}
@@ -518,8 +577,6 @@ def build_states(flow_ctx: FlowContext) -> Dict[str, CoinState]:
         states[coin] = state
     return states
 
-
-# ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     if not validate_env():
@@ -533,11 +590,12 @@ def main():
     states = build_states(flow_ctx)
     executor = Executor(notify_fn=notify)
 
-    # Boot status — reconstructed from trades.csv, includes open positions
     notify(executor.boot_status_message())
     notify(
         f"🎯 Scanning: `{', '.join(TRACKED_COINS)}`\n"
-        f"🕒 `{utc_now()}`"
+        f"🕒 `{utc_now()}`\n"
+        f"⚙️ Engine threshold: `{ENGINE_SCORE_THRESHOLD:.2f}`\n"
+        f"⏱ Agent loop: `{AGENT_POLL_INTERVAL_SECONDS}s`"
     )
 
     try:
@@ -562,7 +620,6 @@ def main():
                             f"`{err_msg}`"
                         )
 
-            # Update paper trader / open positions every cycle
             try:
                 executor.update()
             except Exception as e:
@@ -573,20 +630,21 @@ def main():
                     f"`{str(e)[:180]}`"
                 )
 
-            # Automatic daily recap — runs in background, never blocks signals
             if should_run_recap():
                 trigger_recap()
 
             if not any_signal:
                 print(f"[AGENT] No signals this cycle ({utc_now()})")
 
-            time.sleep(POLL_INTERVAL_SECONDS)
+            time.sleep(AGENT_POLL_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:
+        executor.shutdown()
         notify(
             f"🛑 *Bot stopped cleanly*\n"
             f"{utc_now()}\n"
-            f"{executor.paper.session_summary()}"
+            f"{executor.paper.session_summary()}\n"
+            f"📊 {executor.slippage_summary()}"
         )
         print("[AGENT] Stopped.")
 
