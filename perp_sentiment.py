@@ -133,7 +133,7 @@ class PerpSentimentFeed:
             cls._last_request_ts = time.time()
 
     @classmethod
-    def _fetch_meta_and_asset_ctxs(cls, debug: bool = True, max_retries: int = 5):
+    def _fetch_meta_and_asset_ctxs(cls, debug: bool = True, max_retries: int = 2):
         """
         Fetch the full universe ctx payload, with process-wide caching.
         """

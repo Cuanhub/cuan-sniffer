@@ -1,6 +1,23 @@
-requests
-python-dotenv
-SQLAlchemy
-pandas
-numpy
-matplotlib
+# === Core ===
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# === Data / Analytics ===
+pandas>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+
+# === Database / Persistence ===
+SQLAlchemy>=2.0.0
+
+# === Web3 / Signing (REQUIRED for live trading) ===
+eth-account>=0.10.0
+eth-utils>=2.3.0
+
+# === Hyperliquid SDK (REQUIRED) ===
+# Official SDK (pip installable)
+hyperliquid-python-sdk>=0.6.0
+
+# === Optional but recommended (stability) ===
+urllib3>=2.0.0
+certifi>=2024.0.0

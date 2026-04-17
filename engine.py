@@ -4,8 +4,9 @@ from datetime import datetime
 from sqlalchemy.exc import SQLAlchemyError
 
 from db import SessionLocal, WalletBalance, FlowEvent
-from sol_client import get_signatures_for_address, get_sol_balance
-from config import MIN_SOL_ALERT, SOL_USD_PRICE
+from sol_client import get_signatures_for_address, get_sol_balance, get_sol_transfer_for_address
+from known_entities import is_known_entity
+from config import MIN_SOL_ALERT, get_sol_price
 
 
 class SolFlowEngine:
@@ -60,7 +61,7 @@ class SolFlowEngine:
             return record
 
         # First time seeing the wallet — pull initial balance
-        initial_balance = get_sol_balance(address)
+        initial_balance = get_sol_balance(address) or 0.0
 
         new_record = WalletBalance(
             address=address,
@@ -167,22 +168,39 @@ class SolFlowEngine:
     def _handle_signature(self, session, address: str, signature: str, slot: int):
         """
         On each tx:
-        - pull previous balance
-        - get latest balance
-        - compute delta
+        - parse actual SOL delta from tx preBalances/postBalances (primary)
+        - fall back to balance-diff polling if tx cannot be fetched
         - if >= threshold: store + log big flow event
         """
+
+        # Skip wallets classified as exchanges / programs — their moves are
+        # routine operations and would pollute the flow signal.
+        if is_known_entity(address):
+            print(f"[SKIP] {address} is a known exchange/program wallet — not a signal")
+            return
 
         record = session.query(WalletBalance).filter_by(address=address).first()
         if not record:
             return
 
-        old_balance = record.sol_balance
-        new_balance = get_sol_balance(address)
-        delta = new_balance - old_balance
+        # Primary: parse authoritative SOL delta straight from the transaction.
+        # This is immune to fee/rent noise that corrupts balance-diff polling.
+        delta = get_sol_transfer_for_address(signature, address)
+
+        if delta is None:
+            # Fallback: balance diff (noisier — fees/rent included)
+            old_balance = record.sol_balance
+            new_balance = get_sol_balance(address)
+            if new_balance is None:
+                return
+            delta = new_balance - old_balance
+            new_balance_for_db = new_balance
+        else:
+            # Recompute absolute balance from the parsed delta so the DB stays in sync
+            new_balance_for_db = record.sol_balance + delta
 
         # Update base balance regardless
-        record.sol_balance = new_balance
+        record.sol_balance = new_balance_for_db
         record.updated_at = datetime.utcnow()
 
         # Not big enough to alert/log as major event?
@@ -197,7 +215,7 @@ class SolFlowEngine:
         # Big move detected
         direction = "IN" if delta > 0 else "OUT"
         amount = abs(delta)
-        usd_val = amount * SOL_USD_PRICE
+        usd_val = amount * get_sol_price()
 
         event = FlowEvent(
             address=address,

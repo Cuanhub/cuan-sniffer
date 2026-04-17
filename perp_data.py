@@ -1,14 +1,19 @@
 import time
 import threading
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Tuple
 
 import requests
 import pandas as pd
+import os
 
 # Hyperliquid info endpoint (public, no auth needed)
 HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info"
+PERP_FETCH_MAX_RETRIES = int(os.getenv("PERP_FETCH_MAX_RETRIES", "1"))
+PERP_FETCH_MAX_TOTAL_SEC = float(os.getenv("PERP_FETCH_MAX_TOTAL_SEC", "1.5"))
+PERP_FETCH_TIMEOUT_SEC = float(os.getenv("PERP_FETCH_TIMEOUT_SEC", "0.9"))
+PERP_FETCH_RETRY_SLEEP_SEC = float(os.getenv("PERP_FETCH_RETRY_SLEEP_SEC", "0.1"))
 
 
 class PerpDataFeed:
@@ -56,6 +61,8 @@ class PerpDataFeed:
 
         # controls how often refresh is allowed to hit network
         self._last_refresh_ts: float = 0.0
+        self._last_fetch_source: str = "init"
+        self._last_fetch_duration_sec: float = 0.0
 
     # ------------------------------------------------------------------
     # Helpers
@@ -113,7 +120,7 @@ class PerpDataFeed:
 
         return 180
 
-    def _respect_global_rate_limit(self):
+    def _respect_global_rate_limit(self, deadline: Optional[float] = None) -> bool:
         """
         Enforce a minimum gap between outbound requests across all
         PerpDataFeed instances in the current process.
@@ -124,35 +131,64 @@ class PerpDataFeed:
             wait_needed = PerpDataFeed._min_global_request_gap_sec - elapsed
 
             if wait_needed > 0:
-                time.sleep(wait_needed)
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return False
+                    wait_needed = min(wait_needed, max(0.0, remaining - 0.02))
+                if wait_needed > 0:
+                    time.sleep(wait_needed)
 
             PerpDataFeed._last_global_request_ts = time.time()
+        return True
 
-    def _post_with_backoff(self, payload: Dict, max_retries: int = 5) -> Optional[List[Dict]]:
+    def _post_with_backoff(
+        self,
+        payload: Dict,
+        max_retries: Optional[int] = None,
+        max_total_sec: Optional[float] = None,
+    ) -> Optional[List[Dict]]:
         """
         POST to Hyperliquid with retry/backoff protection.
         """
+        retry_cap = PERP_FETCH_MAX_RETRIES if max_retries is None else int(max_retries)
+        retry_cap = max(0, retry_cap)
+        total_attempts = 1 + retry_cap
+        budget_sec = (
+            PERP_FETCH_MAX_TOTAL_SEC
+            if max_total_sec is None
+            else max(0.2, float(max_total_sec))
+        )
+        deadline = time.monotonic() + budget_sec
         last_error = None
 
-        for attempt in range(max_retries):
+        for attempt in range(total_attempts):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                self._respect_global_rate_limit()
+                if not self._respect_global_rate_limit(deadline=deadline):
+                    break
 
+                req_timeout = max(0.2, min(PERP_FETCH_TIMEOUT_SEC, remaining))
                 resp = self._session.post(
                     HYPERLIQUID_INFO_URL,
                     json=payload,
-                    timeout=12,
+                    timeout=req_timeout,
                 )
 
                 if resp.status_code == 429:
-                    sleep_s = min(10.0, 0.8 * (2 ** attempt))
+                    if attempt >= total_attempts - 1:
+                        break
+                    sleep_s = min(PERP_FETCH_RETRY_SLEEP_SEC, max(0.0, deadline - time.monotonic()))
                     if self.debug:
                         print(
                             f"[PERP_DATA] 429 for {self.coin}-PERP ({self.interval})"
-                            f" | retry={attempt + 1}/{max_retries}"
+                            f" | retry={attempt + 1}/{total_attempts}"
                             f" | sleeping {sleep_s:.1f}s"
                         )
-                    time.sleep(sleep_s)
+                    if sleep_s > 0:
+                        time.sleep(sleep_s)
                     continue
 
                 resp.raise_for_status()
@@ -167,15 +203,18 @@ class PerpDataFeed:
 
             except requests.RequestException as e:
                 last_error = e
-                sleep_s = min(10.0, 0.8 * (2 ** attempt))
+                if attempt >= total_attempts - 1:
+                    break
+                sleep_s = min(PERP_FETCH_RETRY_SLEEP_SEC, max(0.0, deadline - time.monotonic()))
                 if self.debug:
                     print(
                         f"[PERP_DATA] Request error for {self.coin}-PERP ({self.interval})"
-                        f" | retry={attempt + 1}/{max_retries}"
+                        f" | retry={attempt + 1}/{total_attempts}"
                         f" | sleeping {sleep_s:.1f}s"
                         f" | err={e}"
                     )
-                time.sleep(sleep_s)
+                if sleep_s > 0:
+                    time.sleep(sleep_s)
 
         if self.debug:
             print(f"[PERP_DATA] Error fetching candles for {self.coin}-PERP: {last_error}")
@@ -192,10 +231,13 @@ class PerpDataFeed:
         Uses cache + backoff + shared request spacing.
         """
         now_ts = time.time()
+        fetch_started = time.monotonic()
         ttl = self._cache_ttl_sec()
 
         # Serve recent cached snapshot first
         if self._cached_snapshot and (now_ts - self._cached_snapshot_ts) < ttl:
+            self._last_fetch_source = "cache_fresh"
+            self._last_fetch_duration_sec = 0.0
             if self.debug:
                 age = now_ts - self._cached_snapshot_ts
                 print(
@@ -228,13 +270,26 @@ class PerpDataFeed:
 
         data = self._post_with_backoff(payload)
         if not data:
+            if self._cached_snapshot:
+                self._last_fetch_source = "cache_fallback"
+                self._last_fetch_duration_sec = time.monotonic() - fetch_started
+                if self.debug:
+                    age = now_ts - self._cached_snapshot_ts
+                    print(
+                        f"[PERP_DATA] Fail-soft using cached candles for {self.coin}-PERP ({self.interval})"
+                        f" | cache_age={age:.1f}s"
+                        f" | fetch_time={self._last_fetch_duration_sec:.2f}s"
+                    )
+                return list(self._cached_snapshot)
+            self._last_fetch_source = "failed"
+            self._last_fetch_duration_sec = time.monotonic() - fetch_started
             return []
 
         candles = []
         for c in data:
             try:
                 t_ms = c.get("T") or c.get("t")
-                ts = datetime.utcfromtimestamp(t_ms / 1000.0)
+                ts = datetime.fromtimestamp(t_ms / 1000.0, tz=timezone.utc)
 
                 candles.append(
                     {
@@ -254,6 +309,8 @@ class PerpDataFeed:
         # Update local cache
         self._cached_snapshot = list(candles)
         self._cached_snapshot_ts = time.time()
+        self._last_fetch_source = "network"
+        self._last_fetch_duration_sec = time.monotonic() - fetch_started
 
         return candles
 
@@ -352,3 +409,6 @@ class PerpDataFeed:
         df = pd.DataFrame(data)
         df = df.sort_values("time").reset_index(drop=True)
         return df
+
+    def get_last_fetch_status(self) -> Tuple[str, float]:
+        return self._last_fetch_source, float(self._last_fetch_duration_sec)

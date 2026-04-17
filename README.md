@@ -1,207 +1,279 @@
-🐶💰 Cuan Sniffer
-A data-driven crypto trading system designed for asymmetric returns
-Overview
+# 🚀 Cuan Sniffer — Live Execution Engine for Crypto Trading
 
-Cuan Sniffer is a real-time, multi-asset trading system that identifies and executes high-probability crypto trades using a combination of:
+> **Not a signal bot. Not a toy backtester.**
+> Cuan Sniffer is a **live-capable, capital-aware execution system** designed to convert high-quality signals into disciplined, risk-controlled trades.
 
-Smart Money Concepts (SMC)
-On-chain whale flow (Solana)
-Perpetual market sentiment (Hyperliquid)
-Multi-timeframe regime filters
+---
 
-Unlike typical signal bots, Cuan Sniffer is not just predictive — it is executable.
+## 🧠 Philosophy
 
-It includes a full paper trading engine with persistent balance, risk management, and performance tracking, allowing real-world validation of strategy edge.
+Markets don’t pay for being early.
+They don’t pay for being active.
+They pay for **precision and discipline**.
 
-Core Philosophy
+Cuan Sniffer is built on three principles:
 
-Low win rate. High expectancy. Strict selectivity.
+* **Only take asymmetric trades** (high RR, strong structure)
+* **Protect capital above all else**
+* **Execute like a machine, not a trader**
 
-Signals only fire when multi-layer confluence aligns
-Minimum ~2R risk/reward enforced
-Strategy is designed to be profitable below 50% win rate
-Filters and thresholds are derived from live data, not assumptions
-System Architecture
+---
 
-Cuan Sniffer operates as a modular, real-time pipeline:
+## ⚙️ System Overview
 
-Market Data → Feature Engine → Signal Engine → Execution → Performance Tracking
-Components
-Signal Layer
-signal_engine.py — Core scoring engine (continuation + reversal setups)
-features.py — TA indicators (EMA, ATR, VWAP, RSI)
-smc_structure.py — Market structure (BOS, CHoCH)
-smc_zones.py — Order blocks, fair value gaps
-smc_sweeps.py — Liquidity sweep detection
-Data Layer
-perp_data.py — Hyperliquid OHLCV feed (15m execution)
-perp_sentiment.py — Funding rates, open interest
-flow_context.py — On-chain whale tracking (SOL only)
-Execution Layer (NEW)
-executor.py — Signal → trade execution
-paper_trader.py — Account balance + portfolio state
-position.py — Trade lifecycle management
-risk_manager.py — Position sizing + risk constraints
-strategy_filter.py — Kill-switch + per-coin performance gating
-Persistence & Recovery
-trade_log.py — Trade history (trades.csv)
-bootstrap.py — Reconstructs:
-Balance
-Open positions
-Strategy state on restart
-Orchestration
-agent.py — Multi-coin scanning loop + Telegram alerts
-alerts.py — Flow + funding anomaly alerts
-Analytics
-analyze_winrate.py — Signal-level performance
-trades_recap.py — Trade-level PnL tracking (daily + all-time)
-Signal Engine
+Cuan Sniffer is a **modular trading engine** composed of:
 
-Cuan Sniffer evaluates two setup families:
+* Signal Engine → Generates trade ideas
+* Executor → Validates & executes trades
+* Risk Manager → Controls capital exposure
+* Protection Layer → Ensures stop/TP integrity
+* Live Monitor → Reconciles real positions
 
-1. Continuation
-Break of structure (BOS)
-Order block / FVG alignment
-Trend + HTF confirmation
-2. Reversal
-Liquidity sweep
-CHoCH (structure flip)
-VWAP deviation + flow confirmation
-Scoring System
+Everything flows through a **strict validation pipeline** before capital is deployed.
 
-Signals are scored across multiple dimensions:
+---
 
-Market structure (BOS / CHoCH)
-Trend alignment (1h + 4h EMA slope)
-VWAP positioning
-Volume & volatility context
-On-chain whale pressure (SOL)
-Funding rate (non-linear)
-Open interest delta
-RSI (context-aware)
+## 🧬 Execution Integrity (Core Edge)
 
-Only signals above a strict threshold proceed.
+Cuan Sniffer enforces **execution-time discipline**, not just signal-time logic.
 
-Data-Driven Filters
+### 🔒 Hard Guarantees
 
-Built from live performance analysis:
+* **Execution-time RR validation**
+  Trades must meet minimum RR *at fill*, not just at signal
 
-❌ Continuation in HTF chop → removed (negative expectancy)
-❌ Reversal in HTF chop + macro down → removed (0% win rate)
-✅ Session weighting (London/NY favored)
-✅ Volatility filters (low-vol regimes blocked)
-Execution Engine (Paper Trading)
+* **TP-consumed rejection**
+  No entering trades where the move already happened
 
-Cuan Sniffer includes a fully integrated execution system:
+* **ATR-based staleness filtering**
+  Rejects signals that drift too far from original setup
 
-Features
-💰 Persistent account balance (no reset on restart)
-📊 Real-time PnL tracking
-⚖️ Dynamic position sizing (based on signal confidence)
-🚫 Strategy kill-switch (auto-disable underperforming setups)
-🔄 State recovery (positions + balance restored on boot)
-Performance
-Signal-Level Performance
+* **Overextension guard**
+  Avoids chasing exhausted moves
 
-Measured via real market replay (not backtests):
+* **Fail-closed execution**
+  No trade executes without valid market data
 
-R-multiples per trade
-Sharpe / Sortino ratios
-Regime-level breakdowns
-Walk-forward validation
-Autocorrelation (signal independence)
-Trade-Level Performance (NEW)
-Real executed trades
-Stored in trades.csv
-Tracks:
-Balance growth
-Equity curve
-Drawdowns
-Win rate
-Daily Recap
+👉 Result: fewer trades, higher quality, cleaner equity curve
 
-Automated Telegram recap includes:
+---
 
-Signal performance summary
-Equity chart
-📈 Trade PnL:
-Today’s PnL
-All-time PnL
-Regime insights
-Example Signal
-🟢 SOL LONG SIGNAL 📈
+## 💰 Portfolio-Aware Execution
 
-🎯 Setup: Liquidity Sweep
-🧭 Regime: reversal | htf up | macro up
-⏱ TF: 15m
+Cuan Sniffer doesn’t just take trades — it **allocates capital intelligently**.
 
-💰 Entry: 87.42
-🛑 SL: 85.91
-🎯 TP: 91.05
-📊 R/R: 2.10R
+### 🧠 Portfolio Logic
 
-⚡ Strength: 88%
-📈 Funding: Shorts crowded
-📦 OI: 48,291,033
-🐋 Flow: Buyers stepping in
-Setup
-Requirements
-Python 3.13+
-Hyperliquid API access
-Solana RPC (Alchemy recommended)
-Install
-git clone https://github.com/YOUR_USERNAME/cuan-sniffer.git
-cd cuan-sniffer
+* Max open positions enforced
+* Bucketed exposure (majors / SOL beta / alts)
+* Directional caps (long vs short)
+* Intraday vs swing separation
 
-python -m venv .venv
-source .venv/bin/activate
+### 🔄 Position Replacement
+
+When full:
+
+* Weakest position can be replaced
+* Stronger signals take priority
+
+Protected positions:
+
+* Partial profits locked
+* Trades in profit
+* Trades near TP
+
+👉 Capital is always deployed to the **highest expected value opportunities**
+
+---
+
+## 📊 Risk Management
+
+Risk is defined in **R (risk units)**, not emotions.
+
+### Controls
+
+* Fixed % risk per trade
+* Daily loss limit (R-based)
+* Max drawdown halt
+* Confidence-weighted sizing
+* Track-based risk (intraday vs swing)
+
+### Live Capital Sync
+
+* Balance derived from **exchange equity**
+* Wallet = source of truth
+* Automatic recovery after restart
+
+👉 No drift between model and reality
+
+---
+
+## 🎯 Trade Lifecycle
+
+Cuan Sniffer uses a **structured profit-taking model**.
+
+### Default Model
+
+* Partial close at **+1R**
+* Stop moves to **breakeven**
+* Remaining position runs to TP
+
+### Optional Modes
+
+* Full TP mode (no partials)
+* Runner-based exits
+
+👉 Wins are protected, runners capture upside
+
+---
+
+## 🛡️ Protection Layer
+
+Every position is protected at the venue level.
+
+* Native stop-loss placement
+* Native take-profit placement
+* Auto-repair on missing protection
+* Continuous protection auditing
+
+> The exchange is treated as the **final authority** for all positions.
+
+---
+
+## 🔄 Live Position Reconciliation
+
+Cuan Sniffer is built for real-world conditions:
+
+* Detects positions closed outside the bot
+* Handles restarts without losing state
+* Re-syncs with wallet automatically
+
+👉 No phantom positions. No desync risk.
+
+---
+
+## ⚡ Execution Engine
+
+Designed for **real fills, not theory**.
+
+* Slippage-aware execution
+* Partial fill handling
+* Order lifecycle tracking
+* Retry logic for edge cases
+
+---
+
+## 🧪 Modes
+
+### PAPER MODE
+
+* Simulated execution
+* Full logic testing
+
+### LIVE MODE
+
+* Real capital
+* Venue-integrated execution
+* Wallet-authoritative state
+
+---
+
+## 🌐 Web3 Native Considerations
+
+This system is built with **crypto-native realities** in mind:
+
+* Volatility is a feature, not a bug
+* Liquidity can disappear instantly
+* Execution matters more than signals
+* Wallet state > local state
+
+Or simply:
+
+> **Don’t trust your bot. Trust the chain.**
+
+---
+
+## 🧩 Strategy Layer (Pluggable)
+
+Cuan Sniffer is **strategy-agnostic**.
+
+Current signal types:
+
+* Continuation setups
+* Reversal setups
+* Multi-timeframe confluence
+
+Future-ready for:
+
+* On-chain signals
+* Liquidity flows
+* AI-driven strategies
+
+---
+
+## 📈 Metrics That Matter
+
+The system optimizes for:
+
+* Expectancy (R-based)
+* Drawdown control
+* Capital efficiency
+* Execution quality
+
+Not vanity metrics.
+
+---
+
+## 🛠️ Configuration
+
+Fully environment-driven via `.env`
+
+Key controls:
+
+* Risk per trade
+* Position limits
+* Slippage thresholds
+* Session filters
+* Execution tuning
+
+👉 No hardcoded behavior. Everything is adjustable.
+
+---
+
+## 🚀 Deployment
+
+Typical flow:
+
+```bash
+git pull
 pip install -r requirements.txt
-Configure
-cp .env.template .env
-
-Set:
-
-Telegram bot + chat ID
-RPC URL
-Coins to track
-Run
-# Terminal 1 — optional (on-chain tracker)
 python main.py
+```
 
-# Terminal 2 — trading system
-python agent.py
-Analysis
-# Evaluate signal performance
-python analyze_winrate.py
+Runs continuously as a live trading agent.
 
-# With slippage + walk-forward
-python analyze_winrate.py --slippage-bps 20 --walk-forward --autocorr
+---
 
-# Trade PnL recap
-python trades_recap.py
-Roadmap
- Real-time multi-coin signal engine
- On-chain + perp data fusion
- Execution layer (paper trading)
- Persistent portfolio state
- Strategy-level risk controls
- Live execution (Hyperliquid integration)
- Portfolio-level optimization
- ML-based signal refinement
-Positioning
+## ⚠️ Disclaimer
 
-Cuan Sniffer is designed as:
+This is a **live trading system**.
 
-A quant-informed discretionary system, bridging raw market structure with systematic execution.
+* Losses will occur
+* Misconfiguration can be costly
+* Always test before deploying capital
 
-Not a black box. Not pure TA. Not pure quant.
+---
 
-A hybrid system focused on:
+## 🧠 Final Note
 
-Explainability
-Robustness
-Real-world performance validation
-Disclaimer
+Cuan Sniffer is not trying to predict the market.
 
-⚠️ High-risk leveraged trading system.
-Not financial advice. For research and development purposes only.
+It is designed to:
+
+> **Execute only when the odds are already in your favor — and survive when they’re not.**
+
+---
+
+## 🪙 Tagline
+
+**Trade less. Execute better. Survive longer.**

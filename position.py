@@ -67,6 +67,17 @@ class Position:
     partial_r: float = 0.0
     runner_r: float = 0.0
     pnl_usd: float = 0.0
+    partial_close_size_usd: float = 0.0
+    partial_close_fraction: float = 0.0
+
+    # ── Fee / funding accounting (v2) ────────────────────────────────
+    # Previously set dynamically by executor — now declared so they
+    # appear in to_dict() and survive serialisation round-trips.
+    entry_fee_usd: float = 0.0
+    exit_fees_usd: float = 0.0
+    funding_usd: float = 0.0
+    total_fees_usd: float = 0.0
+    last_funding_ts: Optional[datetime] = None
 
     # Timestamps
     opened_at: datetime = field(default_factory=_utc)
@@ -80,7 +91,30 @@ class Position:
     confidence: float = 0.0
     total_score: float = 0.0
     session: str = ""
+    timeframe: str = "15m"
+    execution_track: str = "intraday"
     size_multiplier: float = 1.0
+    entry_order_ids: str = ""
+    exit_order_ids: str = ""
+    stop_order_id: str = ""
+    tp_order_id: str = ""
+    protection_status: str = ""
+    protection_placed_at: Optional[datetime] = None
+    protection_error: str = ""
+    venue_protection_mode: bool = False
+    allow_reconcile_close: bool = False
+    reconciled_from_venue: bool = False
+    exit_requested_reason: str = ""
+    exit_requested_at: Optional[datetime] = None
+    exit_trigger_source: str = ""
+    wallet_flat_confirmed: bool = False
+    wallet_flat_confirmed_at: Optional[datetime] = None
+    pending_exit_reason: str = ""
+    pending_exit_fill_price: float = 0.0
+    pending_exit_fill_size_usd: float = 0.0
+    pending_exit_fee_usd: float = 0.0
+    pending_exit_slippage_bps: float = 0.0
+    pending_exit_recorded_at: Optional[datetime] = None
 
     def __post_init__(self):
         if self.original_stop_price == 0.0:
@@ -178,19 +212,61 @@ class Position:
             "runner_r": round(self.runner_r, 4),
             "realized_r": round(self.realized_r, 4),
             "pnl_usd": round(self.pnl_usd, 2),
+            "partial_close_size_usd": round(self.partial_close_size_usd, 8),
+            "partial_close_fraction": round(self.partial_close_fraction, 8),
             "size_multiplier": self.size_multiplier,
             "partial_closed": self.partial_closed,
             "breakeven_moved": self.breakeven_moved,
             "current_price": self.current_price,
             "first_update_pending": self.first_update_pending,
             "stale_invalidated": self.stale_invalidated,
+            # ── Fee fields (v2) ──────────────────────────────────────
+            "entry_fee_usd": round(self.entry_fee_usd, 8),
+            "exit_fees_usd": round(self.exit_fees_usd, 8),
+            "funding_usd": round(self.funding_usd, 8),
+            "total_fees_usd": round(self.total_fees_usd, 8),
+            # ─────────────────────────────────────────────────────────
             "regime": self.regime,
             "setup_family": self.setup_family,
             "htf_regime": self.htf_regime,
             "confidence": self.confidence,
             "total_score": self.total_score,
             "session": self.session,
+            "timeframe": self.timeframe,
+            "execution_track": self.execution_track,
             "rr_planned": round(self.rr_planned, 3),
+            "entry_order_ids": self.entry_order_ids,
+            "exit_order_ids": self.exit_order_ids,
+            "stop_order_id": self.stop_order_id,
+            "tp_order_id": self.tp_order_id,
+            "protection_status": self.protection_status,
+            "protection_placed_at": (
+                self.protection_placed_at.isoformat()
+                if self.protection_placed_at else ""
+            ),
+            "protection_error": self.protection_error,
+            "venue_protection_mode": self.venue_protection_mode,
+            "allow_reconcile_close": self.allow_reconcile_close,
+            "reconciled_from_venue": self.reconciled_from_venue,
+            "exit_requested_reason": self.exit_requested_reason,
+            "exit_requested_at": (
+                self.exit_requested_at.isoformat() if self.exit_requested_at else ""
+            ),
+            "exit_trigger_source": self.exit_trigger_source,
+            "wallet_flat_confirmed": self.wallet_flat_confirmed,
+            "wallet_flat_confirmed_at": (
+                self.wallet_flat_confirmed_at.isoformat()
+                if self.wallet_flat_confirmed_at else ""
+            ),
+            "pending_exit_reason": self.pending_exit_reason,
+            "pending_exit_fill_price": round(self.pending_exit_fill_price, 8),
+            "pending_exit_fill_size_usd": round(self.pending_exit_fill_size_usd, 8),
+            "pending_exit_fee_usd": round(self.pending_exit_fee_usd, 8),
+            "pending_exit_slippage_bps": round(self.pending_exit_slippage_bps, 4),
+            "pending_exit_recorded_at": (
+                self.pending_exit_recorded_at.isoformat()
+                if self.pending_exit_recorded_at else ""
+            ),
             "opened_at": self.opened_at.isoformat(),
             "closed_at": self.closed_at.isoformat() if self.closed_at else "",
         }
