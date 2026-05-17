@@ -1323,7 +1323,7 @@ class LiveExecutionBackend(ExecutionBackend):
             return LIVE_EXIT_SLIPPAGE_BPS_STOP_RUNNER
         if reason == "stop_full":
             return LIVE_EXIT_SLIPPAGE_BPS_STOP_FULL
-        if reason == "manual":
+        if reason == "manual" or reason.startswith("system_exit_"):
             return LIVE_EXIT_SLIPPAGE_BPS_MANUAL
         return LIVE_EXIT_SLIPPAGE_BPS
 

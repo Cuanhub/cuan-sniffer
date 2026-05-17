@@ -16,10 +16,17 @@ class CloseReason(str, Enum):
     TP_FULL = "tp_full"
     STOP_FULL = "stop_full"
     STOP_RUNNER = "stop_runner"
-    MANUAL = "manual"
+    MANUAL = "manual"                                    # ONLY for user-triggered exits (CLI/API/dashboard)
     DAILY_HALT = "daily_halt"
     DD_HALT = "dd_halt"
     STALE_SIGNAL = "stale_signal"
+    # System-triggered exits — executor/monitor initiated, NOT user action
+    SYSTEM_EXIT_REPLACEMENT = "system_exit_replacement"  # position replaced by higher-quality signal
+    SYSTEM_EXIT_RECONCILE = "system_exit_reconcile"      # venue-flat detected mid-range (not at stop/TP)
+    SYSTEM_EXIT_PROTECTION_FAILURE = "system_exit_protection_failure"  # protection order missing after retries
+    SYSTEM_EXIT_UNKNOWN = "system_exit_unknown"          # forced close with no confirmed reason
+    SYSTEM_EXIT_TIMEOUT = "system_exit_timeout"          # position exceeded max hold duration
+    SYSTEM_EXIT_SAFETY = "system_exit_safety"            # safety kill: daily/DD halt or risk breach
 
 
 def _utc() -> datetime:

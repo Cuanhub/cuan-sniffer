@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from position import Position
+from smc_live_log import append_smc_live_event
 
 TRADES_FILE = os.getenv("TRADES_FILE", "trades.csv")
 LOCK_FILE = f"{TRADES_FILE}.lock"
@@ -228,3 +229,45 @@ def append_trade(position: Position, paper_mode: bool = True):
         "paper_mode": paper_mode_str,
     }
     upsert_trade_row(row)
+    append_smc_live_event(
+        event_type="trade_state",
+        signal_id=position.signal_id,
+        position_id=position.position_id,
+        coin=position.coin,
+        timeframe=position.timeframe,
+        side=position.side,
+        score=position.total_score,
+        confidence=position.confidence,
+        accepted=True,
+        reject_reason="",
+        entry=position.entry_price,
+        stop=position.stop_price,
+        tp=position.tp_price,
+        rr=round(position.rr_planned, 4),
+        stop_method="",
+        final_entry=position.entry_price,
+        final_stop=position.stop_price,
+        final_tp=position.tp_price,
+        final_rr=round(position.rr_planned, 4),
+        final_stop_method="",
+        stop_was_redesigned="",
+        original_stop=position.original_stop_price,
+        ob_level=0.0,
+        price=position.current_price,
+        atr=position.atr,
+        stop_dist_atr=(
+            abs(position.entry_price - position.stop_price) / position.atr
+            if position.atr else 0.0
+        ),
+        htf_regime=position.htf_regime,
+        macro_regime="",
+        market_regime=position.regime,
+        session=position.session,
+        order_submitted=True,
+        fill_price=round(position.pending_exit_fill_price or position.entry_price, 8),
+        slippage_bps=round(position.pending_exit_slippage_bps, 4),
+        partial_hit=position.partial_closed,
+        close_reason=position.close_reason.value if position.close_reason else "",
+        realized_r=round(position.realized_r, 4),
+        realized_pnl=round(position.pnl_usd, 2),
+    )

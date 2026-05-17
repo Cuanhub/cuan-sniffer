@@ -30,6 +30,7 @@ from signal_log import init_signal_log, append_signal
 from alerts import AlertManager
 from executor import Executor
 from trades_recap import run_trades_recap
+from smc_live_log import init_smc_live_log
 
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
@@ -100,11 +101,19 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def notify(text: str):
+def notify(text: str) -> bool:
     try:
-        send_telegram_message(text)
+        return bool(send_telegram_message(text))
     except Exception as e:
         print(f"[NOTIFY ERROR] {e}")
+        return False
+
+
+def notify_async(text: str) -> None:
+    try:
+        threading.Thread(target=notify, args=(text,), daemon=True).start()
+    except Exception as e:
+        print(f"[NOTIFY_ASYNC] failed to start thread: {e}")
 
 
 def validate_env() -> bool:
@@ -209,6 +218,12 @@ def format_fill_message(
     fill_slippage_bps: float,
     fill_ratio: float,
     position_id: str,
+    size_usd: float = 0.0,
+    risk_usd: float = 0.0,
+    entry_fee_usd: float = 0.0,
+    protection_status: str = "",
+    stop_order_id: str = "",
+    tp_order_id: str = "",
 ) -> str:
     side = signal.side
     emoji = "🟢" if side == "LONG" else "🔴"
@@ -218,6 +233,7 @@ def format_fill_message(
     tp = float(signal.tp_price)
     rr = abs((tp - fill_price) / (fill_price - sl)) if fill_price != sl else 0.0
     stop_dist_pct = abs(fill_price - sl) / fill_price * 100 if fill_price > 0 else 0.0
+    tp_dist_pct = abs(tp - fill_price) / fill_price * 100 if fill_price > 0 else 0.0
 
     meta = signal.meta or {}
     session = meta.get("session", "unknown")
@@ -233,9 +249,15 @@ def format_fill_message(
         f"{emoji} *{coin} {side} FILLED* {arrow}  {_mode_tag()}\n\n"
         f"💰 Fill price: `{fill_price:.5g}`{partial_line}\n"
         f"🛑 Stop: `{sl:.5g}`  `({stop_dist_pct:.2f}% risk)`\n"
-        f"🎯 TP: `{tp:.5g}`\n"
+        f"🎯 TP: `{tp:.5g}`  `({tp_dist_pct:.2f}% move)`\n"
         f"📊 R/R: `{rr:.2f}R`\n\n"
         f"```\n"
+        f"  Size    : ${size_usd:.2f}\n"
+        f"  Risk    : ${risk_usd:.2f}\n"
+        f"  Fee     : ${entry_fee_usd:.2f}\n"
+        f"  Protect : {protection_status or 'unknown'}\n"
+        f"  StopOID : {stop_order_id or '-'}\n"
+        f"  TPOID   : {tp_order_id or '-'}\n"
         f"  Setup   : {setup}\n"
         f"  HTF     : {htf}  |  Macro: {macro}\n"
         f"  Vol     : {vol}\n"
@@ -736,7 +758,7 @@ def _execute_signal(
     signal.meta["signal_id"] = sig_id
 
     if detection_alerts:
-        notify(format_signal_message(coin, signal, flow_snapshot, sentiment, tf_label))
+        notify_async(format_signal_message(coin, signal, flow_snapshot, sentiment, tf_label))
 
     print(f"[{coin}] {tf_label} signal detected")
 
@@ -757,13 +779,19 @@ def _execute_signal(
             fill_slippage_bps = exec_result.fill_slippage_bps
             fill_ratio = exec_result.fill_ratio
 
-            notify(format_fill_message(
+            notify_async(format_fill_message(
                 coin=coin,
                 signal=signal,
                 fill_price=fill_price,
                 fill_slippage_bps=fill_slippage_bps,
                 fill_ratio=fill_ratio,
                 position_id=position_id,
+                size_usd=getattr(exec_result, "size_usd", 0.0),
+                risk_usd=getattr(exec_result, "risk_usd", 0.0),
+                entry_fee_usd=getattr(exec_result, "entry_fee_usd", 0.0),
+                protection_status=getattr(exec_result, "protection_status", ""),
+                stop_order_id=getattr(exec_result, "stop_order_id", ""),
+                tp_order_id=getattr(exec_result, "tp_order_id", ""),
             ))
 
             print(f"[{coin}] {tf_label} live trade opened — {position_id}")
@@ -820,10 +848,11 @@ def main():
 
     init_db()
     init_signal_log()
+    init_smc_live_log()
 
     flow_ctx = FlowContext(SessionLocal)
     states, shared_engine = build_states(flow_ctx)
-    executor = Executor(notify_fn=notify, signal_engine=shared_engine)
+    executor = Executor(notify_fn=notify_async, signal_engine=shared_engine)
 
     print("[AGENT] Live position monitor active (shared with executor)")
 

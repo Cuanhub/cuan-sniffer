@@ -36,3 +36,4 @@ build/
 *.egg-info/
 
 last_recap.txt
+strategy_filter_state.json

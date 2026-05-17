@@ -78,9 +78,9 @@ SESSION_ATR_BUFFER_SCALE: Dict[str, float] = _load_session_atr_scales()
 
 # ── Move / drift limits ───────────────────────────────────────────────
 MAX_MOVE_STOP_FRAC = float(os.getenv("MAX_MOVE_STOP_FRAC", "2.5"))
-ADVERSE_DRIFT_DEFAULT = float(os.getenv("ADVERSE_DRIFT_DEFAULT", "0.50"))
-ADVERSE_DRIFT_ALIGNED = float(os.getenv("ADVERSE_DRIFT_ALIGNED", "0.75"))
-ADVERSE_DRIFT_ALIGNED_STRONG = float(os.getenv("ADVERSE_DRIFT_ALIGNED_STRONG", "0.85"))
+ADVERSE_DRIFT_DEFAULT = float(os.getenv("ADVERSE_DRIFT_DEFAULT", "0.80"))
+ADVERSE_DRIFT_ALIGNED = float(os.getenv("ADVERSE_DRIFT_ALIGNED", "1.00"))
+ADVERSE_DRIFT_ALIGNED_STRONG = float(os.getenv("ADVERSE_DRIFT_ALIGNED_STRONG", "1.20"))
 
 # ── Stale signal filter ───────────────────────────────────────────────
 # SIGNAL_STALE_ATR_MULT: reject entry when price has moved more than this
@@ -104,6 +104,15 @@ MIN_EXECUTION_EFFECTIVE_RR = float(
 MAX_RECENT_MOVE_ATR = float(os.getenv("MAX_RECENT_MOVE_ATR", "1.50"))
 TRAIL_ATR_MULT = float(os.getenv("TRAIL_ATR_MULT", "1.0"))
 MAX_FULL_LOSS_R = float(os.getenv("MAX_FULL_LOSS_R", "-1.5"))
+
+# ── FULL_TP_MODE profit protection ────────────────────────────────────
+# FULL_TP_MODE_BE_R: move software + native stop to entry_price once
+# position reaches this R level. 0 = disabled.
+FULL_TP_MODE_BE_R = float(os.getenv("FULL_TP_MODE_BE_R", "1.0"))
+# FULL_TP_MODE_TRAIL_R: begin ATR-trailing the stop (1×TRAIL_ATR_MULT)
+# once this R level is reached. Only activates after BE stop is set.
+# 0 = disabled.
+FULL_TP_MODE_TRAIL_R = float(os.getenv("FULL_TP_MODE_TRAIL_R", "1.5"))
 LIVE_FLAT_EPSILON_SZ = float(os.getenv("LIVE_FLAT_EPSILON_SZ", "1e-9"))
 LIVE_EXIT_RETRY_COOLDOWN_SEC = float(os.getenv("LIVE_EXIT_RETRY_COOLDOWN_SEC", "10"))
 LIVE_TINY_POSITION_USD = float(os.getenv("LIVE_TINY_POSITION_USD", "5.0"))
@@ -123,6 +132,35 @@ MIN_STOP_REDESIGN_RR = float(os.getenv("MIN_STOP_REDESIGN_RR", "1.8"))
 
 # ── Continuation cap ──────────────────────────────────────────────────
 CONTINUATION_MAX_SIZE_MULT = float(os.getenv("CONTINUATION_MAX_SIZE_MULT", "1.50"))
+
+# ── Profitability gates ────────────────────────────────────────────────
+# Coins blocked until per-coin edge is re-validated. Checked before risk.check_signal().
+HARD_BLOCKED_COINS: set = {
+    c.strip().upper()
+    for c in os.getenv("HARD_BLOCKED_COINS", "").split(",")
+    if c.strip()
+}
+# Timeframes blocked until re-validated (default: 4h — 0/15 win rate in live data).
+HARD_BLOCKED_TIMEFRAMES: set = {
+    tf.strip().lower()
+    for tf in os.getenv("HARD_BLOCKED_TIMEFRAMES", "4h").split(",")
+    if tf.strip()
+}
+# Minimum confidence required in weak_trend regime. Signals below this are rejected.
+# Data: mkt_weak_trend at <0.85 conf drove -19.91R. Above 0.85 is the only viable band.
+WEAK_TREND_MIN_CONFIDENCE = float(os.getenv("WEAK_TREND_MIN_CONFIDENCE", "0.0"))
+
+# ── Score-based regime quality gates ─────────────────────────────────
+# Gate 4: weak continuation — only allow when score >= threshold.
+# Data: continuation+mkt_weak_trend at score<0.90 drove churn with negative EV.
+WEAK_CONTINUATION_MIN_SCORE = float(os.getenv("WEAK_CONTINUATION_MIN_SCORE", "0.90"))
+# Gate 5: reversal in chop/weak-trend — only allow higher-quality setups.
+# Data: low-score reversals in chop are noise trades with negative expectancy.
+REVERSAL_CHOP_MIN_SCORE = float(os.getenv("REVERSAL_CHOP_MIN_SCORE", "0.78"))
+# TP cap for weak/chop regimes: cap final TP at this many R from entry.
+# Trades whose capped TP falls below MIN_EXECUTION_EFFECTIVE_RR are rejected
+# by the existing RR guard — no additional block needed here.
+REGIME_TP_CAP_R = float(os.getenv("REGIME_TP_CAP_R", "1.5"))
 
 # ── Market regime gating/sizing ───────────────────────────────────────
 BLOCK_CONTINUATION_IN_CHOP = (
@@ -158,13 +196,16 @@ ENABLE_POSITION_REPLACEMENT = (
     os.getenv("ENABLE_POSITION_REPLACEMENT", "true").lower() == "true"
 )
 POSITION_REPLACEMENT_MIN_SCORE_DELTA = float(
-    os.getenv("POSITION_REPLACEMENT_MIN_SCORE_DELTA", "0.12")
+    os.getenv("POSITION_REPLACEMENT_MIN_SCORE_DELTA", "0.16")
+)
+MIN_HOLD_TIME_BEFORE_REPLACEMENT_SEC = int(
+    os.getenv("MIN_HOLD_TIME_BEFORE_REPLACEMENT_SEC", "120")
 )
 POSITION_REPLACEMENT_PROTECT_PARTIALED = (
     os.getenv("POSITION_REPLACEMENT_PROTECT_PARTIALED", "true").lower() == "true"
 )
 POSITION_REPLACEMENT_PROTECT_NEAR_TP_R = float(
-    os.getenv("POSITION_REPLACEMENT_PROTECT_NEAR_TP_R", "0.8")
+    os.getenv("POSITION_REPLACEMENT_PROTECT_NEAR_TP_R", "1.2")
 )
 POSITION_REPLACEMENT_PROTECT_IN_PROFIT_R = float(
     os.getenv("POSITION_REPLACEMENT_PROTECT_IN_PROFIT_R", "0.5")
@@ -301,6 +342,12 @@ class ExecutorResult:
     fill_price: float = 0.0
     fill_slippage_bps: float = 0.0
     fill_ratio: float = 0.0
+    size_usd: float = 0.0
+    risk_usd: float = 0.0
+    entry_fee_usd: float = 0.0
+    protection_status: str = ""
+    stop_order_id: str = ""
+    tp_order_id: str = ""
 
     def __bool__(self) -> bool:
         return self.traded
@@ -807,6 +854,65 @@ class Executor:
                     self._log_missed(signal, sig_id, reason)
                     return ExecutorResult(traded=False, reason=reason)
 
+            # ── Profitability gates (data-driven, archive-validated) ──────────
+            # Gate 1: hard-blocked coins — zero/negative edge per all-time live data.
+            if coin in HARD_BLOCKED_COINS:
+                reason = f"hard_blocked_coin:{coin}"
+                print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
+                self._log_missed(signal, sig_id, reason)
+                return ExecutorResult(traded=False, reason=reason)
+
+            # Gate 2: hard-blocked timeframes — 4h had 0/15 live win rate.
+            _sig_tf = str((getattr(signal, "meta", None) or {}).get("timeframe", "")).strip().lower()
+            if _sig_tf in HARD_BLOCKED_TIMEFRAMES:
+                reason = f"hard_blocked_timeframe:{_sig_tf}"
+                print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
+                self._log_missed(signal, sig_id, reason)
+                return ExecutorResult(traded=False, reason=reason)
+
+            # Gate 3: weak-trend confidence floor — sub-0.85 weak_trend drove -19.91R.
+            if market_regime == "weak_trend" and WEAK_TREND_MIN_CONFIDENCE > 0:
+                _sig_conf = float(getattr(signal, "confidence", 0.0))
+                if _sig_conf < WEAK_TREND_MIN_CONFIDENCE:
+                    reason = (
+                        f"weak_trend_conf_gate:"
+                        f"conf={_sig_conf:.2f}<{WEAK_TREND_MIN_CONFIDENCE:.2f}"
+                    )
+                    print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
+                    self._log_missed(signal, sig_id, reason)
+                    return ExecutorResult(traded=False, reason=reason)
+
+            # ── Score-based regime quality gates ─────────────────────────────
+            _gate_score = self._signal_total_score(signal)
+
+            # Gate 4: weak continuation — churn without very high confidence.
+            if (
+                setup_family == "continuation"
+                and market_regime == "weak_trend"
+                and _gate_score < WEAK_CONTINUATION_MIN_SCORE
+            ):
+                reason = "blocked_weak_continuation_low_score"
+                print(
+                    f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason} "
+                    f"(score={_gate_score:.3f} < {WEAK_CONTINUATION_MIN_SCORE:.2f})"
+                )
+                self._log_missed(signal, sig_id, reason)
+                return ExecutorResult(traded=False, reason=reason)
+
+            # Gate 5: reversal quality in chop/weak-trend — low-score reversals are noise.
+            if (
+                setup_family == "reversal"
+                and market_regime in ("chop", "weak_trend")
+                and _gate_score < REVERSAL_CHOP_MIN_SCORE
+            ):
+                reason = "blocked_low_quality_reversal_in_chop"
+                print(
+                    f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason} "
+                    f"(score={_gate_score:.3f} < {REVERSAL_CHOP_MIN_SCORE:.2f})"
+                )
+                self._log_missed(signal, sig_id, reason)
+                return ExecutorResult(traded=False, reason=reason)
+
             self._refresh_runtime_balance_from_venue(source=f"pre_entry:{coin}")
             if self._live_mode and self.venue_sync_unhealthy:
                 reason = "venue_sync_unhealthy:missing_or_zero_equity"
@@ -1026,6 +1132,12 @@ class Executor:
                 fill_price=fill.fill_price,
                 fill_slippage_bps=fill.slippage_bps,
                 fill_ratio=fill.fill_ratio if fill.fill_ratio is not None else 1.0,
+                size_usd=float(getattr(position, "size_usd", 0.0) or 0.0),
+                risk_usd=float(getattr(position, "risk_usd", 0.0) or 0.0),
+                entry_fee_usd=float(getattr(position, "entry_fee_usd", 0.0) or 0.0),
+                protection_status=str(getattr(position, "protection_status", "") or ""),
+                stop_order_id=str(getattr(position, "stop_order_id", "") or ""),
+                tp_order_id=str(getattr(position, "tp_order_id", "") or ""),
             )
         finally:
             self._clear_coin_pending_open(coin)
@@ -1112,8 +1224,20 @@ class Executor:
                 f"(final_rr={final_rr:.2f} < min_rr={min_rr_effective:.2f})"
             )
 
+        engine_stop_method = str(meta.get("stop_method", "atr") or "atr")
+        stop_was_redesigned = abs(float(final_stop) - float(structural_stop)) > 1e-12
         signal.stop_price = float(final_stop)
 
+        meta["original_stop"] = round(structural_stop, 8)
+        meta["final_entry"] = round(entry, 8)
+        meta["final_stop"] = round(final_stop, 8)
+        meta["final_tp"] = round(tp, 8)
+        meta["final_rr"] = round(final_rr, 4)
+        meta["final_stop_method"] = (
+            f"{engine_stop_method}+executor_redesign"
+            if stop_was_redesigned else engine_stop_method
+        )
+        meta["stop_was_redesigned"] = stop_was_redesigned
         meta["stop_structural"] = round(structural_stop, 8)
         meta["stop_atr_floor"] = round(atr_floor_stop, 8)
         meta["stop_buffered"] = round(buffered_stop, 8)
@@ -1144,6 +1268,54 @@ class Executor:
         stop_price = float(signal.stop_price)
         tp_price = float(signal.tp_price)
         side = self._side_str(signal.side)
+
+        # HARD BLOCK: Reject signals when both market and macro regimes are chop.
+        # The combined_regime string on signal.regime is the authoritative source —
+        # it is built as "family|htf_X|macro_Y|mkt_Z" (signal_engine.py).
+        # meta["market_regime"] is a single word ("chop"/"strong_trend"/"weak_trend")
+        # and never contains these substrings, so we must read signal.regime here.
+        _combined_regime = str(getattr(signal, "regime", "")).strip().lower()
+        _market_regime_val = str(meta.get("market_regime", "")).strip().lower()
+        _macro_regime_val = str(meta.get("regime_macro_4h", "")).strip().lower()
+        if "macro_chop" in _combined_regime and "mkt_chop" in _combined_regime:
+            print(
+                f"[REJECT] {coin} {side} reason=blocked_chop_dual_regime "
+                f"regime={_combined_regime!r} market_regime={_market_regime_val} "
+                f"macro_regime={_macro_regime_val} "
+                f"score={float(meta.get('total_score', getattr(signal, 'confidence', 0.0)) or 0.0):.3f}"
+            )
+            return "blocked_chop_dual_regime"
+
+        # Regime-aware TP cap: in weak/chop regimes, pull TP in to REGIME_TP_CAP_R.
+        # signal.tp_price is mutated in-place so _build_position picks up the cap.
+        # If capped TP fails MIN_EXECUTION_EFFECTIVE_RR, the RR guard below rejects.
+        _cap_combined = str(getattr(signal, "regime", "")).strip().lower()
+        if (
+            "mkt_chop" in _cap_combined
+            or "mkt_weak_trend" in _cap_combined
+            or "macro_chop" in _cap_combined
+        ):
+            _stop_dist_cap = abs(signal_price - stop_price)
+            if _stop_dist_cap > 0:
+                _cap_dist = REGIME_TP_CAP_R * _stop_dist_cap
+                if side == "LONG":
+                    _capped_tp = signal_price + _cap_dist
+                    if tp_price > _capped_tp:
+                        print(
+                            f"[TP_CAP] coin={coin} side={side} regime={_cap_combined!r} "
+                            f"old_tp={tp_price:.6f} new_tp={_capped_tp:.6f} cap_r={REGIME_TP_CAP_R:.1f}"
+                        )
+                        signal.tp_price = _capped_tp
+                        tp_price = _capped_tp
+                else:  # SHORT
+                    _capped_tp = signal_price - _cap_dist
+                    if tp_price < _capped_tp:
+                        print(
+                            f"[TP_CAP] coin={coin} side={side} regime={_cap_combined!r} "
+                            f"old_tp={tp_price:.6f} new_tp={_capped_tp:.6f} cap_r={REGIME_TP_CAP_R:.1f}"
+                        )
+                        signal.tp_price = _capped_tp
+                        tp_price = _capped_tp
 
         if signal_price <= 0 or stop_price <= 0 or tp_price <= 0:
             return "invalid_signal_levels_for_rr_guard"
@@ -1679,6 +1851,23 @@ class Executor:
                 )
                 continue
 
+            opened_at = getattr(pos, "opened_at", None)
+            if MIN_HOLD_TIME_BEFORE_REPLACEMENT_SEC > 0:
+                if opened_at is None:
+                    print(
+                        f"[PORTFOLIO_REPLACE] protect {pos.coin} {pos.side} "
+                        "reason=missing_opened_at_for_min_hold"
+                    )
+                    continue
+                age_sec = (datetime.now(timezone.utc) - opened_at).total_seconds()
+                if age_sec < float(MIN_HOLD_TIME_BEFORE_REPLACEMENT_SEC):
+                    print(
+                        f"[PORTFOLIO_REPLACE] protect {pos.coin} {pos.side} "
+                        f"reason=min_hold_not_met age={age_sec:.1f}s "
+                        f"min={MIN_HOLD_TIME_BEFORE_REPLACEMENT_SEC}s"
+                    )
+                    continue
+
             if POSITION_REPLACEMENT_PROTECT_PARTIALED and bool(getattr(pos, "partial_closed", False)):
                 print(
                     f"[PORTFOLIO_REPLACE] protect {pos.coin} {pos.side} "
@@ -1769,12 +1958,36 @@ class Executor:
             print(f"[PORTFOLIO_REPLACE] {msg}")
             return False, msg
 
+        # Task 3 guard: do NOT force-close if position has live protection and no confirmed
+        # inconsistency. Portfolio replacement is only valid if the candidate is truly replaceable
+        # (already confirmed by _find_replaceable_position_for_signal), so we proceed — but
+        # log a [FORCE_EXIT] trace for full observability before touching the position.
+        _entry_ts = getattr(candidate, "opened_at", None)
+        _time_in_trade_sec = (
+            (datetime.now(timezone.utc) - _entry_ts).total_seconds()
+            if _entry_ts is not None
+            else 0.0
+        )
+        _has_stop = bool(str(getattr(candidate, "stop_order_id", "") or "").strip())
+        _has_tp = bool(str(getattr(candidate, "tp_order_id", "") or "").strip())
+        _prot_status = str(getattr(candidate, "protection_status", "") or "")
+        _entry_px = float(getattr(candidate, "entry_price", 0.0) or 0.0)
+        _pnl_est = (
+            (exit_px - _entry_px) * (1 if str(getattr(candidate, "side", "")).upper() == "LONG" else -1)
+        )
+        print(
+            f"[FORCE_EXIT] position_id={candidate.position_id} coin={candidate.coin} "
+            f"reason=system_exit_replacement trigger_source=executor_triggered "
+            f"entry_price={_entry_px:.6f} current_price={exit_px:.6f} "
+            f"pnl_estimate={_pnl_est:+.6f} has_stop={_has_stop} has_tp={_has_tp} "
+            f"protection_status={_prot_status!r} time_in_trade_sec={_time_in_trade_sec:.0f}"
+        )
         print(
             f"[PORTFOLIO_REPLACE] replacing {candidate.coin} {candidate.side} "
             f"for incoming {signal.coin} {self._side_str(signal.side)} "
             f"detail={detail}"
         )
-        self._live_close_runner(candidate, exit_px, CloseReason.MANUAL)
+        self._live_close_runner(candidate, exit_px, CloseReason.SYSTEM_EXIT_REPLACEMENT)
 
         still_open = bool(
             candidate.coin in self.risk.open_positions
@@ -2300,6 +2513,44 @@ class Executor:
 
         # FULL_TP_MODE: hold entire position until TP fires, no partials.
         if FULL_TP_MODE and not ENABLE_PARTIAL_TP and not bool(pos.partial_closed):
+            current_r = pos.current_r(price)
+
+            # ── Break-even stop ────────────────────────────────────────────────
+            # Once position reaches FULL_TP_MODE_BE_R, move software stop AND
+            # the native venue stop to entry_price. Fires exactly once per position
+            # (guarded by breakeven_moved flag). The native stop is updated via
+            # replace_stop_after_partial so the venue order reflects the new level.
+            if (
+                FULL_TP_MODE_BE_R > 0
+                and not pos.breakeven_moved
+                and current_r >= FULL_TP_MODE_BE_R
+            ):
+                pos.move_stop_to_breakeven()
+                full_size_coin = self._position_entry_size_coin(pos)
+                be_ok = self.protection_manager.replace_stop_after_partial(
+                    pos=pos,
+                    fallback_size_coin=full_size_coin,
+                    source="full_tp_be",
+                )
+                print(
+                    f"[BE_STOP] {pos.coin} {pos.side} stop→BE={pos.entry_price:.6f} "
+                    f"r={current_r:.2f} native_update={'ok' if be_ok else 'FAILED'}"
+                )
+                append_trade(pos, paper_mode=False)
+
+            # ── ATR trailing stop ──────────────────────────────────────────────
+            # Once position reaches FULL_TP_MODE_TRAIL_R AND break-even has been
+            # set, trail the software stop 1×ATR behind peak_price each cycle.
+            # The native stop stays at BE level as safety net; the software trail
+            # handles normal operation while the executor is running.
+            # _live_update_trailing_stop never lowers the stop, so BE is the floor.
+            if (
+                FULL_TP_MODE_TRAIL_R > 0
+                and pos.breakeven_moved
+                and current_r >= FULL_TP_MODE_TRAIL_R
+            ):
+                self._live_update_trailing_stop(pos)
+
             if tp_hit:
                 print(f"[EXIT_TRIGGER] {pos.coin} TP_FULL mode=full_tp")
                 self._live_close_runner(pos, price, CloseReason.TP_FULL)
@@ -2404,6 +2655,17 @@ class Executor:
         return fill
 
     def _mark_exit_requested(self, pos: Position, reason_value: str):
+        # Task 5 assertion: system exits must never carry "manual" close_reason.
+        # If this fires, it means a caller passed CloseReason.MANUAL for a system-initiated exit.
+        _trigger = str(getattr(pos, "exit_trigger_source", "") or "").strip()
+        if reason_value.lower() == "manual" and _trigger not in ("", "user"):
+            print(
+                f"[CRITICAL][EXIT_REASON_MISMATCH] position_id={pos.position_id} coin={pos.coin} "
+                f"close_reason=manual but trigger_source={_trigger!r} — "
+                "system exit incorrectly labeled as manual; rewriting to system_exit_unknown"
+            )
+            reason_value = CloseReason.SYSTEM_EXIT_UNKNOWN.value
+
         now = datetime.now(timezone.utc)
         if getattr(pos, "exit_requested_at", None) is None:
             pos.exit_requested_at = now
@@ -2978,6 +3240,13 @@ class Executor:
         remaining_notional_usd: float,
     ):
         try:
+            close_frac_pct = float(getattr(pos, "partial_close_fraction", 0.0) or 0.0) * 100.0
+            entry_fee_usd = float(getattr(pos, "entry_fee_usd", 0.0) or 0.0)
+            exit_fees_usd = float(getattr(pos, "exit_fees_usd", 0.0) or 0.0)
+            total_fees_usd = float(getattr(pos, "total_fees_usd", 0.0) or 0.0)
+            protection_status = str(getattr(pos, "protection_status", "") or "unknown")
+            stop_order_id = str(getattr(pos, "stop_order_id", "") or "-")
+            tp_order_id = str(getattr(pos, "tp_order_id", "") or "-")
             msg = (
                 f"✂️ *{pos.coin} {pos.side} PARTIAL TP* 🔴 LIVE\n\n"
                 f"💰 Exit price: `{fill_price:.5g}`\n"
@@ -2985,9 +3254,13 @@ class Executor:
                 f"```\n"
                 f"  R captured  : {net_partial_r:+.2f}R\n"
                 f"  P&L         : ${net_partial_usd:+.2f}\n"
-                f"  Closed      : ${closed_notional_usd:.0f}\n"
+                f"  Closed      : ${closed_notional_usd:.0f} ({close_frac_pct:.0f}%)\n"
                 f"  Remaining   : ${remaining_notional_usd:.0f}\n"
                 f"  New stop    : {pos.stop_price:.5g}\n"
+                f"  Fees        : entry=${entry_fee_usd:.2f} exit=${exit_fees_usd:.2f} total=${total_fees_usd:.2f}\n"
+                f"  Protect     : {protection_status}\n"
+                f"  StopOID     : {stop_order_id}\n"
+                f"  TPOID       : {tp_order_id}\n"
                 f"```\n"
                 f"🆔 `{pos.position_id}`\n"
                 f"🕒 `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}`"
@@ -3010,6 +3283,25 @@ class Executor:
             hrs = int(duration_min // 60)
             mins = int(duration_min % 60)
             duration_str = f"{hrs}h {mins}m" if hrs > 0 else f"{mins}m"
+            original_size_usd = float(getattr(pos, "size_usd", 0.0) or 0.0)
+            partial_size_usd = float(getattr(pos, "partial_close_size_usd", 0.0) or 0.0)
+            closed_size_usd = original_size_usd
+            if bool(getattr(pos, "partial_closed", False)):
+                closed_size_usd = max(0.0, original_size_usd - partial_size_usd)
+            close_fraction_pct = (
+                closed_size_usd / original_size_usd * 100.0
+                if original_size_usd > 0 else 0.0
+            )
+            entry_fee_usd = float(getattr(pos, "entry_fee_usd", 0.0) or 0.0)
+            exit_fees_usd = float(getattr(pos, "exit_fees_usd", 0.0) or 0.0)
+            funding_usd = float(getattr(pos, "funding_usd", 0.0) or 0.0)
+            total_fees_usd = float(getattr(pos, "total_fees_usd", 0.0) or 0.0)
+            source = str(getattr(pos, "exit_trigger_source", "") or "executor_triggered")
+            wallet_flat = "yes" if bool(getattr(pos, "wallet_flat_confirmed", False)) else "no"
+            reconciled = "yes" if bool(getattr(pos, "reconciled_from_venue", False)) else "no"
+            protection_status = str(getattr(pos, "protection_status", "") or "unknown")
+            stop_order_id = str(getattr(pos, "stop_order_id", "") or "-")
+            tp_order_id = str(getattr(pos, "tp_order_id", "") or "-")
 
             if reason == CloseReason.TP_FULL:
                 title = "🎯"
@@ -3027,9 +3319,16 @@ class Executor:
                 f"📥 Entry: `{pos.entry_price:.5g}`\n\n"
                 f"```\n"
                 f"  Reason  : {reason.value}\n"
-                f"  R       : {realized_r:+.2f}R\n"
+                f"  Net R   : {realized_r:+.2f}R\n"
                 f"  P&L     : ${pnl_usd:+.2f}\n"
-                f"  Size    : ${pos.size_usd:.0f}\n"
+                f"  Closed  : ${closed_size_usd:.0f} ({close_fraction_pct:.0f}%)\n"
+                f"  Original: ${original_size_usd:.0f}\n"
+                f"  Fees    : entry=${entry_fee_usd:.2f} exit=${exit_fees_usd:.2f} funding=${funding_usd:.2f} total=${total_fees_usd:.2f}\n"
+                f"  Source  : {source}\n"
+                f"  Wallet  : flat={wallet_flat} reconciled={reconciled}\n"
+                f"  Protect : {protection_status}\n"
+                f"  StopOID : {stop_order_id}\n"
+                f"  TPOID   : {tp_order_id}\n"
                 f"  Slip    : {slip_bps:.1f}bps\n"
                 f"  Hold    : {duration_str}\n"
                 f"```\n"
@@ -3413,7 +3712,18 @@ class Executor:
                     fee_usd=exit_fee_usd,
                     close_fraction=close_fraction,
                 )
-            if reason not in {CloseReason.MANUAL}:
+            # Do not count system/manual exits as strategy outcomes — they are not
+            # reflective of strategy edge (replacement, reconcile, safety kill, etc.)
+            _SKIP_STRATEGY_RECORD = {
+                CloseReason.MANUAL,
+                CloseReason.SYSTEM_EXIT_REPLACEMENT,
+                CloseReason.SYSTEM_EXIT_RECONCILE,
+                CloseReason.SYSTEM_EXIT_PROTECTION_FAILURE,
+                CloseReason.SYSTEM_EXIT_UNKNOWN,
+                CloseReason.SYSTEM_EXIT_TIMEOUT,
+                CloseReason.SYSTEM_EXIT_SAFETY,
+            }
+            if reason not in _SKIP_STRATEGY_RECORD:
                 self._record_strategy_outcome(pos, won=pos.realized_r > 0)
             append_trade(pos, paper_mode=False)
             self.live_monitor.unregister(pos.position_id)

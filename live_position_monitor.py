@@ -17,6 +17,9 @@ LIVE_MONITOR_MIN_AGE_SEC = float(os.getenv("LIVE_MONITOR_MIN_AGE_SEC", "20"))
 LIVE_MONITOR_ZERO_CONFIRMATIONS = int(os.getenv("LIVE_MONITOR_ZERO_CONFIRMATIONS", "2"))
 LIVE_FLAT_EPSILON_SZ = float(os.getenv("LIVE_FLAT_EPSILON_SZ", "1e-9"))
 LIVE_MONITOR_ORPHAN_TP_GRACE_SEC = float(os.getenv("LIVE_MONITOR_ORPHAN_TP_GRACE_SEC", "45"))
+LIVE_MONITOR_PROTECTED_RECONCILE_GRACE_SEC = float(
+    os.getenv("LIVE_MONITOR_PROTECTED_RECONCILE_GRACE_SEC", "120")
+)
 
 
 def _utc_now() -> datetime:
@@ -428,6 +431,24 @@ class LivePositionMonitor:
             )
             return
 
+        if (
+            not immediate_wallet_flat
+            and not exit_requested_reason
+            and has_native_protection
+            and not is_bootstrap_restored
+            and LIVE_MONITOR_PROTECTED_RECONCILE_GRACE_SEC > 0
+        ):
+            opened_at = getattr(pos, "opened_at", None)
+            if opened_at is not None:
+                age_sec = (_utc_now() - opened_at).total_seconds()
+                if age_sec < LIVE_MONITOR_PROTECTED_RECONCILE_GRACE_SEC:
+                    print(
+                        f"[LIVE_MONITOR] SKIP FINALIZE {pos.coin} — "
+                        f"protected_reconcile_grace age={age_sec:.1f}s "
+                        f"min={LIVE_MONITOR_PROTECTED_RECONCILE_GRACE_SEC:.0f}s"
+                    )
+                    return
+
         if not immediate_wallet_flat:
             venue_size = self._get_venue_size(pos.coin, pos.side)
             if venue_size is None:
@@ -644,7 +665,7 @@ class LivePositionMonitor:
             if exit_price <= tp * 1.002:
                 return CloseReason.TP_FULL
 
-        return CloseReason.MANUAL
+        return CloseReason.SYSTEM_EXIT_RECONCILE
 
     def _estimate_exit_fee(self, size_usd: float) -> float:
         return round(float(size_usd) * (TAKER_FEE_BPS / 10000.0), 8)
@@ -728,13 +749,53 @@ class LivePositionMonitor:
         return out
 
     # ------------------------------------------------------------------
-    # Logging only
+    # Logging + Telegram
     # ------------------------------------------------------------------
 
     def _emit_reconcile_log(self, pos: Position, realized_r: float) -> None:
-        reason = pos.close_reason.value if pos.close_reason else "manual"
+        reason = pos.close_reason.value if pos.close_reason else "unknown"
         source = str(getattr(pos, "exit_trigger_source", "monitor_reconciled"))
         print(
             f"[LIVE_MONITOR] RECONCILED {pos.coin} {pos.side} {reason.upper()} — "
             f"{realized_r:+.2f}R | pnl=${pos.pnl_usd:+.2f} | source={source}"
         )
+        original_size_usd = float(getattr(pos, "size_usd", 0.0) or 0.0)
+        partial_size_usd = float(getattr(pos, "partial_close_size_usd", 0.0) or 0.0)
+        closed_size_usd = original_size_usd
+        if bool(getattr(pos, "partial_closed", False)):
+            closed_size_usd = max(0.0, original_size_usd - partial_size_usd)
+        close_fraction_pct = (
+            closed_size_usd / original_size_usd * 100.0
+            if original_size_usd > 0 else 0.0
+        )
+        entry_fee_usd = float(getattr(pos, "entry_fee_usd", 0.0) or 0.0)
+        exit_fees_usd = float(getattr(pos, "exit_fees_usd", 0.0) or 0.0)
+        funding_usd = float(getattr(pos, "funding_usd", 0.0) or 0.0)
+        total_fees_usd = float(getattr(pos, "total_fees_usd", 0.0) or 0.0)
+        wallet_flat = "yes" if bool(getattr(pos, "wallet_flat_confirmed", False)) else "no"
+        protection_status = str(getattr(pos, "protection_status", "") or "unknown")
+        stop_order_id = str(getattr(pos, "stop_order_id", "") or "-")
+        tp_order_id = str(getattr(pos, "tp_order_id", "") or "-")
+        exit_price = float(getattr(pos, "current_price", 0.0) or 0.0)
+
+        msg = (
+            f"🔁 *{pos.coin} {pos.side} RECONCILED CLOSE* 🔴 LIVE\n\n"
+            f"💰 Exit: `{exit_price:.5g}`\n"
+            f"📥 Entry: `{pos.entry_price:.5g}`\n\n"
+            f"```\n"
+            f"  Reason  : {reason}\n"
+            f"  Net R   : {realized_r:+.2f}R\n"
+            f"  P&L     : ${pos.pnl_usd:+.2f}\n"
+            f"  Closed  : ${closed_size_usd:.0f} ({close_fraction_pct:.0f}%)\n"
+            f"  Original: ${original_size_usd:.0f}\n"
+            f"  Fees    : entry=${entry_fee_usd:.2f} exit=${exit_fees_usd:.2f} funding=${funding_usd:.2f} total=${total_fees_usd:.2f}\n"
+            f"  Source  : {source}\n"
+            f"  Wallet  : flat={wallet_flat} reconciled=yes\n"
+            f"  Protect : {protection_status}\n"
+            f"  StopOID : {stop_order_id}\n"
+            f"  TPOID   : {tp_order_id}\n"
+            f"```\n"
+            f"🆔 `{pos.position_id}`\n"
+            f"🕒 `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}`"
+        )
+        self.notify(msg)

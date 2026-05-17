@@ -16,12 +16,12 @@ from typing import Dict, Optional, Tuple, Any
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
-KILL_MIN_TRADES      = int(os.getenv("KILL_MIN_TRADES",     "8"))    # min trades before kill-switch activates (was 5)
+KILL_MIN_TRADES      = int(os.getenv("KILL_MIN_TRADES",     "5"))    # min trades before kill-switch activates (was 8)
 KILL_WIN_RATE        = float(os.getenv("KILL_WIN_RATE",     "0.25")) # pause if WR drops below 25% (was 0.30)
 KILL_ROLLING_N       = int(os.getenv("KILL_ROLLING_N",      "15"))   # rolling window size (was 10)
 KILL_PAUSE_HOURS     = int(os.getenv("KILL_PAUSE_HOURS",    "8"))    # hours to pause after kill (was 24)
 
-COIN_MIN_TRADES      = int(os.getenv("COIN_MIN_TRADES",     "8"))    # (was 5)
+COIN_MIN_TRADES      = int(os.getenv("COIN_MIN_TRADES",     "5"))    # (was 8)
 COIN_KILL_WIN_RATE   = float(os.getenv("COIN_KILL_WIN_RATE", "0.20")) # stricter per-coin threshold (was 0.25)
 COIN_ROLLING_N       = int(os.getenv("COIN_ROLLING_N",      "15"))   # (was 10)
 COIN_PAUSE_HOURS     = int(os.getenv("COIN_PAUSE_HOURS",    "6"))    # (was 12)

@@ -46,13 +46,17 @@ MIN_SIGNAL_SCORE = float(os.getenv("MIN_SIGNAL_SCORE", "0.68"))
 STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "1000.0"))
 MAX_FULL_LOSS_R = float(os.getenv("MAX_FULL_LOSS_R", "-1.5"))
 
+# Tiers below 0.80 are dead code while MIN_SIGNAL_CONFIDENCE=0.80 is active,
+# but their multipliers are raised to 0.85x so any edge-case pass-through is
+# sized reasonably rather than at the previous 0.50x/0.70x which amplified losses.
 CONFIDENCE_SIZING_TIERS = [
     (0.95, 1.25),
     (0.90, 1.10),
     (0.85, 1.00),
+    (0.80, 0.90),
     (0.75, 0.85),
-    (0.65, 0.70),
-    (0.60, 0.50),
+    (0.65, 0.85),
+    (0.60, 0.85),
 ]
 
 

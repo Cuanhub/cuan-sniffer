@@ -4,19 +4,20 @@ from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 
-def send_telegram_message(text: str):
+def send_telegram_message(text: str) -> bool:
     """
     Bulletproof Telegram sender.
 
     - Tries Markdown first
     - Falls back to plain text if formatting breaks
     - Never silently fails
+    - Returns True only when Telegram confirms delivery
     """
 
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("[WARN] Telegram not configured. Message would be:")
         print(text)
-        return
+        return False
 
     url = f"{BASE_URL}/sendMessage"
 
@@ -37,7 +38,7 @@ def send_telegram_message(text: str):
 
         if data.get("ok"):
             print("[TELEGRAM] Message sent (Markdown).")
-            return
+            return True
 
         else:
             print(f"[WARN] Markdown failed: {data}")
@@ -58,8 +59,11 @@ def send_telegram_message(text: str):
 
         if data.get("ok"):
             print("[TELEGRAM] Message sent (plain fallback).")
+            return True
         else:
             print(f"[ERROR] Telegram API error (plain): {data}")
 
     except Exception as e:
         print(f"[CRITICAL] Telegram completely failed: {e}")
+
+    return False

@@ -29,6 +29,7 @@ from smc_structure import build_structure
 from smc_zones import add_smc_zones
 from smc_sweeps import add_sweep_features
 from perp_sentiment import PerpSentimentSnapshot
+from smc_live_log import append_smc_live_event
 
 # ── Market regime classification (signal-time) ───────────────────────────────
 MARKET_REGIME_LOOKBACK = int(os.getenv("MARKET_REGIME_LOOKBACK", "30"))
@@ -87,6 +88,23 @@ REGIME_SCORE_THRESHOLD_CHOP = float(os.getenv("REGIME_SCORE_THRESHOLD_CHOP", "0.
 DEDUP_ANTI_SPAM_FLOOR_SEC = int(os.getenv("DEDUP_ANTI_SPAM_FLOOR_SEC", "60"))
 DEDUP_PRICE_MOVE_ATR_MULT = float(os.getenv("DEDUP_PRICE_MOVE_ATR_MULT", "0.50"))
 DEDUP_SCORE_IMPROVEMENT_MIN = float(os.getenv("DEDUP_SCORE_IMPROVEMENT_MIN", "0.08"))
+
+# ── SMC structural stop / live evaluation logging ────────────────────────────
+SMC_OB_STOP_ENABLED = os.getenv("SMC_OB_STOP_ENABLED", "true").lower() == "true"
+SMC_OB_STOP_BUFFER_ATR = float(os.getenv("SMC_OB_STOP_BUFFER_ATR", "0.10"))
+SMC_OB_STOP_MIN_ATR = float(os.getenv("SMC_OB_STOP_MIN_ATR", "0.60"))
+SMC_OB_STOP_MAX_ATR = float(os.getenv("SMC_OB_STOP_MAX_ATR", "2.50"))
+SMC_SWING_NEAR_ZONE_ATR = float(os.getenv("SMC_SWING_NEAR_ZONE_ATR", "0.75"))
+SMC_SWING_MIN_CONFLUENCE_1H = int(os.getenv("SMC_SWING_MIN_CONFLUENCE_1H", "3"))
+
+# 4H remains off unless explicitly enabled and still must pass executor hard-blocks.
+SMC_ENABLE_4H_LIVE = os.getenv("SMC_ENABLE_4H_LIVE", "false").lower() == "true"
+SMC_4H_MIN_CONFIDENCE = float(os.getenv("SMC_4H_MIN_CONFIDENCE", "0.88"))
+SMC_4H_MIN_RR = float(os.getenv("SMC_4H_MIN_RR", "2.5"))
+SMC_4H_REQUIRE_OB_OR_SWEEP = (
+    os.getenv("SMC_4H_REQUIRE_OB_OR_SWEEP", "true").lower() == "true"
+)
+SMC_4H_MIN_CONFLUENCE = int(os.getenv("SMC_4H_MIN_CONFLUENCE", "4"))
 
 
 @dataclass
@@ -740,19 +758,118 @@ class AdaptiveSignalEngine:
     # Trigger extraction
     # ------------------------------------------------------------------
 
-    def _extract_triggers(self, row: pd.Series) -> Dict[str, bool]:
+    @staticmethod
+    def _as_bool(value: Any) -> bool:
+        try:
+            if pd.isna(value):
+                return False
+        except Exception:
+            pass
+        return bool(value)
+
+    @staticmethod
+    def _as_float(value: Any, default: float = 0.0) -> float:
+        try:
+            if pd.isna(value):
+                return default
+            return float(value)
+        except Exception:
+            return default
+
+    def _extract_triggers(self, row: pd.Series) -> Dict[str, Any]:
         return {
-            "bos_bull": bool(row.get("bos_bull", 0)),
-            "bos_bear": bool(row.get("bos_bear", 0)),
-            "choch_bull": bool(row.get("choch_bull", 0)),
-            "choch_bear": bool(row.get("choch_bear", 0)),
-            "ob_bull": bool(row.get("ob_bull", 0)),
-            "ob_bear": bool(row.get("ob_bear", 0)),
-            "fvg_bull": bool(row.get("fvg_bull", 0)),
-            "fvg_bear": bool(row.get("fvg_bear", 0)),
-            "sweep_bull": bool(row.get("sweep_bull", 0)),
-            "sweep_bear": bool(row.get("sweep_bear", 0)),
+            "bos_bull": self._as_bool(row.get("bos_bull", 0)),
+            "bos_bear": self._as_bool(row.get("bos_bear", 0)),
+            "choch_bull": self._as_bool(row.get("choch_bull", 0)),
+            "choch_bear": self._as_bool(row.get("choch_bear", 0)),
+            "ob_bull": self._as_bool(row.get("ob_bull", 0)),
+            "ob_bear": self._as_bool(row.get("ob_bear", 0)),
+            "fvg_bull": self._as_bool(row.get("fvg_bull", 0)),
+            "fvg_bear": self._as_bool(row.get("fvg_bear", 0)),
+            "sweep_bull": self._as_bool(row.get("sweep_bull", 0)),
+            "sweep_bear": self._as_bool(row.get("sweep_bear", 0)),
+            "bull_ob_low": self._as_float(row.get("bull_ob_low")),
+            "bull_ob_high": self._as_float(row.get("bull_ob_high")),
+            "bear_ob_low": self._as_float(row.get("bear_ob_low")),
+            "bear_ob_high": self._as_float(row.get("bear_ob_high")),
+            "in_bull_ob": self._as_bool(row.get("in_bull_ob", 0)),
+            "in_bear_ob": self._as_bool(row.get("in_bear_ob", 0)),
+            "dist_to_bull_ob": self._as_float(row.get("dist_to_bull_ob")),
+            "dist_to_bear_ob": self._as_float(row.get("dist_to_bear_ob")),
+            "bull_fvg_low": self._as_float(row.get("bull_fvg_low")),
+            "bull_fvg_high": self._as_float(row.get("bull_fvg_high")),
+            "bear_fvg_low": self._as_float(row.get("bear_fvg_low")),
+            "bear_fvg_high": self._as_float(row.get("bear_fvg_high")),
+            "in_bull_fvg": self._as_bool(row.get("in_bull_fvg", 0)),
+            "in_bear_fvg": self._as_bool(row.get("in_bear_fvg", 0)),
+            "dist_to_bull_fvg": self._as_float(row.get("dist_to_bull_fvg")),
+            "dist_to_bear_fvg": self._as_float(row.get("dist_to_bear_fvg")),
+            "eq_high": self._as_bool(row.get("eq_high", 0)),
+            "eq_low": self._as_bool(row.get("eq_low", 0)),
         }
+
+    def _log_smc_candidate(
+        self,
+        *,
+        coin: str,
+        timeframe: str,
+        row: pd.Series,
+        triggers: Dict[str, Any],
+        side: str = "",
+        score: float = 0.0,
+        confidence: float = 0.0,
+        accepted: bool = False,
+        reject_reason: str = "",
+        entry: float = 0.0,
+        stop: Optional[float] = None,
+        tp: Optional[float] = None,
+        rr: float = 0.0,
+        stop_meta: Optional[Dict[str, Any]] = None,
+        htf_regime: str = "",
+        macro_regime: str = "",
+        market_regime: str = "",
+        session: str = "",
+    ) -> None:
+        try:
+            stop_meta = stop_meta or {}
+            atr_val = self._as_float(row.get("atr_14", 0.0))
+            append_smc_live_event(
+                event_type="engine_evaluation",
+                coin=coin,
+                timeframe=timeframe,
+                side=side,
+                score=round(float(score or 0.0), 4),
+                confidence=round(float(confidence or 0.0), 4),
+                accepted=accepted,
+                reject_reason=reject_reason,
+                entry=round(float(entry or self._as_float(row.get("close", 0.0))), 8),
+                stop=round(float(stop or 0.0), 8),
+                tp=round(float(tp or 0.0), 8),
+                rr=round(float(rr or 0.0), 4),
+                stop_method=stop_meta.get("stop_method", ""),
+                ob_level=round(float(stop_meta.get("ob_level", 0.0) or 0.0), 8),
+                price=round(self._as_float(row.get("close", 0.0)), 8),
+                atr=round(atr_val, 8),
+                stop_dist_atr=round(float(stop_meta.get("stop_dist_atr", 0.0) or 0.0), 4),
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session,
+                order_submitted=False,
+                **{key: triggers.get(key, False) for key in (
+                    "bos_bull", "bos_bear", "choch_bull", "choch_bear",
+                    "ob_bull", "ob_bear", "in_bull_ob", "in_bear_ob",
+                    "dist_to_bull_ob", "dist_to_bear_ob",
+                    "bull_ob_low", "bull_ob_high", "bear_ob_low", "bear_ob_high",
+                    "fvg_bull", "fvg_bear", "in_bull_fvg", "in_bear_fvg",
+                    "dist_to_bull_fvg", "dist_to_bear_fvg",
+                    "bull_fvg_low", "bull_fvg_high", "bear_fvg_low", "bear_fvg_high",
+                    "sweep_bull", "sweep_bear", "eq_high", "eq_low",
+                )},
+            )
+        except Exception as e:
+            if self.debug:
+                print(f"[SMC_LIVE_LOG] engine event skipped: {e}")
 
     # ------------------------------------------------------------------
     # RSI divergence helpers
@@ -1763,10 +1880,19 @@ class AdaptiveSignalEngine:
         price: float,
         row: pd.Series,
         df: pd.DataFrame,
-    ) -> Tuple[Optional[float], Optional[float], float, float, float]:
+    ) -> Tuple[Optional[float], Optional[float], float, float, float, Dict[str, Any]]:
         atr_val = float(row.get("atr_14", 0.0))
+        stop_meta: Dict[str, Any] = {
+            "stop_method": "atr",
+            "ob_level": 0.0,
+            "price": price,
+            "atr": atr_val,
+            "stop_dist_atr": 0.0,
+            "ob_reject_reason": "",
+        }
         if atr_val <= 0:
-            return None, None, 0.0, 0.0, 0.0
+            stop_meta["ob_reject_reason"] = "invalid_atr"
+            return None, None, 0.0, 0.0, 0.0, stop_meta
 
         n = len(df)
         lookback = df.iloc[max(0, n - 3):]
@@ -1780,26 +1906,90 @@ class AdaptiveSignalEngine:
 
         stop_dist = max(stop_dist_atr, stop_dist_min)
         tp_dist = max(tp_dist_atr, tp_dist_min)
+        min_valid_stop_dist = max(SMC_OB_STOP_MIN_ATR * atr_val, stop_dist_min)
+        max_valid_stop_dist = SMC_OB_STOP_MAX_ATR * atr_val
+
+        ob_stop: Optional[float] = None
+        ob_level = 0.0
+        ob_reject_reason = ""
+
+        if SMC_OB_STOP_ENABLED:
+            if side == "LONG" and self._as_bool(row.get("ob_bull", 0)):
+                ob_level = self._as_float(row.get("bull_ob_low"))
+                candidate_stop = ob_level - (SMC_OB_STOP_BUFFER_ATR * atr_val)
+                candidate_dist = price - candidate_stop
+                if ob_level <= 0 or ob_level >= price:
+                    ob_reject_reason = "bull_ob_not_below_price"
+                elif candidate_dist < min_valid_stop_dist:
+                    ob_reject_reason = "bull_ob_stop_too_tight"
+                elif candidate_dist > max_valid_stop_dist:
+                    ob_reject_reason = "bull_ob_stop_too_far"
+                else:
+                    ob_stop = candidate_stop
+            elif side == "SHORT" and self._as_bool(row.get("ob_bear", 0)):
+                ob_level = self._as_float(row.get("bear_ob_high"))
+                candidate_stop = ob_level + (SMC_OB_STOP_BUFFER_ATR * atr_val)
+                candidate_dist = candidate_stop - price
+                if ob_level <= 0 or ob_level <= price:
+                    ob_reject_reason = "bear_ob_not_above_price"
+                elif candidate_dist < min_valid_stop_dist:
+                    ob_reject_reason = "bear_ob_stop_too_tight"
+                elif candidate_dist > max_valid_stop_dist:
+                    ob_reject_reason = "bear_ob_stop_too_far"
+                else:
+                    ob_stop = candidate_stop
 
         if side == "LONG":
-            structure_stop = min(price - stop_dist, recent_low - 0.25 * atr_val)
+            structure_stop = ob_stop if ob_stop is not None else min(
+                price - stop_dist,
+                recent_low - 0.25 * atr_val,
+            )
             stop = structure_stop
             tp = price + tp_dist
             actual_stop_dist = price - stop
         else:
-            structure_stop = max(price + stop_dist, recent_high + 0.25 * atr_val)
+            structure_stop = ob_stop if ob_stop is not None else max(
+                price + stop_dist,
+                recent_high + 0.25 * atr_val,
+            )
             stop = structure_stop
             tp = price - tp_dist
             actual_stop_dist = stop - price
 
         if actual_stop_dist <= 0:
-            return None, None, atr_val, stop_dist, tp_dist
+            stop_meta["ob_level"] = ob_level
+            stop_meta["ob_reject_reason"] = ob_reject_reason or "invalid_stop_distance"
+            return None, None, atr_val, stop_dist, tp_dist, stop_meta
+
+        stop_meta.update({
+            "stop_method": "ob" if ob_stop is not None else "atr",
+            "ob_level": ob_level if ob_stop is not None else 0.0,
+            "stop": stop,
+            "stop_dist_atr": actual_stop_dist / atr_val if atr_val > 0 else 0.0,
+            "ob_reject_reason": ob_reject_reason,
+        })
 
         if tp_dist / actual_stop_dist < 1.8:
             tp_dist = actual_stop_dist * 2.0
             tp = price + tp_dist if side == "LONG" else price - tp_dist
 
-        return stop, tp, atr_val, actual_stop_dist, tp_dist
+        final_rr = tp_dist / actual_stop_dist if actual_stop_dist > 0 else 0.0
+        stop_meta["final_rr"] = final_rr
+
+        if self.debug:
+            print(
+                f"[LEVEL_DEBUG] side={side}"
+                f" stop_method={stop_meta['stop_method']}"
+                f" ob_level={float(stop_meta.get('ob_level', 0.0) or 0.0):.6f}"
+                f" price={price:.6f}"
+                f" stop={stop:.6f}"
+                f" atr={atr_val:.6f}"
+                f" stop_dist_atr={float(stop_meta.get('stop_dist_atr', 0.0) or 0.0):.2f}"
+                f" rr={final_rr:.2f}"
+                f" ob_reject={ob_reject_reason or '-'}"
+            )
+
+        return stop, tp, atr_val, actual_stop_dist, tp_dist, stop_meta
 
     # ------------------------------------------------------------------
     # Main 15m signal
@@ -1867,6 +2057,19 @@ class AdaptiveSignalEngine:
 
         quality_ok, quality_notes = self._quality_filter(row, session_label, vol_state)
         if not quality_ok:
+            self._log_smc_candidate(
+                coin=coin,
+                timeframe="15m",
+                row=row,
+                triggers=triggers,
+                accepted=False,
+                reject_reason="quality_block:" + "|".join(quality_notes),
+                entry=price,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+            )
             if self.debug:
                 print("[SIGNAL_DEBUG] Quality blocked: " + ", ".join(quality_notes))
             return None
@@ -1908,6 +2111,19 @@ class AdaptiveSignalEngine:
                 df=df,
             )
             if fb_side is None:
+                self._log_smc_candidate(
+                    coin=coin,
+                    timeframe="15m",
+                    row=row,
+                    triggers=triggers,
+                    accepted=False,
+                    reject_reason="no_valid_setup_family",
+                    entry=price,
+                    htf_regime=htf_regime,
+                    macro_regime=macro_regime,
+                    market_regime=market_regime,
+                    session=session_label,
+                )
                 if self.debug:
                     print("[SIGNAL_DEBUG] No valid setup family.")
                 return None
@@ -1970,15 +2186,48 @@ class AdaptiveSignalEngine:
             )
 
         if abs(chosen_score) < effective_threshold:
+            self._log_smc_candidate(
+                coin=coin,
+                timeframe="15m",
+                row=row,
+                triggers=triggers,
+                side=chosen_side,
+                score=chosen_score,
+                accepted=False,
+                reject_reason=f"score_below_threshold:{chosen_score:.3f}<{effective_threshold:.3f}",
+                entry=price,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+            )
             if self.debug:
                 print("[SIGNAL_DEBUG] score=" + str(round(chosen_score, 3)) +
                       " < threshold=" + str(round(effective_threshold, 3)))
             return None
 
-        stop, tp, atr_val, stop_dist, tp_dist = self._build_trade_levels(
+        stop, tp, atr_val, stop_dist, tp_dist, stop_meta = self._build_trade_levels(
             side=chosen_side, price=price, row=row, df=df,
         )
         if stop is None or tp is None:
+            self._log_smc_candidate(
+                coin=coin,
+                timeframe="15m",
+                row=row,
+                triggers=triggers,
+                side=chosen_side,
+                score=chosen_score,
+                accepted=False,
+                reject_reason="invalid_trade_levels",
+                entry=price,
+                stop=stop,
+                tp=tp,
+                stop_meta=stop_meta,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+            )
             if self.debug:
                 print("[SIGNAL_DEBUG] Could not build valid trade levels.")
             return None
@@ -1988,6 +2237,25 @@ class AdaptiveSignalEngine:
         rr_floor_tolerance = 0.05
         rr_floor_effective = max(0.0, rr_floor - rr_floor_tolerance)
         if rr < rr_floor_effective:
+            self._log_smc_candidate(
+                coin=coin,
+                timeframe="15m",
+                row=row,
+                triggers=triggers,
+                side=chosen_side,
+                score=chosen_score,
+                accepted=False,
+                reject_reason=f"rr_too_low:{rr:.3f}<{rr_floor_effective:.3f}",
+                entry=price,
+                stop=stop,
+                tp=tp,
+                rr=rr,
+                stop_meta=stop_meta,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+            )
             if self.debug:
                 print("[SIGNAL_DEBUG] RR too low: " + str(round(rr, 2)))
             return None
@@ -2040,6 +2308,26 @@ class AdaptiveSignalEngine:
             entry_price=price, regime=combined_regime, atr=atr_val,
             market_regime=market_regime, current_score=chosen_score,
         ):
+            self._log_smc_candidate(
+                coin=coin,
+                timeframe="15m",
+                row=row,
+                triggers=triggers,
+                side=chosen_side,
+                score=chosen_score,
+                confidence=confidence,
+                accepted=False,
+                reject_reason="dedup_active_for_repeat",
+                entry=price,
+                stop=stop,
+                tp=tp,
+                rr=rr,
+                stop_meta=stop_meta,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+            )
             if self.debug:
                 print(f"[SIGNAL_DEBUG] {coin} {chosen_side} suppressed — "
                       f"dedup_active_for_repeat")
@@ -2062,10 +2350,15 @@ class AdaptiveSignalEngine:
             "vol_ratio": vol_ratio,
             "setup_family": setup_family,
             "rr_planned": round(rr, 3),
+            "stop_method": stop_meta.get("stop_method", "atr"),
+            "ob_level": stop_meta.get("ob_level", 0.0),
+            "stop_dist_atr": stop_meta.get("stop_dist_atr", 0.0),
+            "ob_reject_reason": stop_meta.get("ob_reject_reason", ""),
             "session_score_adj": session_score_adj,
             "market_regime": market_regime,
             "continuation_breakout_failures": breakout_failure_count,
             "continuation_breakout_failure_penalized": bool(breakout_failure_note),
+            **triggers,
             **market_meta,
             **divergence_meta,
         }
@@ -2076,6 +2369,27 @@ class AdaptiveSignalEngine:
                   " rr=" + str(round(rr, 2)) +
                   " session=" + session_label +
                   " vol=" + vol_state)
+
+        self._log_smc_candidate(
+            coin=coin,
+            timeframe="15m",
+            row=row,
+            triggers=triggers,
+            side=chosen_side,
+            score=chosen_score,
+            confidence=confidence,
+            accepted=True,
+            reject_reason="",
+            entry=price,
+            stop=stop,
+            tp=tp,
+            rr=rr,
+            stop_meta=stop_meta,
+            htf_regime=htf_regime,
+            macro_regime=macro_regime,
+            market_regime=market_regime,
+            session=session_label,
+        )
 
         return Signal(
             coin=coin,
@@ -2102,6 +2416,10 @@ class AdaptiveSignalEngine:
         coin: str = "UNKNOWN",
     ) -> Optional[Signal]:
         if swing_tf not in ("1h", "4h"):
+            return None
+        if swing_tf == "4h" and not SMC_ENABLE_4H_LIVE:
+            if self.debug:
+                print("[SWING_DEBUG] 4h disabled by SMC_ENABLE_4H_LIVE=false")
             return None
         if df_ohlcv is None or df_ohlcv.empty:
             return None
@@ -2158,54 +2476,305 @@ class AdaptiveSignalEngine:
         )
         flow_score, flow_notes = self._score_flow_context(flow_snapshot)
         funding_score, funding_notes = self._score_funding_context(sentiment)
+        session_label, session_notes = self._compute_killzone(ts)
 
-        side: Optional[str] = None
-        score = 0.0
-        reasons: List[str] = []
+        def score_swing_candidate(candidate_side: str) -> Tuple[float, List[str], int, str]:
+            candidate_score = 0.42
+            candidate_reasons: List[str] = []
+            confluence_count = 0
+            swing_family = "continuation"
+            atr_now = float(row.get("atr_14", 0.0) or 0.0)
 
-        if triggers["bos_bull"] or triggers["choch_bull"] or triggers["ob_bull"]:
+            if candidate_side == "LONG":
+                if triggers["choch_bull"] or triggers["sweep_bull"]:
+                    swing_family = "reversal"
+                if triggers["bos_bull"] or triggers["choch_bull"]:
+                    candidate_score += 0.10
+                    confluence_count += 1
+                    candidate_reasons.append("swing_bull_structure")
+                if triggers["ob_bull"] or triggers["in_bull_ob"]:
+                    candidate_score += 0.10
+                    confluence_count += 1
+                    candidate_reasons.append("swing_bull_ob_in_zone")
+                elif atr_now > 0 and 0 < float(triggers.get("dist_to_bull_ob", 0.0)) <= SMC_SWING_NEAR_ZONE_ATR * atr_now:
+                    candidate_score += 0.05
+                    confluence_count += 1
+                    candidate_reasons.append("swing_bull_near_ob")
+                if triggers["sweep_bull"]:
+                    candidate_score += 0.10
+                    confluence_count += 1
+                    candidate_reasons.append("swing_bull_sweep")
+                if triggers["fvg_bull"] or triggers["in_bull_fvg"]:
+                    candidate_score += 0.05
+                    confluence_count += 1
+                    candidate_reasons.append("swing_bull_fvg_overlap")
+                if triggers["eq_low"] and triggers["sweep_bull"]:
+                    candidate_score += 0.04
+                    candidate_reasons.append("equal_low_sweep_bonus")
+                if htf_regime == "up":
+                    candidate_score += 0.07
+                    confluence_count += 1
+                    candidate_reasons.append("htf_up_aligned")
+                elif htf_regime == "down":
+                    candidate_score -= 0.08
+                    candidate_reasons.append("htf_down_counter_long_penalty")
+                if macro_regime == "up":
+                    candidate_score += 0.10
+                    candidate_reasons.append("macro_up_aligned")
+                elif macro_regime == "down":
+                    candidate_score -= 0.18
+                    candidate_reasons.append("macro_down_counter_long_penalty")
+                candidate_score += flow_score + funding_score
+            else:
+                if triggers["choch_bear"] or triggers["sweep_bear"]:
+                    swing_family = "reversal"
+                if triggers["bos_bear"] or triggers["choch_bear"]:
+                    candidate_score += 0.10
+                    confluence_count += 1
+                    candidate_reasons.append("swing_bear_structure")
+                if triggers["ob_bear"] or triggers["in_bear_ob"]:
+                    candidate_score += 0.10
+                    confluence_count += 1
+                    candidate_reasons.append("swing_bear_ob_in_zone")
+                elif atr_now > 0 and 0 < float(triggers.get("dist_to_bear_ob", 0.0)) <= SMC_SWING_NEAR_ZONE_ATR * atr_now:
+                    candidate_score += 0.05
+                    confluence_count += 1
+                    candidate_reasons.append("swing_bear_near_ob")
+                if triggers["sweep_bear"]:
+                    candidate_score += 0.10
+                    confluence_count += 1
+                    candidate_reasons.append("swing_bear_sweep")
+                if triggers["fvg_bear"] or triggers["in_bear_fvg"]:
+                    candidate_score += 0.05
+                    confluence_count += 1
+                    candidate_reasons.append("swing_bear_fvg_overlap")
+                if triggers["eq_high"] and triggers["sweep_bear"]:
+                    candidate_score += 0.04
+                    candidate_reasons.append("equal_high_sweep_bonus")
+                if htf_regime == "down":
+                    candidate_score += 0.07
+                    confluence_count += 1
+                    candidate_reasons.append("htf_down_aligned")
+                elif htf_regime == "up":
+                    candidate_score -= 0.08
+                    candidate_reasons.append("htf_up_counter_short_penalty")
+                if macro_regime == "down":
+                    candidate_score += 0.10
+                    candidate_reasons.append("macro_down_aligned")
+                elif macro_regime == "up":
+                    candidate_score -= 0.18
+                    candidate_reasons.append("macro_up_counter_short_penalty")
+                candidate_score += -flow_score - funding_score
+
+            if (candidate_side == "LONG" and htf_regime == "up" and macro_regime == "up") or (
+                candidate_side == "SHORT" and htf_regime == "down" and macro_regime == "down"
+            ):
+                candidate_score += 0.05
+                confluence_count += 1
+                candidate_reasons.append("dual_htf_macro_alignment")
+
+            if market_regime == "strong_trend":
+                candidate_score += 0.08
+                candidate_reasons.append("swing_market_strong_trend")
+            elif market_regime == "weak_trend":
+                candidate_score += 0.02
+                candidate_reasons.append("swing_market_weak_trend")
+            elif market_regime == "chop":
+                candidate_score -= 0.14
+                candidate_reasons.append("swing_chop_penalty")
+
+            rsi_s, rsi_n = self._score_rsi(row, candidate_side, swing_family)
+            vwap_s, vwap_n = self._score_vwap_magnitude(row, candidate_side, swing_family)
+            vol_s, vol_n = self._score_volume_context(row)
+            body_s, body_n = self._score_trigger_quality(row)
+            oi_s, oi_n = self._score_oi_directional(sentiment, candidate_side)
+            candidate_score += rsi_s + vwap_s + vol_s + body_s + oi_s
+            candidate_reasons.extend(flow_notes)
+            candidate_reasons.extend(funding_notes)
+            candidate_reasons.extend(rsi_n)
+            candidate_reasons.extend(vwap_n)
+            candidate_reasons.extend(vol_n)
+            candidate_reasons.extend(body_n)
+            candidate_reasons.extend(oi_n)
+            candidate_reasons.extend(market_notes)
+            candidate_reasons.extend(session_notes)
+            candidate_reasons.append(f"swing_confluence_count_{confluence_count}")
+            return candidate_score, candidate_reasons, confluence_count, swing_family
+
+        candidates: List[Tuple[str, float, List[str], int, str]] = []
+        if triggers["bos_bull"] or triggers["choch_bull"] or triggers["ob_bull"] or triggers["sweep_bull"]:
             if htf_regime == "up" or macro_regime == "up":
-                side = "LONG"
-                score = 0.65
-                score += flow_score
-                score += funding_score
-                oi_score, oi_notes = self._score_oi_directional(sentiment, side)
-                score += oi_score
-                reasons.append("swing_bull_setup")
-                reasons.extend(flow_notes); reasons.extend(funding_notes); reasons.extend(oi_notes)
-        elif triggers["bos_bear"] or triggers["choch_bear"] or triggers["ob_bear"]:
+                s, n, c, f = score_swing_candidate("LONG")
+                candidates.append(("LONG", s, n, c, f))
+        if triggers["bos_bear"] or triggers["choch_bear"] or triggers["ob_bear"] or triggers["sweep_bear"]:
             if htf_regime == "down" or macro_regime == "down":
-                side = "SHORT"
-                score = 0.65
-                score += -flow_score
-                score += -funding_score
-                oi_score, oi_notes = self._score_oi_directional(sentiment, side)
-                score += oi_score
-                reasons.append("swing_bear_setup")
-                reasons.extend(flow_notes); reasons.extend(funding_notes); reasons.extend(oi_notes)
+                s, n, c, f = score_swing_candidate("SHORT")
+                candidates.append(("SHORT", s, n, c, f))
 
-        if side is None:
+        if not candidates:
+            self._log_smc_candidate(
+                coin=coin,
+                timeframe=swing_tf,
+                row=row,
+                triggers=triggers,
+                accepted=False,
+                reject_reason="no_valid_swing_structure_or_alignment",
+                entry=price,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+            )
             if self.debug:
                 print("[SWING_DEBUG] No valid " + swing_tf + " swing setup.")
             return None
 
-        vol_s, vol_n = self._score_volume_context(row)
-        score += vol_s; reasons.extend(vol_n)
-        body_s, body_n = self._score_trigger_quality(row)
-        score += body_s; reasons.extend(body_n)
-        reasons.extend(market_notes)
+        side, score, reasons, confluence_count, swing_family = max(candidates, key=lambda item: item[1])
+        min_confluence = SMC_4H_MIN_CONFLUENCE if swing_tf == "4h" else SMC_SWING_MIN_CONFLUENCE_1H
+        if confluence_count < min_confluence:
+            self._log_smc_candidate(
+                coin=coin,
+                timeframe=swing_tf,
+                row=row,
+                triggers=triggers,
+                side=side,
+                score=score,
+                accepted=False,
+                reject_reason=f"insufficient_swing_confluence:{confluence_count}<{min_confluence}",
+                entry=price,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+            )
+            if self.debug:
+                print(
+                    f"[SWING_DEBUG] {swing_tf} insufficient confluence "
+                    f"{confluence_count}<{min_confluence}"
+                )
+            return None
 
         threshold = self.swing_thresholds.get(swing_tf, 0.6)
+        if swing_tf == "4h":
+            threshold = max(threshold, SMC_4H_MIN_CONFIDENCE)
         if score < threshold:
+            self._log_smc_candidate(
+                coin=coin,
+                timeframe=swing_tf,
+                row=row,
+                triggers=triggers,
+                side=side,
+                score=score,
+                accepted=False,
+                reject_reason=f"score_below_threshold:{score:.3f}<{threshold:.3f}",
+                entry=price,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+            )
             if self.debug:
                 print("[SWING_DEBUG] " + swing_tf + " score " + str(round(score, 3)) + " below threshold " + str(threshold))
             return None
 
-        stop, tp, atr_val, stop_dist, tp_dist = self._build_trade_levels(
+        stop, tp, atr_val, stop_dist, tp_dist, stop_meta = self._build_trade_levels(
             side=side, price=price, row=row, df=df_feat,
         )
         if stop is None or tp is None:
+            self._log_smc_candidate(
+                coin=coin,
+                timeframe=swing_tf,
+                row=row,
+                triggers=triggers,
+                side=side,
+                score=score,
+                accepted=False,
+                reject_reason="invalid_trade_levels",
+                entry=price,
+                stop=stop,
+                tp=tp,
+                stop_meta=stop_meta,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+            )
             return None
+        rr = abs((tp - price) / (price - stop)) if price != stop else 0.0
+
+        if swing_tf == "4h":
+            has_required_smc = (
+                triggers["ob_bull"] or triggers["ob_bear"]
+                or triggers["sweep_bull"] or triggers["sweep_bear"]
+                or triggers["fvg_bull"] or triggers["fvg_bear"]
+            )
+            aligned = (
+                (side == "LONG" and htf_regime == "up" and macro_regime == "up")
+                or (side == "SHORT" and htf_regime == "down" and macro_regime == "down")
+            )
+            if SMC_4H_REQUIRE_OB_OR_SWEEP and not has_required_smc:
+                self._log_smc_candidate(
+                    coin=coin,
+                    timeframe=swing_tf,
+                    row=row,
+                    triggers=triggers,
+                    side=side,
+                    score=score,
+                    accepted=False,
+                    reject_reason="4h_missing_required_ob_fvg_or_sweep",
+                    entry=price,
+                    stop=stop,
+                    tp=tp,
+                    rr=rr,
+                    stop_meta=stop_meta,
+                    htf_regime=htf_regime,
+                    macro_regime=macro_regime,
+                    market_regime=market_regime,
+                    session=session_label,
+                )
+                return None
+            if not aligned:
+                self._log_smc_candidate(
+                    coin=coin,
+                    timeframe=swing_tf,
+                    row=row,
+                    triggers=triggers,
+                    side=side,
+                    score=score,
+                    accepted=False,
+                    reject_reason="4h_missing_dual_htf_macro_alignment",
+                    entry=price,
+                    stop=stop,
+                    tp=tp,
+                    rr=rr,
+                    stop_meta=stop_meta,
+                    htf_regime=htf_regime,
+                    macro_regime=macro_regime,
+                    market_regime=market_regime,
+                    session=session_label,
+                )
+                return None
+            if rr < SMC_4H_MIN_RR:
+                self._log_smc_candidate(
+                    coin=coin,
+                    timeframe=swing_tf,
+                    row=row,
+                    triggers=triggers,
+                    side=side,
+                    score=score,
+                    accepted=False,
+                    reject_reason=f"4h_rr_below_min:{rr:.3f}<{SMC_4H_MIN_RR:.3f}",
+                    entry=price,
+                    stop=stop,
+                    tp=tp,
+                    rr=rr,
+                    stop_meta=stop_meta,
+                    htf_regime=htf_regime,
+                    macro_regime=macro_regime,
+                    market_regime=market_regime,
+                    session=session_label,
+                )
+                return None
 
         confidence = round(min(0.95, max(0.55, score)), 3)
         combined_regime = (
@@ -2216,12 +2785,42 @@ class AdaptiveSignalEngine:
         )
         meta = {
             "timeframe": swing_tf, "coin": coin, "total_score": round(score, 3),
-            "regime_local": "swing", "regime_htf_1h": htf_regime, "regime_macro_4h": macro_regime,
+            "regime_local": "swing", "setup_family": "swing", "swing_family": swing_family,
+            "regime_htf_1h": htf_regime, "regime_macro_4h": macro_regime,
             "close": price, "atr": atr_val, "stop_dist": stop_dist, "tp_dist": tp_dist,
-            "effective_threshold": round(threshold, 3), "vol_state": vol_state, "vol_ratio": vol_ratio,
+            "rr_planned": round(rr, 3), "effective_threshold": round(threshold, 3),
+            "vol_state": vol_state, "vol_ratio": vol_ratio,
             "market_regime": market_regime,
+            "session": session_label,
+            "swing_confluence_count": confluence_count,
+            "stop_method": stop_meta.get("stop_method", "atr"),
+            "ob_level": stop_meta.get("ob_level", 0.0),
+            "stop_dist_atr": stop_meta.get("stop_dist_atr", 0.0),
+            "ob_reject_reason": stop_meta.get("ob_reject_reason", ""),
+            **triggers,
             **market_meta,
         }
+
+        self._log_smc_candidate(
+            coin=coin,
+            timeframe=swing_tf,
+            row=row,
+            triggers=triggers,
+            side=side,
+            score=score,
+            confidence=confidence,
+            accepted=True,
+            reject_reason="",
+            entry=price,
+            stop=stop,
+            tp=tp,
+            rr=rr,
+            stop_meta=stop_meta,
+            htf_regime=htf_regime,
+            macro_regime=macro_regime,
+            market_regime=market_regime,
+            session=session_label,
+        )
 
         self.last_swing_ts[swing_key] = ts
 
