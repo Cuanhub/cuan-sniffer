@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 
@@ -30,13 +30,40 @@ class FlowEvent(Base):
     id = Column(Integer, primary_key=True, index=True)
     address = Column(String, index=True)
     direction = Column(String)  # "IN" or "OUT"
-    sol_amount = Column(Float)
+    sol_amount = Column(Float)  # SOL amount for SOL events; USD value for token events
     usd_value = Column(Float)
     signature = Column(String, index=True)
     slot = Column(Integer)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # coin: 'SOL' for native SOL events, 'JTO'/'WIF'/'FARTCOIN' for SPL token events.
+    # Added in v2 — existing rows default to 'SOL' via the migration below.
+    coin = Column(String, default="SOL", index=True)
+
+
+def _migrate_db(conn) -> None:
+    """
+    Safe incremental migration.  Adds columns that don't yet exist so the
+    schema can evolve without dropping and recreating the database.
+    SQLite supports ALTER TABLE ADD COLUMN for nullable / default columns.
+    """
+    # Check existing columns via PRAGMA
+    result = conn.execute(text("PRAGMA table_info(flow_events)"))
+    existing = {row[1] for row in result}  # row[1] = column name
+
+    if "coin" not in existing:
+        conn.execute(text("ALTER TABLE flow_events ADD COLUMN coin VARCHAR(20) DEFAULT 'SOL'"))
+        conn.execute(text("UPDATE flow_events SET coin = 'SOL' WHERE coin IS NULL"))
+        print("[DB] Migrated flow_events: added 'coin' column (backfilled as 'SOL')")
+
+    # Create index on coin if it doesn't exist (CREATE INDEX IF NOT EXISTS is safe)
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_flow_events_coin ON flow_events (coin)"
+    ))
 
 
 # === Initialize database ===
 def init_db():
     Base.metadata.create_all(bind=engine)
+    with engine.connect() as conn:
+        _migrate_db(conn)
+        conn.commit()

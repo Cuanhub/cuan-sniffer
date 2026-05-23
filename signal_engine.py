@@ -79,6 +79,17 @@ CONT_BREAKOUT_FAILURE_MIN_COUNT = int(os.getenv("CONT_BREAKOUT_FAILURE_MIN_COUNT
 
 _DIRECTIONAL_OUTCOME_MAXLEN = int(os.getenv("DIRECTIONAL_OUTCOME_MAXLEN", "12"))
 
+# ── Whale-pressure dead-calm gate ────────────────────────────────────────────
+# Data (2026-05-22, 147 traded signals): whale_pressure == 0 (no tracked wallets
+# active in 30m window) → 130 trades, -0.394R avg, 18.5% WR.
+# Non-zero whale_pressure → 17 trades, +0.394R avg, 47.1% WR.
+# Penalty is side-invariant: applied after the caller's directional negation so
+# both LONG and SHORT are penalised equally for dead-calm flow.
+# Only applied when snapshot is fresh (< WHALE_PRESSURE_STALE_AGE_SEC); stale
+# data is not penalised — inactivity may just reflect a delayed feed refresh.
+WHALE_PRESSURE_DEAD_CALM_PENALTY = -abs(float(os.getenv("WHALE_PRESSURE_DEAD_CALM_PENALTY", "-0.05")))
+WHALE_PRESSURE_STALE_AGE_SEC = float(os.getenv("WHALE_PRESSURE_STALE_AGE_SEC", "120.0"))
+
 # ── Signal gating / dedup tuning ─────────────────────────────────────────────
 LOW_VOL_SCORE_PENALTY = -abs(float(os.getenv("LOW_VOL_SCORE_PENALTY", "-0.05")))
 REGIME_SCORE_THRESHOLD_STRONG = float(os.getenv("REGIME_SCORE_THRESHOLD_STRONG", "0.64"))
@@ -776,8 +787,18 @@ class AdaptiveSignalEngine:
         except Exception:
             return default
 
+    @staticmethod
+    def _as_text(value: Any, default: str = "") -> str:
+        try:
+            if pd.isna(value):
+                return default
+        except Exception:
+            pass
+        return str(value if value is not None else default)
+
     def _extract_triggers(self, row: pd.Series) -> Dict[str, Any]:
         return {
+            "structure_label": self._as_text(row.get("structure_label")),
             "bos_bull": self._as_bool(row.get("bos_bull", 0)),
             "bos_bear": self._as_bool(row.get("bos_bear", 0)),
             "choch_bull": self._as_bool(row.get("choch_bull", 0)),
@@ -865,6 +886,7 @@ class AdaptiveSignalEngine:
                     "dist_to_bull_fvg", "dist_to_bear_fvg",
                     "bull_fvg_low", "bull_fvg_high", "bear_fvg_low", "bear_fvg_high",
                     "sweep_bull", "sweep_bear", "eq_high", "eq_low",
+                    "structure_label",
                 )},
             )
         except Exception as e:
@@ -1103,6 +1125,25 @@ class AdaptiveSignalEngine:
                 score -= 0.10
                 notes.append("net_outflow_30m_" + str(round(imbal_30m, 2)))
         return score, notes
+
+    def _score_flow_dead_calm(self, flow_snapshot: Dict[str, Any]) -> Tuple[float, List[str]]:
+        """
+        Side-invariant dead-calm penalty for zero on-chain flow.
+
+        Must be called AFTER the caller applies ±flow_score so the penalty is
+        not subject to the SHORT caller's sign flip.  Returns a negative score
+        when the snapshot is fresh and whale_pressure is in the neutral band,
+        i.e. no tracked wallets were active in the 30-minute window.
+        """
+        if not flow_snapshot or WHALE_PRESSURE_DEAD_CALM_PENALTY >= 0:
+            return 0.0, []
+        snapshot_age = float(flow_snapshot.get("snapshot_age_sec", 9999.0))
+        if snapshot_age >= WHALE_PRESSURE_STALE_AGE_SEC:
+            return 0.0, []
+        whale_pressure = float(flow_snapshot.get("whale_pressure", 0.0))
+        if abs(whale_pressure) < 0.2:
+            return WHALE_PRESSURE_DEAD_CALM_PENALTY, ["whale_pressure_dead_calm"]
+        return 0.0, []
 
     def _score_funding_context(self, sentiment: PerpSentimentSnapshot) -> Tuple[float, List[str]]:
         score = 0.0
@@ -1655,10 +1696,13 @@ class AdaptiveSignalEngine:
                 notes.append("local_bull_trend")
 
             score += flow_score
+            dc_score, dc_notes = self._score_flow_dead_calm(flow_snapshot)
+            score += dc_score
             score += funding_score
             oi_score, oi_notes = self._score_oi_directional(sentiment, side)
             score += oi_score
             notes.extend(flow_notes)
+            notes.extend(dc_notes)
             notes.extend(funding_notes)
             notes.extend(oi_notes)
 
@@ -1689,14 +1733,45 @@ class AdaptiveSignalEngine:
                 notes.append("local_bear_trend")
 
             score += -flow_score
+            dc_score, dc_notes = self._score_flow_dead_calm(flow_snapshot)
+            score += dc_score
             score += -funding_score
             oi_score, oi_notes = self._score_oi_directional(sentiment, side)
             score += oi_score
             notes.extend(flow_notes)
+            notes.extend(dc_notes)
             notes.extend(funding_notes)
             notes.extend(oi_notes)
 
         if side is not None:
+            structure_label = str(triggers.get("structure_label") or "").upper()
+            if side == "LONG":
+                if structure_label == "HL":
+                    score += 0.06
+                    notes.append("structure_HL_bull_confirm")
+                elif structure_label in ("LH", "LL"):
+                    score -= 0.10
+                    notes.append(f"structure_{structure_label}_bull_weaken")
+            elif side == "SHORT":
+                if structure_label == "LH":
+                    score += 0.06
+                    notes.append("structure_LH_bear_confirm")
+                elif structure_label in ("HL", "HH"):
+                    score -= 0.10
+                    notes.append(f"structure_{structure_label}_bear_weaken")
+
+            atr_now = self._as_float(row.get("atr_14", 0.0))
+            if side == "LONG":
+                dob = self._as_float(triggers.get("dist_to_bull_ob", 0.0))
+                if atr_now > 0 and 0 < dob <= 0.75 * atr_now:
+                    score += 0.05
+                    notes.append("near_bull_ob_bonus")
+            elif side == "SHORT":
+                dob = self._as_float(triggers.get("dist_to_bear_ob", 0.0))
+                if atr_now > 0 and 0 < dob <= 0.75 * atr_now:
+                    score += 0.05
+                    notes.append("near_bear_ob_bonus")
+
             if market_regime == "weak_trend" and CONT_WEAK_TREND_BLOCK_WITHOUT_DUAL_HTF:
                 dual_aligned = (
                     (side == "LONG" and htf_regime == "up" and macro_regime == "up")
@@ -1791,13 +1866,15 @@ class AdaptiveSignalEngine:
             elif htf_regime == "chop":
                 score += 0.08; notes.append("htf_chop_allows_reversal")
             score += flow_score
+            dc_score, dc_notes = self._score_flow_dead_calm(flow_snapshot)
+            score += dc_score
             score += funding_score
             oi_score, oi_notes = self._score_oi_directional(sentiment, side)
             if oi_score > 0:
                 score += min(0.10, oi_score + 0.02); notes.append("oi_supports_reversal")
             else:
                 score += oi_score
-            notes.extend(flow_notes); notes.extend(funding_notes); notes.extend(oi_notes)
+            notes.extend(flow_notes); notes.extend(dc_notes); notes.extend(funding_notes); notes.extend(oi_notes)
 
         elif bearish_trigger and bearish_context and allow_bear:
             side = "SHORT"
@@ -1809,15 +1886,24 @@ class AdaptiveSignalEngine:
             elif htf_regime == "chop":
                 score += 0.08; notes.append("htf_chop_allows_reversal")
             score += -flow_score
+            dc_score, dc_notes = self._score_flow_dead_calm(flow_snapshot)
+            score += dc_score
             score += -funding_score
             oi_score, oi_notes = self._score_oi_directional(sentiment, side)
             if oi_score > 0:
                 score += min(0.10, oi_score + 0.02); notes.append("oi_supports_reversal")
             else:
                 score += oi_score
-            notes.extend(flow_notes); notes.extend(funding_notes); notes.extend(oi_notes)
+            notes.extend(flow_notes); notes.extend(dc_notes); notes.extend(funding_notes); notes.extend(oi_notes)
 
         if side is not None:
+            if side == "LONG" and triggers["eq_low"] and triggers["sweep_bull"]:
+                score += 0.08
+                notes.append("eq_low_sweep_bull_confirm")
+            elif side == "SHORT" and triggers["eq_high"] and triggers["sweep_bear"]:
+                score += 0.08
+                notes.append("eq_high_sweep_bear_confirm")
+
             rsi_s, rsi_n = self._score_rsi(row, side, "reversal")
             score += rsi_s; notes.extend(rsi_n)
             vol_s, vol_n = self._score_volume_context(row)
@@ -2524,7 +2610,9 @@ class AdaptiveSignalEngine:
                 elif macro_regime == "down":
                     candidate_score -= 0.18
                     candidate_reasons.append("macro_down_counter_long_penalty")
-                candidate_score += flow_score + funding_score
+                dc_score, dc_notes = self._score_flow_dead_calm(flow_snapshot)
+                candidate_score += flow_score + dc_score + funding_score
+                candidate_reasons.extend(dc_notes)
             else:
                 if triggers["choch_bear"] or triggers["sweep_bear"]:
                     swing_family = "reversal"
@@ -2564,7 +2652,9 @@ class AdaptiveSignalEngine:
                 elif macro_regime == "up":
                     candidate_score -= 0.18
                     candidate_reasons.append("macro_up_counter_short_penalty")
-                candidate_score += -flow_score - funding_score
+                dc_score, dc_notes = self._score_flow_dead_calm(flow_snapshot)
+                candidate_score += -flow_score + dc_score - funding_score
+                candidate_reasons.extend(dc_notes)
 
             if (candidate_side == "LONG" and htf_regime == "up" and macro_regime == "up") or (
                 candidate_side == "SHORT" and htf_regime == "down" and macro_regime == "down"

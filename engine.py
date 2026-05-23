@@ -4,9 +4,15 @@ from datetime import datetime
 from sqlalchemy.exc import SQLAlchemyError
 
 from db import SessionLocal, WalletBalance, FlowEvent
-from sol_client import get_signatures_for_address, get_sol_balance, get_sol_transfer_for_address
+from sol_client import (
+    get_signatures_for_address,
+    get_sol_balance,
+    get_sol_transfer_for_address,
+    get_all_transfers_for_address,
+)
 from known_entities import is_known_entity
 from config import MIN_SOL_ALERT, get_sol_price
+from token_config import WATCHED_MINTS, MINT_TO_COIN, MIN_TOKEN_FLOW_USD, get_token_prices
 
 
 class SolFlowEngine:
@@ -183,9 +189,10 @@ class SolFlowEngine:
         if not record:
             return
 
-        # Primary: parse authoritative SOL delta straight from the transaction.
-        # This is immune to fee/rent noise that corrupts balance-diff polling.
-        delta = get_sol_transfer_for_address(signature, address)
+        # Single RPC fetch — parse both SOL delta and SPL token transfers at once.
+        transfers = get_all_transfers_for_address(signature, address, WATCHED_MINTS)
+        delta = transfers["sol_delta"]
+        token_transfers = transfers["token_transfers"]
 
         if delta is None:
             # Fallback: balance diff (noisier — fees/rent included)
@@ -196,59 +203,102 @@ class SolFlowEngine:
             delta = new_balance - old_balance
             new_balance_for_db = new_balance
         else:
-            # Recompute absolute balance from the parsed delta so the DB stays in sync
             new_balance_for_db = record.sol_balance + delta
 
         # Update base balance regardless
         record.sol_balance = new_balance_for_db
         record.updated_at = datetime.utcnow()
 
-        # Not big enough to alert/log as major event?
-        if abs(delta) < MIN_SOL_ALERT:
+        any_event_written = False
+
+        # ── SOL flow event ────────────────────────────────────────────────────
+        if abs(delta) >= MIN_SOL_ALERT:
+            direction = "IN" if delta > 0 else "OUT"
+            amount = abs(delta)
+            usd_val = amount * get_sol_price()
+
+            session.add(FlowEvent(
+                address=address,
+                direction=direction,
+                sol_amount=amount,
+                usd_value=usd_val,
+                signature=signature,
+                slot=slot,
+                coin="SOL",
+                created_at=datetime.utcnow(),
+            ))
+            any_event_written = True
+
+            state = self.wallet_state.setdefault(
+                address, {"last_scan": 0.0, "last_big_move": 0.0}
+            )
+            state["last_big_move"] = time.time()
+
+            emoji = "🟢" if direction == "IN" else "🔴"
+            print(
+                f"[FLOW/SOL] {emoji} {direction} {amount:.2f} SOL "
+                f"(~${usd_val:,.0f}) | {address} | slot {slot}"
+            )
+        else:
+            print(f"[DEBUG] {address}: Δ {delta:.3f} SOL (below threshold)")
+
+        # ── SPL token flow events ─────────────────────────────────────────────
+        if token_transfers:
+            # Fetch token prices in one batch call to avoid N separate requests
+            symbols_needed = [
+                MINT_TO_COIN[t["mint"]]
+                for t in token_transfers
+                if t["mint"] in MINT_TO_COIN
+            ]
+            prices = get_token_prices(symbols_needed) if symbols_needed else {}
+
+            for transfer in token_transfers:
+                mint = transfer["mint"]
+                coin_symbol = MINT_TO_COIN.get(mint)
+                if not coin_symbol:
+                    continue
+
+                token_price = prices.get(coin_symbol, 0.0)
+                delta_ui = abs(transfer["delta_ui"])
+                usd_val = delta_ui * token_price
+
+                if usd_val < MIN_TOKEN_FLOW_USD:
+                    print(
+                        f"[DEBUG] {address}: {coin_symbol} Δ {delta_ui:.2f} "
+                        f"(~${usd_val:,.0f}) below token threshold"
+                    )
+                    continue
+
+                direction = transfer["direction"]
+                # sol_amount stores USD value for token events so FlowContext
+                # imbalance calculations stay in comparable units per coin.
+                session.add(FlowEvent(
+                    address=address,
+                    direction=direction,
+                    sol_amount=usd_val,   # USD equivalent — see flow_context.py
+                    usd_value=usd_val,
+                    signature=signature,
+                    slot=slot,
+                    coin=coin_symbol,
+                    created_at=datetime.utcnow(),
+                ))
+                any_event_written = True
+
+                state = self.wallet_state.setdefault(
+                    address, {"last_scan": 0.0, "last_big_move": 0.0}
+                )
+                state["last_big_move"] = time.time()
+
+                emoji = "🟢" if direction == "IN" else "🔴"
+                print(
+                    f"[FLOW/{coin_symbol}] {emoji} {direction} {delta_ui:.2f} "
+                    f"{coin_symbol} (~${usd_val:,.0f}) | {address} | slot {slot}"
+                )
+
+        # ── Persist all events atomically ─────────────────────────────────────
+        if any_event_written or True:   # always commit balance update
             try:
                 session.commit()
-            except SQLAlchemyError:
+            except SQLAlchemyError as e:
                 session.rollback()
-            print(f"[DEBUG] {address}: Δ {delta:.3f} SOL (below threshold)")
-            return
-
-        # Big move detected
-        direction = "IN" if delta > 0 else "OUT"
-        amount = abs(delta)
-        usd_val = amount * get_sol_price()
-
-        event = FlowEvent(
-            address=address,
-            direction=direction,
-            sol_amount=amount,
-            usd_value=usd_val,
-            signature=signature,
-            slot=slot,
-            created_at=datetime.utcnow(),
-        )
-
-        session.add(event)
-
-        try:
-            session.commit()
-        except SQLAlchemyError as e:
-            session.rollback()
-            print(f"[DB ERROR] {e}")
-            return
-
-        # Mark this wallet as "recently active" for throttle logic
-        state = self.wallet_state.setdefault(
-            address, {"last_scan": 0.0, "last_big_move": 0.0}
-        )
-        state["last_big_move"] = time.time()
-
-        # --- Log big flow event (no external alert here) ---
-        emoji = "🟢" if direction == "IN" else "🔴"
-        print(
-            f"[FLOW] {emoji} {direction} {amount:.2f} SOL "
-            f"(~${usd_val:,.0f}) | {address} | slot {slot} | {signature}"
-        )
-        # NOTE:
-        # We intentionally do NOT send Telegram alerts here.
-        # These events are consumed by the higher-level agent which decides
-        # when to propose actual trades based on all context.
+                print(f"[DB ERROR] {e}")

@@ -28,6 +28,10 @@ class FlowContext:
     - flow momentum (increasing? decreasing?)
     - flow imbalance (normalized pressure)
 
+    One instance per tracked coin.  SOL events store flow in SOL units;
+    token events (JTO/WIF/FARTCOIN) store USD-equivalent value in sol_amount
+    so the imbalance ratio and whale_pressure formula stay consistent.
+
     Caching: snapshots are cached for FLOW_SNAPSHOT_TTL_SEC seconds to avoid
     unnecessary DB round-trips on every agent poll cycle.  The cache is
     invalidated and re-queried on expiry.  If the cache is older than
@@ -35,17 +39,13 @@ class FlowContext:
     with snapshot_age_sec set is returned so callers can detect staleness.
     """
 
-    def __init__(self, session_factory, windows=None):
+    def __init__(self, session_factory, coin: str = "SOL", windows=None):
         """
+        coin:    which coin's FlowEvents to query (default "SOL").
         windows: dict of {label: timedelta}
-        Example:
-            {
-                "5m": timedelta(minutes=5),
-                "30m": timedelta(minutes=30),
-                "2h": timedelta(hours=2),
-            }
         """
         self.session_factory = session_factory
+        self.coin = coin.upper()
 
         self.windows = windows or {
             "5m": timedelta(minutes=5),
@@ -61,13 +61,15 @@ class FlowContext:
 
     def _fetch_events(self, session: Session, since: datetime) -> List[FlowEvent]:
         """
-        Fetch all flow events from DB since a given time, excluding known
-        exchange / program wallets whose moves are routine operations and
-        not smart-money signals.
+        Fetch flow events for self.coin from DB since a given time, excluding
+        known exchange/program wallets whose moves are routine operations.
         """
         events = (
             session.query(FlowEvent)
-            .filter(FlowEvent.created_at >= since)
+            .filter(
+                FlowEvent.created_at >= since,
+                FlowEvent.coin == self.coin,
+            )
             .order_by(FlowEvent.created_at.desc())
             .all()
         )
@@ -167,17 +169,17 @@ class FlowContext:
             return snapshot
 
         except Exception as e:
-            print(f"[FLOW_CONTEXT ERROR] Failed to build snapshot: {e}")
+            print(f"[FLOW_CONTEXT/{self.coin}] Failed to build snapshot: {e}")
 
             # Return the stale cache if it exists and isn't dangerously old
             if self._cached_snapshot is not None and cache_age < FLOW_SNAPSHOT_MAX_AGE_SEC:
                 snapshot = dict(self._cached_snapshot)
                 snapshot["snapshot_age_sec"] = cache_age
-                print(f"[FLOW_CONTEXT] Serving stale snapshot ({cache_age:.0f}s old)")
+                print(f"[FLOW_CONTEXT/{self.coin}] Serving stale snapshot ({cache_age:.0f}s old)")
                 return snapshot
 
             # Cache is gone or too old — return empty to avoid misleading signals
-            print(f"[FLOW_CONTEXT] No usable snapshot available — returning empty")
+            print(f"[FLOW_CONTEXT/{self.coin}] No usable snapshot available — returning empty")
             return {"snapshot_age_sec": cache_age}
 
     def invalidate_cache(self):

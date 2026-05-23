@@ -112,44 +112,41 @@ def get_transaction(signature: str) -> Optional[dict]:
     return result
 
 
-# === Extract actual SOL delta for an address from a parsed transaction ===
+# === Pure parse helpers (no RPC calls) ===================================
 
-def get_sol_transfer_for_address(signature: str, address: str) -> Optional[float]:
+def _extract_account_keys(tx: dict) -> List[str]:
     """
-    Parse the transaction and return the net SOL change (in SOL, not lamports)
-    for `address`.  Uses preBalances / postBalances from tx meta — this is the
-    authoritative on-chain amount and is immune to fee/rent noise that plagues
-    balance-diff polling.
-
-    Returns None if the transaction cannot be fetched or the address is not
-    present in the account list (e.g. inner-instruction-only involvement).
+    Return a flat list of account address strings from a jsonParsed transaction.
+    accountKeys entries may be dicts (jsonParsed) or plain strings.
     """
-    tx = get_transaction(signature)
-    if not tx:
-        return None
+    message = tx.get("transaction", {}).get("message", {})
+    account_keys = message.get("accountKeys", [])
+    keys: List[str] = []
+    for k in account_keys:
+        if isinstance(k, dict):
+            keys.append(k.get("pubkey", ""))
+        else:
+            keys.append(str(k))
+    return keys
 
+
+def _parse_sol_delta(tx: dict, address: str) -> Optional[float]:
+    """
+    Extract the net SOL change (in SOL, not lamports) for `address` from an
+    already-fetched jsonParsed transaction dict.  Uses preBalances/postBalances
+    which are authoritative and immune to fee/rent noise.
+
+    Returns None if address is not in the account list.
+    """
     meta = tx.get("meta")
     if not meta:
         return None
 
-    # accountKeys may be nested under transaction.message (jsonParsed) or flat
-    message = tx.get("transaction", {}).get("message", {})
-    account_keys = message.get("accountKeys", [])
-
-    # accountKeys entries are dicts {"pubkey": ..., "signer": ..., "writable": ...}
-    # under jsonParsed encoding; normalise to a plain list of address strings.
-    key_addresses = []
-    for k in account_keys:
-        if isinstance(k, dict):
-            key_addresses.append(k.get("pubkey", ""))
-        else:
-            key_addresses.append(str(k))
-
+    key_addresses = _extract_account_keys(tx)
     if address not in key_addresses:
         return None
 
     idx = key_addresses.index(address)
-
     pre_balances = meta.get("preBalances", [])
     post_balances = meta.get("postBalances", [])
 
@@ -158,6 +155,119 @@ def get_sol_transfer_for_address(signature: str, address: str) -> Optional[float
 
     delta_lamports = post_balances[idx] - pre_balances[idx]
     return delta_lamports / 1_000_000_000  # lamports → SOL
+
+
+def _parse_token_transfers(
+    tx: dict,
+    address: str,
+    watched_mints: frozenset,
+) -> List[Dict]:
+    """
+    Extract SPL token balance changes for `address` across `watched_mints`
+    from an already-fetched jsonParsed transaction dict.
+
+    Returns a list of dicts, one per mint that changed:
+        {
+            "mint":      str,   # token mint address
+            "delta_ui":  float, # signed UI-amount delta (positive = IN, negative = OUT)
+            "direction": str,   # "IN" or "OUT"
+        }
+
+    Uses preTokenBalances/postTokenBalances from tx.meta.  The `owner` field
+    identifies which wallet owns each token account — only entries owned by
+    `address` are returned.  Missing `owner` fields are silently skipped
+    (safe for modern Alchemy/Helius RPCs which always include owner).
+    """
+    meta = tx.get("meta")
+    if not meta:
+        return []
+
+    pre_token = meta.get("preTokenBalances", []) or []
+    post_token = meta.get("postTokenBalances", []) or []
+
+    # Build pre-balance lookup: (accountIndex, mint) → uiAmount
+    pre_map: Dict[tuple, float] = {}
+    for entry in pre_token:
+        mint = entry.get("mint", "")
+        if mint not in watched_mints:
+            continue
+        owner = entry.get("owner", "")
+        if owner != address:
+            continue
+        idx = entry.get("accountIndex", -1)
+        ui_amount = entry.get("uiTokenAmount", {}).get("uiAmount") or 0.0
+        pre_map[(idx, mint)] = float(ui_amount)
+
+    # Build post-balance lookup: (accountIndex, mint) → uiAmount
+    post_map: Dict[tuple, float] = {}
+    for entry in post_token:
+        mint = entry.get("mint", "")
+        if mint not in watched_mints:
+            continue
+        owner = entry.get("owner", "")
+        if owner != address:
+            continue
+        idx = entry.get("accountIndex", -1)
+        ui_amount = entry.get("uiTokenAmount", {}).get("uiAmount") or 0.0
+        post_map[(idx, mint)] = float(ui_amount)
+
+    # Compute deltas across all (accountIndex, mint) keys seen in either map
+    all_keys = set(pre_map) | set(post_map)
+    results: List[Dict] = []
+    for key in all_keys:
+        _, mint = key
+        pre_val = pre_map.get(key, 0.0)
+        post_val = post_map.get(key, 0.0)
+        delta = post_val - pre_val
+        if delta == 0.0:
+            continue
+        results.append({
+            "mint": mint,
+            "delta_ui": delta,
+            "direction": "IN" if delta > 0 else "OUT",
+        })
+
+    return results
+
+
+# === Public RPC-backed helpers ============================================
+
+def get_sol_transfer_for_address(signature: str, address: str) -> Optional[float]:
+    """
+    Parse the transaction and return the net SOL change (in SOL, not lamports)
+    for `address`.  Thin wrapper over _parse_sol_delta for callers that only
+    need the SOL delta and don't want to manage the transaction fetch.
+    """
+    tx = get_transaction(signature)
+    if not tx:
+        return None
+    return _parse_sol_delta(tx, address)
+
+
+def get_all_transfers_for_address(
+    signature: str,
+    address: str,
+    watched_mints: frozenset,
+) -> Dict:
+    """
+    Single RPC fetch returning both the SOL delta and SPL token transfers for
+    `address` in one transaction.  Avoids double-fetching when the caller
+    needs both.
+
+    Returns:
+        {
+            "sol_delta":       Optional[float],  # None if address not in tx
+            "token_transfers": List[Dict],        # may be empty
+        }
+    """
+    tx = get_transaction(signature)
+    if not tx:
+        return {"sol_delta": None, "token_transfers": []}
+
+    return {
+        "sol_delta": _parse_sol_delta(tx, address),
+        "token_transfers": _parse_token_transfers(tx, address, watched_mints),
+    }
 
 
 # === Fetch wallet SOL balance ============================================

@@ -192,7 +192,9 @@ def format_signal_message(
 
     strength = int(min(100, max(50, signal.confidence * 100)))
     regime = signal.regime.replace("_", " ")
-    flow_section = f"\n🐋 Flow: {flow_bias}" if coin == "SOL" else ""
+    # Show flow section for all coins that have flow tracking (SOL + SPL tokens)
+    _FLOW_TRACKED = {"SOL", "JTO", "WIF", "FARTCOIN"}
+    flow_section = f"\n🐋 Flow: {flow_bias}" if coin in _FLOW_TRACKED else ""
 
     return (
         f"{emoji} *{coin} {side} SIGNAL DETECTED* {arrow}\n\n"
@@ -828,14 +830,25 @@ def _execute_signal(
     return executor_result_label == "traded"
 
 
-def build_states(flow_ctx: FlowContext) -> tuple[Dict[str, CoinState], AdaptiveSignalEngine]:
+def build_states(session_factory) -> tuple[Dict[str, CoinState], AdaptiveSignalEngine]:
+    """
+    Build per-coin CoinState objects, each with its own FlowContext so that
+    on-chain wallet tracking is scoped to the correct coin's FlowEvents.
+
+    SOL  → FlowContext(coin="SOL")  — native SOL flow from tracked wallets
+    JTO/WIF/FARTCOIN → FlowContext(coin=X) — SPL token flow from same wallets
+    HYPE → no flow context (HL EVM chain, tracked in a future sprint)
+    """
+    _FLOW_TRACKED_COINS = {"SOL", "JTO", "WIF", "FARTCOIN"}
+
     states: Dict[str, CoinState] = {}
     shared_engine = _build_signal_engine()
     for coin in TRACKED_COINS:
-        ctx = flow_ctx if coin == "SOL" else None
+        ctx = FlowContext(session_factory, coin=coin) if coin in _FLOW_TRACKED_COINS else None
         state = CoinState(coin, ctx, engine=shared_engine)
         state.start_feeds()
         states[coin] = state
+        print(f"[BUILD] {coin}: flow_ctx={'enabled (' + coin + ')' if ctx else 'disabled'}")
     return states, shared_engine
 
 
@@ -850,8 +863,7 @@ def main():
     init_signal_log()
     init_smc_live_log()
 
-    flow_ctx = FlowContext(SessionLocal)
-    states, shared_engine = build_states(flow_ctx)
+    states, shared_engine = build_states(SessionLocal)
     executor = Executor(notify_fn=notify_async, signal_engine=shared_engine)
 
     print("[AGENT] Live position monitor active (shared with executor)")
