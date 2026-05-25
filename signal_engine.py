@@ -90,6 +90,18 @@ _DIRECTIONAL_OUTCOME_MAXLEN = int(os.getenv("DIRECTIONAL_OUTCOME_MAXLEN", "12"))
 WHALE_PRESSURE_DEAD_CALM_PENALTY = -abs(float(os.getenv("WHALE_PRESSURE_DEAD_CALM_PENALTY", "-0.05")))
 WHALE_PRESSURE_STALE_AGE_SEC = float(os.getenv("WHALE_PRESSURE_STALE_AGE_SEC", "120.0"))
 
+# ── Daily premium/discount zone gate (LuxAlgo SMC approach) ─────────────────
+# Price position within the recent daily swing range (20 daily bars).
+# zone_pct = (close - daily_swing_low) / (daily_swing_high - daily_swing_low)
+# Premium zone (zone_pct > threshold): SHORT bias — penalise LONG signals.
+# Discount zone (zone_pct < threshold): LONG bias — penalise SHORT signals.
+# Mirrors LuxAlgo's core filter: signals taken WITH daily structure only.
+DAILY_ZONE_PREMIUM_THRESHOLD = float(os.getenv("DAILY_ZONE_PREMIUM_THRESHOLD", "0.65"))
+DAILY_ZONE_DISCOUNT_THRESHOLD = float(os.getenv("DAILY_ZONE_DISCOUNT_THRESHOLD", "0.35"))
+DAILY_ZONE_ALIGNED_BONUS = float(os.getenv("DAILY_ZONE_ALIGNED_BONUS", "0.10"))
+DAILY_ZONE_OPPOSED_PENALTY = -abs(float(os.getenv("DAILY_ZONE_OPPOSED_PENALTY", "0.12")))
+DAILY_ZONE_EXTREME_BONUS = float(os.getenv("DAILY_ZONE_EXTREME_BONUS", "0.05"))
+
 # ── Signal gating / dedup tuning ─────────────────────────────────────────────
 LOW_VOL_SCORE_PENALTY = -abs(float(os.getenv("LOW_VOL_SCORE_PENALTY", "-0.05")))
 REGIME_SCORE_THRESHOLD_STRONG = float(os.getenv("REGIME_SCORE_THRESHOLD_STRONG", "0.64"))
@@ -394,8 +406,8 @@ class AdaptiveSignalEngine:
         """
         try:
             meta = getattr(signal, "meta", None) or {}
-            timeframe = str(meta.get("timeframe", "15m")).strip().lower()
-            if timeframe != "15m":
+            timeframe = str(meta.get("timeframe", "1h")).strip().lower()
+            if timeframe not in ("15m", "1h"):
                 return
 
             coin = str(getattr(signal, "coin", "") or "").upper().strip()
@@ -445,8 +457,9 @@ class AdaptiveSignalEngine:
 
     def _compute_htf_regime(self, df_ohlcv: pd.DataFrame) -> Tuple[str, List[str]]:
         """
-        Receives full df_ohlcv including the forming candle.
-        Regime uses resampled 1h bars — one forming 15m candle is negligible.
+        Receives full df_ohlcv (1H bars with 1H feed).
+        Regime uses resampled 4H bars — HTF context for 1H signal generation.
+        With 400×1H bars we get ~100 bars of 4H, giving clean EMA10/30 trend.
         """
         notes: List[str] = []
 
@@ -462,8 +475,8 @@ class AdaptiveSignalEngine:
             return "unknown", ["htf_no_time_index"]
 
         try:
-            df_1h = (
-                df_raw.resample("h")
+            df_4h = (
+                df_raw.resample("4h")
                 .agg({
                     "open": "first",
                     "high": "max",
@@ -475,17 +488,17 @@ class AdaptiveSignalEngine:
             )
         except Exception as e:
             if self.debug:
-                print("[HTF_REGIME_DEBUG] Resample 1h failed: " + str(e))
+                print("[HTF_REGIME_DEBUG] Resample 4h failed: " + str(e))
             return "unknown", ["htf_resample_error"]
 
-        if len(df_1h) < 30:
+        if len(df_4h) < 10:
             return "unknown", ["htf_insufficient_bars"]
 
-        df_1h["ema_fast"] = df_1h["close"].ewm(span=10, adjust=False).mean()
-        df_1h["ema_slow"] = df_1h["close"].ewm(span=30, adjust=False).mean()
+        df_4h["ema_fast"] = df_4h["close"].ewm(span=10, adjust=False).mean()
+        df_4h["ema_slow"] = df_4h["close"].ewm(span=30, adjust=False).mean()
 
-        last = df_1h.iloc[-1]
-        prev = df_1h.iloc[-4] if len(df_1h) >= 4 else df_1h.iloc[0]
+        last = df_4h.iloc[-1]
+        prev = df_4h.iloc[-3] if len(df_4h) >= 3 else df_4h.iloc[0]
 
         ema_fast = float(last["ema_fast"])
         ema_slow = float(last["ema_slow"])
@@ -507,7 +520,7 @@ class AdaptiveSignalEngine:
 
         if self.debug:
             print(
-                "[HTF_REGIME_DEBUG] 1h regime=" + regime +
+                "[HTF_REGIME_DEBUG] 4h regime=" + regime +
                 " ema_fast=" + str(round(ema_fast, 2)) +
                 " ema_slow=" + str(round(ema_slow, 2))
             )
@@ -516,8 +529,10 @@ class AdaptiveSignalEngine:
 
     def _compute_macro_regime_4h(self, df_ohlcv: pd.DataFrame) -> Tuple[str, List[str]]:
         """
-        Receives full df_ohlcv including the forming candle.
-        Regime uses resampled 4h bars — one forming 15m candle is negligible.
+        Receives full df_ohlcv (1H bars with 1H feed).
+        Regime uses resampled 1D bars — daily macro trend context.
+        With 400×1H bars we get ~16 daily bars; EMA5/10 is appropriate.
+        Shorter EMA spans than htf (4H) since daily bars are fewer.
         """
         notes: List[str] = []
 
@@ -533,8 +548,8 @@ class AdaptiveSignalEngine:
             return "unknown", ["macro_no_time_index"]
 
         try:
-            df_4h = (
-                df_raw.resample("4h")
+            df_1d = (
+                df_raw.resample("1D")
                 .agg({
                     "open": "first",
                     "high": "max",
@@ -546,17 +561,17 @@ class AdaptiveSignalEngine:
             )
         except Exception as e:
             if self.debug:
-                print("[MACRO_REGIME_DEBUG] Resample 4h failed: " + str(e))
+                print("[MACRO_REGIME_DEBUG] Resample 1D failed: " + str(e))
             return "unknown", ["macro_resample_error"]
 
-        if len(df_4h) < 18:
+        if len(df_1d) < 8:
             return "unknown", ["macro_insufficient_bars"]
 
-        df_4h["ema_fast"] = df_4h["close"].ewm(span=10, adjust=False).mean()
-        df_4h["ema_slow"] = df_4h["close"].ewm(span=30, adjust=False).mean()
+        df_1d["ema_fast"] = df_1d["close"].ewm(span=5, adjust=False).mean()
+        df_1d["ema_slow"] = df_1d["close"].ewm(span=10, adjust=False).mean()
 
-        last = df_4h.iloc[-1]
-        prev = df_4h.iloc[-3] if len(df_4h) >= 3 else df_4h.iloc[0]
+        last = df_1d.iloc[-1]
+        prev = df_1d.iloc[-2] if len(df_1d) >= 2 else df_1d.iloc[0]
 
         ema_fast = float(last["ema_fast"])
         ema_slow = float(last["ema_slow"])
@@ -578,12 +593,150 @@ class AdaptiveSignalEngine:
 
         if self.debug:
             print(
-                "[MACRO_REGIME_DEBUG] 4h regime=" + regime +
+                "[MACRO_REGIME_DEBUG] 1D regime=" + regime +
                 " ema_fast=" + str(round(ema_fast, 2)) +
                 " ema_slow=" + str(round(ema_slow, 2))
             )
 
         return regime, notes
+
+    def _compute_daily_zone(self, df_ohlcv: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Classify current price within the daily premium/discount range.
+
+        Mirrors LuxAlgo SMC: finds the 20-bar daily swing high/low, marks the
+        50% level as equilibrium.  Price above DAILY_ZONE_PREMIUM_THRESHOLD of
+        the range = premium (SHORT bias).  Price below DAILY_ZONE_DISCOUNT_THRESHOLD
+        = discount (LONG bias).  Signals taken against the zone are penalised.
+
+        With 400×1H bars the feed provides ~16 daily bars — sufficient to
+        define the meaningful swing range and trend direction.
+
+        Returns a dict with keys: zone, zone_pct, trend, swing_high, swing_low.
+        Returns {"zone": "unknown"} on insufficient data.
+        """
+        empty: Dict[str, Any] = {"zone": "unknown", "zone_pct": 0.5, "trend": "unknown"}
+
+        if df_ohlcv is None or df_ohlcv.empty:
+            return empty
+
+        df_raw = df_ohlcv.copy()
+        if "time" in df_raw.columns:
+            df_raw["time"] = pd.to_datetime(df_raw["time"])
+            df_raw = df_raw.set_index("time")
+        elif not isinstance(df_raw.index, pd.DatetimeIndex):
+            return empty
+
+        try:
+            df_1d = (
+                df_raw.resample("1D")
+                .agg({
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum",
+                })
+                .dropna()
+            )
+        except Exception:
+            return empty
+
+        if len(df_1d) < 5:
+            return empty
+
+        # Swing range: last 20 daily bars (or all available)
+        lookback = min(20, len(df_1d))
+        recent = df_1d.tail(lookback)
+        swing_high = float(recent["high"].max())
+        swing_low = float(recent["low"].min())
+        range_width = swing_high - swing_low
+        if range_width <= 0:
+            return empty
+
+        current_close = float(df_1d["close"].iloc[-1])
+        zone_pct = (current_close - swing_low) / range_width
+
+        if zone_pct > DAILY_ZONE_PREMIUM_THRESHOLD:
+            zone = "premium"
+        elif zone_pct < DAILY_ZONE_DISCOUNT_THRESHOLD:
+            zone = "discount"
+        else:
+            zone = "equilibrium"
+
+        # Daily trend: EMA5 vs EMA10 — short spans for ~16 available daily bars
+        df_1d["ema_fast"] = df_1d["close"].ewm(span=5, adjust=False).mean()
+        df_1d["ema_slow"] = df_1d["close"].ewm(span=10, adjust=False).mean()
+        d_last = df_1d.iloc[-1]
+        d_prev = df_1d.iloc[-2] if len(df_1d) >= 2 else df_1d.iloc[0]
+        d_fast = float(d_last["ema_fast"])
+        d_slow = float(d_last["ema_slow"])
+        d_fast_slope = d_fast - float(d_prev["ema_fast"])
+        if d_fast > d_slow and d_fast_slope > 0:
+            daily_trend = "up"
+        elif d_fast < d_slow and d_fast_slope < 0:
+            daily_trend = "down"
+        else:
+            daily_trend = "chop"
+
+        if self.debug:
+            print(
+                f"[DAILY_ZONE] zone={zone} pct={zone_pct:.2f}"
+                f" swing_hi={swing_high:.4f} swing_lo={swing_low:.4f}"
+                f" daily_trend={daily_trend}"
+            )
+
+        return {
+            "zone": zone,
+            "zone_pct": round(zone_pct, 3),
+            "trend": daily_trend,
+            "swing_high": swing_high,
+            "swing_low": swing_low,
+        }
+
+    def _score_daily_zone(
+        self,
+        zone_data: Dict[str, Any],
+        side: str,
+    ) -> Tuple[float, List[str]]:
+        """
+        Score a signal based on alignment with the daily premium/discount zone.
+
+        LONG in discount = aligned (+bonus).  LONG in premium = opposed (penalty).
+        SHORT in premium = aligned (+bonus).  SHORT in discount = opposed (penalty).
+        Extreme zones (zone_pct > 0.80 or < 0.20) add an extra bonus for
+        aligned signals — LuxAlgo's strongest setups fire at these extremes.
+        """
+        zone = zone_data.get("zone", "unknown")
+        if zone == "unknown":
+            return 0.0, []
+
+        zone_pct = float(zone_data.get("zone_pct", 0.5))
+        score = 0.0
+        notes: List[str] = []
+
+        if side == "LONG":
+            if zone == "discount":
+                score += DAILY_ZONE_ALIGNED_BONUS
+                notes.append("daily_discount_zone_long")
+                if zone_pct < 0.20:
+                    score += DAILY_ZONE_EXTREME_BONUS
+                    notes.append("daily_extreme_discount_long")
+            elif zone == "premium":
+                score += DAILY_ZONE_OPPOSED_PENALTY
+                notes.append("daily_premium_zone_long_penalty")
+        elif side == "SHORT":
+            if zone == "premium":
+                score += DAILY_ZONE_ALIGNED_BONUS
+                notes.append("daily_premium_zone_short")
+                if zone_pct > 0.80:
+                    score += DAILY_ZONE_EXTREME_BONUS
+                    notes.append("daily_extreme_premium_short")
+            elif zone == "discount":
+                score += DAILY_ZONE_OPPOSED_PENALTY
+                notes.append("daily_discount_zone_short_penalty")
+
+        return score, notes
 
     def _compute_killzone(self, ts) -> Tuple[str, List[str]]:
         notes: List[str] = []
@@ -1462,6 +1615,7 @@ class AdaptiveSignalEngine:
         macro_regime: str,
         market_regime: str,
         df: Optional[pd.DataFrame] = None,
+        daily_zone: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Optional[str], float, List[str], str]:
         notes: List[str] = []
         score = 0.0
@@ -1610,6 +1764,10 @@ class AdaptiveSignalEngine:
                 bof_s, bof_n = self._score_breakout_failure_cluster(df, side)
                 score += bof_s
                 notes.extend(bof_n)
+
+            dz_score, dz_notes = self._score_daily_zone(daily_zone or {}, side)
+            score += dz_score
+            notes.extend(dz_notes)
         else:
             rsi_s, rsi_n = self._score_rsi(row, side, "reversal")
             score += rsi_s
@@ -1626,6 +1784,10 @@ class AdaptiveSignalEngine:
             vwap_s, vwap_n = self._score_vwap_magnitude(row, side, "reversal")
             score += vwap_s
             notes.extend(vwap_n)
+
+            dz_score, dz_notes = self._score_daily_zone(daily_zone or {}, side)
+            score += dz_score
+            notes.extend(dz_notes)
 
         return side, score, notes, setup_family
 
@@ -1644,6 +1806,7 @@ class AdaptiveSignalEngine:
         flow_snapshot: Dict[str, Any],
         sentiment: PerpSentimentSnapshot,
         df: Optional[pd.DataFrame] = None,
+        daily_zone: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Optional[str], float, List[str]]:
         if self._hard_chop_block_continuation(market_regime, htf_regime, macro_regime):
             return None, 0.0, ["continuation_blocked_hard_chop_stack"]
@@ -1698,11 +1861,14 @@ class AdaptiveSignalEngine:
             score += flow_score
             dc_score, dc_notes = self._score_flow_dead_calm(flow_snapshot)
             score += dc_score
+            dz_score, dz_notes = self._score_daily_zone(daily_zone or {}, "LONG")
+            score += dz_score
             score += funding_score
             oi_score, oi_notes = self._score_oi_directional(sentiment, side)
             score += oi_score
             notes.extend(flow_notes)
             notes.extend(dc_notes)
+            notes.extend(dz_notes)
             notes.extend(funding_notes)
             notes.extend(oi_notes)
 
@@ -1735,11 +1901,14 @@ class AdaptiveSignalEngine:
             score += -flow_score
             dc_score, dc_notes = self._score_flow_dead_calm(flow_snapshot)
             score += dc_score
+            dz_score, dz_notes = self._score_daily_zone(daily_zone or {}, "SHORT")
+            score += dz_score
             score += -funding_score
             oi_score, oi_notes = self._score_oi_directional(sentiment, side)
             score += oi_score
             notes.extend(flow_notes)
             notes.extend(dc_notes)
+            notes.extend(dz_notes)
             notes.extend(funding_notes)
             notes.extend(oi_notes)
 
@@ -1830,6 +1999,7 @@ class AdaptiveSignalEngine:
         macro_regime: str,
         flow_snapshot: Dict[str, Any],
         sentiment: PerpSentimentSnapshot,
+        daily_zone: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Optional[str], float, List[str]]:
         if htf_regime == "chop" and macro_regime == "down":
             return None, 0.0, ["reversal_blocked_chop_bear"]
@@ -1868,13 +2038,15 @@ class AdaptiveSignalEngine:
             score += flow_score
             dc_score, dc_notes = self._score_flow_dead_calm(flow_snapshot)
             score += dc_score
+            dz_score, dz_notes = self._score_daily_zone(daily_zone or {}, "LONG")
+            score += dz_score
             score += funding_score
             oi_score, oi_notes = self._score_oi_directional(sentiment, side)
             if oi_score > 0:
                 score += min(0.10, oi_score + 0.02); notes.append("oi_supports_reversal")
             else:
                 score += oi_score
-            notes.extend(flow_notes); notes.extend(dc_notes); notes.extend(funding_notes); notes.extend(oi_notes)
+            notes.extend(flow_notes); notes.extend(dc_notes); notes.extend(dz_notes); notes.extend(funding_notes); notes.extend(oi_notes)
 
         elif bearish_trigger and bearish_context and allow_bear:
             side = "SHORT"
@@ -1888,13 +2060,15 @@ class AdaptiveSignalEngine:
             score += -flow_score
             dc_score, dc_notes = self._score_flow_dead_calm(flow_snapshot)
             score += dc_score
+            dz_score, dz_notes = self._score_daily_zone(daily_zone or {}, "SHORT")
+            score += dz_score
             score += -funding_score
             oi_score, oi_notes = self._score_oi_directional(sentiment, side)
             if oi_score > 0:
                 score += min(0.10, oi_score + 0.02); notes.append("oi_supports_reversal")
             else:
                 score += oi_score
-            notes.extend(flow_notes); notes.extend(dc_notes); notes.extend(funding_notes); notes.extend(oi_notes)
+            notes.extend(flow_notes); notes.extend(dc_notes); notes.extend(dz_notes); notes.extend(funding_notes); notes.extend(oi_notes)
 
         if side is not None:
             if side == "LONG" and triggers["eq_low"] and triggers["sweep_bull"]:
@@ -2100,6 +2274,7 @@ class AdaptiveSignalEngine:
 
         htf_regime, notes_htf = self._compute_htf_regime(df_ohlcv)
         macro_regime, notes_macro = self._compute_macro_regime_4h(df_ohlcv)
+        daily_zone = self._compute_daily_zone(df_ohlcv)
         session_label, notes_kz = self._compute_killzone(ts)
         vol_state, notes_vol, vol_ratio = self._compute_vol_state(row)
         triggers = self._extract_triggers(row)
@@ -2145,7 +2320,7 @@ class AdaptiveSignalEngine:
         if not quality_ok:
             self._log_smc_candidate(
                 coin=coin,
-                timeframe="15m",
+                timeframe="1h",
                 row=row,
                 triggers=triggers,
                 accepted=False,
@@ -2170,9 +2345,11 @@ class AdaptiveSignalEngine:
             flow_snapshot=flow_snapshot,
             sentiment=sentiment,
             df=df,
+            daily_zone=daily_zone,
         )
         rev_side, rev_score, rev_notes = self._build_reversal_signal(
             row, triggers, htf_regime, macro_regime, flow_snapshot, sentiment,
+            daily_zone=daily_zone,
         )
 
         chosen_side: Optional[str] = None
@@ -2195,11 +2372,12 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime,
                 market_regime=market_regime,
                 df=df,
+                daily_zone=daily_zone,
             )
             if fb_side is None:
                 self._log_smc_candidate(
                     coin=coin,
-                    timeframe="15m",
+                    timeframe="1h",
                     row=row,
                     triggers=triggers,
                     accepted=False,
@@ -2274,7 +2452,7 @@ class AdaptiveSignalEngine:
         if abs(chosen_score) < effective_threshold:
             self._log_smc_candidate(
                 coin=coin,
-                timeframe="15m",
+                timeframe="1h",
                 row=row,
                 triggers=triggers,
                 side=chosen_side,
@@ -2298,7 +2476,7 @@ class AdaptiveSignalEngine:
         if stop is None or tp is None:
             self._log_smc_candidate(
                 coin=coin,
-                timeframe="15m",
+                timeframe="1h",
                 row=row,
                 triggers=triggers,
                 side=chosen_side,
@@ -2325,7 +2503,7 @@ class AdaptiveSignalEngine:
         if rr < rr_floor_effective:
             self._log_smc_candidate(
                 coin=coin,
-                timeframe="15m",
+                timeframe="1h",
                 row=row,
                 triggers=triggers,
                 side=chosen_side,
@@ -2396,7 +2574,7 @@ class AdaptiveSignalEngine:
         ):
             self._log_smc_candidate(
                 coin=coin,
-                timeframe="15m",
+                timeframe="1h",
                 row=row,
                 triggers=triggers,
                 side=chosen_side,
@@ -2420,7 +2598,7 @@ class AdaptiveSignalEngine:
             return None
 
         meta = {
-            "timeframe": "15m",
+            "timeframe": "1h",
             "coin": coin,
             "total_score": round(chosen_score, 3),
             "regime_local": setup_family,
@@ -2458,7 +2636,7 @@ class AdaptiveSignalEngine:
 
         self._log_smc_candidate(
             coin=coin,
-            timeframe="15m",
+            timeframe="1h",
             row=row,
             triggers=triggers,
             side=chosen_side,
@@ -2552,6 +2730,7 @@ class AdaptiveSignalEngine:
         triggers = self._extract_triggers(row)
         htf_regime, _ = self._compute_htf_regime(df_ohlcv)
         macro_regime, _ = self._compute_macro_regime_4h(df_ohlcv)
+        daily_zone = self._compute_daily_zone(df_ohlcv)
         vol_state, _, vol_ratio = self._compute_vol_state(row)
         market_regime, market_meta, market_notes = self._classify_market_regime(
             df=df_feat,
@@ -2611,8 +2790,10 @@ class AdaptiveSignalEngine:
                     candidate_score -= 0.18
                     candidate_reasons.append("macro_down_counter_long_penalty")
                 dc_score, dc_notes = self._score_flow_dead_calm(flow_snapshot)
-                candidate_score += flow_score + dc_score + funding_score
+                dz_score, dz_notes = self._score_daily_zone(daily_zone, "LONG")
+                candidate_score += flow_score + dc_score + dz_score + funding_score
                 candidate_reasons.extend(dc_notes)
+                candidate_reasons.extend(dz_notes)
             else:
                 if triggers["choch_bear"] or triggers["sweep_bear"]:
                     swing_family = "reversal"
@@ -2653,8 +2834,10 @@ class AdaptiveSignalEngine:
                     candidate_score -= 0.18
                     candidate_reasons.append("macro_up_counter_short_penalty")
                 dc_score, dc_notes = self._score_flow_dead_calm(flow_snapshot)
-                candidate_score += -flow_score + dc_score - funding_score
+                dz_score, dz_notes = self._score_daily_zone(daily_zone, "SHORT")
+                candidate_score += -flow_score + dc_score + dz_score - funding_score
                 candidate_reasons.extend(dc_notes)
+                candidate_reasons.extend(dz_notes)
 
             if (candidate_side == "LONG" and htf_regime == "up" and macro_regime == "up") or (
                 candidate_side == "SHORT" and htf_regime == "down" and macro_regime == "down"

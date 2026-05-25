@@ -153,7 +153,7 @@ def format_signal_message(
     signal: Signal,
     flow_snapshot: Dict[str, Any],
     sentiment,
-    tf_label: str = "15m",
+    tf_label: str = "1h",
 ) -> str:
     side = signal.side
     emoji = "🟢" if side == "LONG" else "🔴"
@@ -577,7 +577,7 @@ class CoinState:
     ):
         self.coin = coin
         self.flow_ctx = flow_ctx
-        self.perp_feed = PerpDataFeed(coin=coin, interval="15m", max_candles=400)
+        self.perp_feed = PerpDataFeed(coin=coin, interval="1H", max_candles=400)
         self.sent_feed = PerpSentimentFeed(coin=coin)
         self.engine = engine or _build_signal_engine()
         self.last_rejected_setup: Dict[str, float] = {}
@@ -587,7 +587,7 @@ class CoinState:
             min_funding_mag=0.01,
             cooldown_seconds=900,
         )
-        tracked_tfs = ["15m"] + SWING_TIMEFRAMES
+        tracked_tfs = ["1h"] + SWING_TIMEFRAMES
         self.last_signal: Dict[str, Dict[str, Optional[float]]] = {
             tf: {"side": None, "price": None} for tf in tracked_tfs
         }
@@ -613,7 +613,7 @@ class CoinState:
     def make_setup_fingerprint(self, signal: Signal) -> str:
         meta = signal.meta or {}
         return "|".join([
-            str(meta.get("timeframe", "15m")),
+            str(meta.get("timeframe", "1h")),
             signal.coin,
             str(signal.side),
             f"{float(signal.entry_price):.8f}",
@@ -685,7 +685,7 @@ def process_coin(
             funding_rate=funding_rate,
             open_interest=open_interest,
             long_short_bias=bias,
-            tf_label="15m",
+            tf_label="1h",
             duplicate_threshold=INTRADAY_DUPLICATE_PCT,
             rejected_cooldown_sec=REJECTED_SIGNAL_COOLDOWN_SEC,
             detection_alerts=SIGNAL_DETECTION_ALERTS,
