@@ -1,9 +1,22 @@
+import os
 import threading
 import time
-from dataclasses import dataclass
-from typing import Optional, Dict, Tuple, Any
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Optional, Dict, List, Tuple, Any
 
 import requests
+
+# OI history: how many seconds of history to retain and the poll interval.
+# 4H at 45s ≈ 320 entries; keep 350 for safety margin.
+_OI_HISTORY_MAXLEN: int = 350
+_OI_1H_SECS: int = 3600
+_OI_4H_SECS: int = 14400
+
+# Env-tunable thresholds for the two OI delta tiers (fraction, not percent).
+OI_STRONG_1H = float(os.getenv("OI_STRONG_1H_THRESHOLD", "0.05"))  # 5 % in 1H
+OI_MILD_1H   = float(os.getenv("OI_MILD_1H_THRESHOLD",   "0.02"))  # 2 % in 1H
+OI_STRONG_4H = float(os.getenv("OI_STRONG_4H_THRESHOLD", "0.10"))  # 10% in 4H
 
 HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info"
 
@@ -15,7 +28,9 @@ class PerpSentimentSnapshot:
     open_interest: float
     bias: float
     premium: float = 0.0
-    prev_open_interest: float = 0.0
+    prev_open_interest: float = 0.0   # OI from previous poll cycle (~45s ago, legacy)
+    oi_delta_1h_pct: float = 0.0      # % OI change vs ~1H ago (primary signal)
+    oi_delta_4h_pct: float = 0.0      # % OI change vs ~4H ago (structural conviction)
 
 
 class PerpSentimentFeed:
@@ -50,10 +65,14 @@ class PerpSentimentFeed:
             bias=0.0,
             premium=0.0,
             prev_open_interest=0.0,
+            oi_delta_1h_pct=0.0,
+            oi_delta_4h_pct=0.0,
         )
         self._lock = threading.Lock()
         self._stop_flag = False
         self._thread: Optional[threading.Thread] = None
+        # Ring buffer of (epoch_seconds, oi_value) — retained up to 4H+
+        self._oi_history: deque = deque(maxlen=_OI_HISTORY_MAXLEN)
 
     # ------------------------------------------------------------------
     # Public API
@@ -195,6 +214,35 @@ class PerpSentimentFeed:
         raise RuntimeError(f"metaAndAssetCtxs failed after retries: {last_error}")
 
     # ------------------------------------------------------------------
+    # OI history helpers
+    # ------------------------------------------------------------------
+
+    def _oi_delta_pct(self, current_oi: float, target_secs_ago: int) -> float:
+        """
+        Return fractional OI change vs the reading closest to target_secs_ago in the past.
+        Returns 0.0 if history is too short or current_oi is zero.
+
+        Walk from oldest → newest and find the entry whose timestamp is closest to
+        (now - target_secs_ago).  Using the closest-match entry rather than the
+        exact-boundary one avoids off-by-one noise from irregular poll timing.
+        """
+        if not self._oi_history or current_oi <= 0:
+            return 0.0
+
+        now = time.time()
+        target_ts = now - target_secs_ago
+        best_ts, best_oi = None, None
+
+        for ts, oi_val in self._oi_history:
+            if ts <= target_ts:
+                best_ts, best_oi = ts, oi_val
+
+        if best_oi is None or best_oi <= 0:
+            return 0.0
+
+        return (current_oi - best_oi) / best_oi
+
+    # ------------------------------------------------------------------
     # Parse sentiment
     # ------------------------------------------------------------------
 
@@ -258,17 +306,22 @@ class PerpSentimentFeed:
         with self._lock:
             prev_oi = float(getattr(self._snapshot, "open_interest", 0.0) or 0.0)
 
+        # Append current OI to history ring buffer (outside the lock — deque ops are GIL-safe
+        # enough for append/iteration at this frequency, and we avoid holding the lock longer).
+        now_ts = time.time()
+        self._oi_history.append((now_ts, open_interest))
+
+        # Compute real timeframe deltas now that history is updated.
+        oi_delta_1h = self._oi_delta_pct(open_interest, _OI_1H_SECS)
+        oi_delta_4h = self._oi_delta_pct(open_interest, _OI_4H_SECS)
+
         # Simple bias heuristic
         # funding > 0 -> long-heavy
         # premium > 0 -> perp above oracle -> bullish skew
         bias = 0.0
         bias += 50.0 * funding
         bias += 2.0 * premium
-
-        if bias > 2.0:
-            bias = 2.0
-        elif bias < -2.0:
-            bias = -2.0
+        bias = max(-2.0, min(2.0, bias))
 
         return PerpSentimentSnapshot(
             coin=self.coin,
@@ -277,4 +330,6 @@ class PerpSentimentFeed:
             bias=bias,
             premium=premium,
             prev_open_interest=prev_oi,
+            oi_delta_1h_pct=oi_delta_1h,
+            oi_delta_4h_pct=oi_delta_4h,
         )

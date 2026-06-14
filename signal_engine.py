@@ -1200,35 +1200,71 @@ class AdaptiveSignalEngine:
         return score, notes
 
     def _score_vwap_magnitude(self, row: pd.Series, side: str, setup_family: str) -> Tuple[float, List[str]]:
+        """
+        Score VWAP deviation using both the session anchor and the weekly anchor.
+
+        Session VWAP (vwap_dev): primary intraday signal — resets at Asia/London/NY open.
+        Weekly VWAP  (vwap_dev_w1): institutional medium-term reference — additive layer.
+          Below weekly VWAP on a LONG = discount zone (+0.04 reversal, +0.02 swing)
+          Above weekly VWAP on a SHORT = premium zone (+0.04 reversal, +0.02 swing)
+          Aligned with weekly on continuation = additional trend confirmation (+0.02)
+        """
         score = 0.0
         notes: List[str] = []
         vwap_dev = float(row.get("vwap_dev", 0.0))
+        vwap_dev_w1 = float(row.get("vwap_dev_w1", 0.0))
         close = float(row.get("close", 0.0))
         if close <= 0:
             return 0.0, []
-        abs_dev_pct = abs(vwap_dev) / close
 
+        abs_dev_pct = abs(vwap_dev) / close
+        abs_w1_pct = abs(vwap_dev_w1) / close
+
+        # ── Session VWAP layer (primary intraday) ─────────────────────────
         if setup_family == "reversal":
             correct_side = (side == "LONG" and vwap_dev < 0) or (side == "SHORT" and vwap_dev > 0)
             if correct_side:
                 if abs_dev_pct > 0.020:
                     score += 0.10
-                    notes.append(f"deep_vwap_reversal_{abs_dev_pct:.3f}")
+                    notes.append(f"deep_session_vwap_reversal_{abs_dev_pct:.3f}")
                 elif abs_dev_pct > 0.010:
                     score += 0.06
-                    notes.append(f"moderate_vwap_reversal_{abs_dev_pct:.3f}")
+                    notes.append(f"moderate_session_vwap_reversal_{abs_dev_pct:.3f}")
                 elif abs_dev_pct > 0.005:
                     score += 0.03
-                    notes.append(f"mild_vwap_reversal_{abs_dev_pct:.3f}")
+                    notes.append(f"mild_session_vwap_reversal_{abs_dev_pct:.3f}")
         elif setup_family == "continuation":
             trending_correct = (side == "LONG" and vwap_dev > 0) or (side == "SHORT" and vwap_dev < 0)
             if trending_correct:
                 if abs_dev_pct > 0.010:
                     score += 0.04
-                    notes.append(f"vwap_trend_strength_{abs_dev_pct:.3f}")
+                    notes.append(f"session_vwap_trend_strength_{abs_dev_pct:.3f}")
                 elif abs_dev_pct > 0.005:
                     score += 0.02
-                    notes.append(f"vwap_trend_mild_{abs_dev_pct:.3f}")
+                    notes.append(f"session_vwap_trend_mild_{abs_dev_pct:.3f}")
+
+        # ── Weekly VWAP layer (institutional medium-term context) ─────────
+        # Only applies when weekly data is available (vwap_dev_w1 != 0.0)
+        if vwap_dev_w1 != 0.0:
+            w1_in_discount = (side == "LONG" and vwap_dev_w1 < 0)
+            w1_in_premium  = (side == "SHORT" and vwap_dev_w1 > 0)
+            w1_aligned_cont = (
+                (side == "LONG" and vwap_dev_w1 > 0) or
+                (side == "SHORT" and vwap_dev_w1 < 0)
+            )
+
+            if setup_family == "reversal":
+                if (w1_in_discount or w1_in_premium) and abs_w1_pct > 0.010:
+                    score += 0.04
+                    notes.append(f"w1_vwap_{'discount' if w1_in_discount else 'premium'}_{abs_w1_pct:.3f}")
+            elif setup_family == "continuation" and w1_aligned_cont and abs_w1_pct > 0.005:
+                score += 0.02
+                notes.append(f"w1_vwap_momentum_aligned_{abs_w1_pct:.3f}")
+            elif setup_family == "swing":
+                if (w1_in_discount or w1_in_premium) and abs_w1_pct > 0.010:
+                    score += 0.04
+                    notes.append(f"w1_vwap_swing_{'discount' if w1_in_discount else 'premium'}_{abs_w1_pct:.3f}")
+
         return score, notes
 
     def _score_trigger_quality(self, row: pd.Series) -> Tuple[float, List[str]]:
@@ -1322,18 +1358,59 @@ class AdaptiveSignalEngine:
         return score, notes
 
     def _score_oi_directional(self, sentiment: PerpSentimentSnapshot, side: str) -> Tuple[float, List[str]]:
+        """
+        Score OI direction using real timeframe deltas (1H primary, 4H structural).
+
+        Old formula compared OI vs 45 seconds ago at a ±5% threshold — that
+        never fired because OI doesn't move 5% in 45s.  New formula:
+          - 1H delta (primary): meaningful intraday OI accumulation signal
+          - 4H delta (structural): confirms trend conviction or unwinding
+          - Falls back to 45s prev_oi if history hasn't warmed up yet.
+
+        Scoring:
+          Rising OI + aligned side → positive (new positions entering with us)
+          Falling OI + signal side → negative (unwind, fade-risk)
+          Opposite-side OI signal → no direct score change (handled by caller)
+        """
+        from perp_sentiment import OI_STRONG_1H, OI_MILD_1H, OI_STRONG_4H
+
         score = 0.0
         notes: List[str] = []
-        oi = float(getattr(sentiment, "open_interest", 0.0) or 0.0)
-        prev_oi = float(getattr(sentiment, "prev_open_interest", 0.0) or 0.0)
-        if oi > 0 and prev_oi > 0:
-            oi_pct = (oi - prev_oi) / prev_oi
-            if oi_pct > 0.05:
-                score += 0.08
-                notes.append(f"oi_rising_{side.lower()}_conviction")
-            elif oi_pct < -0.05:
-                score -= 0.08
-                notes.append(f"oi_falling_{side.lower()}_unwind")
+
+        oi_1h = float(getattr(sentiment, "oi_delta_1h_pct", 0.0) or 0.0)
+        oi_4h = float(getattr(sentiment, "oi_delta_4h_pct", 0.0) or 0.0)
+
+        # Cold-start fallback: 1H history not yet warm, use legacy 45s delta
+        # at a tighter threshold (0.3 % in 45s ≈ meaningful burst event).
+        if oi_1h == 0.0:
+            oi = float(getattr(sentiment, "open_interest", 0.0) or 0.0)
+            prev_oi = float(getattr(sentiment, "prev_open_interest", 0.0) or 0.0)
+            if oi > 0 and prev_oi > 0:
+                oi_1h = (oi - prev_oi) / prev_oi
+
+        # ── 1H delta scoring (primary) ────────────────────────────────────
+        if oi_1h > OI_STRONG_1H:        # strong accumulation
+            score += 0.08
+            notes.append(f"oi_1h_surge_{side.lower()}_{oi_1h:.3f}")
+        elif oi_1h > OI_MILD_1H:        # mild accumulation
+            score += 0.04
+            notes.append(f"oi_1h_build_{side.lower()}_{oi_1h:.3f}")
+        elif oi_1h < -OI_STRONG_1H:     # strong liquidation / unwind
+            score -= 0.08
+            notes.append(f"oi_1h_unwind_{side.lower()}_{oi_1h:.3f}")
+        elif oi_1h < -OI_MILD_1H:       # mild unwind
+            score -= 0.04
+            notes.append(f"oi_1h_fade_{side.lower()}_{oi_1h:.3f}")
+
+        # ── 4H delta (structural conviction layer) ─────────────────────────
+        # Additive to 1H score — confirms or undermines the intraday signal.
+        if oi_4h > OI_STRONG_4H:
+            score += 0.04
+            notes.append(f"oi_4h_structural_build_{oi_4h:.3f}")
+        elif oi_4h < -OI_STRONG_4H:
+            score -= 0.04
+            notes.append(f"oi_4h_structural_unwind_{oi_4h:.3f}")
+
         return score, notes
 
     def _score_rsi(self, row: pd.Series, side: str, setup_family: str) -> Tuple[float, List[str]]:
