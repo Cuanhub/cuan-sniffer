@@ -14,6 +14,7 @@ PERP_FETCH_MAX_RETRIES = int(os.getenv("PERP_FETCH_MAX_RETRIES", "1"))
 PERP_FETCH_MAX_TOTAL_SEC = float(os.getenv("PERP_FETCH_MAX_TOTAL_SEC", "1.5"))
 PERP_FETCH_TIMEOUT_SEC = float(os.getenv("PERP_FETCH_TIMEOUT_SEC", "0.9"))
 PERP_FETCH_RETRY_SLEEP_SEC = float(os.getenv("PERP_FETCH_RETRY_SLEEP_SEC", "0.1"))
+PERP_CACHE_TTL_SEC = float(os.getenv("PERP_CACHE_TTL_SEC", "0"))
 
 
 class PerpDataFeed:
@@ -107,6 +108,9 @@ class PerpDataFeed:
         Cache snapshots long enough to avoid hammering the endpoint,
         but short enough to keep the latest candle reasonably fresh.
         """
+        if PERP_CACHE_TTL_SEC > 0:
+            return max(1, int(PERP_CACHE_TTL_SEC))
+
         bar_minutes = self._interval_minutes()
 
         if bar_minutes <= 1:

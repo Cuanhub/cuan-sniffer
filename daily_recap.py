@@ -101,12 +101,12 @@ def extract_summary(stdout: str) -> str:
 
 
 def build_message(summary_text: str, chart_name: str | None, mode_label: str) -> str:
-    extra = f"\nChart: `{chart_name}`" if chart_name else ""
+    extra = f" | chart `{chart_name}`" if chart_name else ""
+    summary = (summary_text or "No analyzer summary available.").strip()[:3000]
     return (
-        "📊 *Cuan Sniffer Daily Recap*\n\n"
-        f"Mode: `{mode_label}`\n"
-        f"Time: `{utc_now_str()}`{extra}\n\n"
-        f"```text\n{summary_text}\n```"
+        "📊 *Daily Recap*\n"
+        f"`{utc_now_str()}` | mode `{mode_label}`{extra}\n\n"
+        f"```text\n{summary}\n```"
     )
 
 

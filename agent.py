@@ -146,6 +146,33 @@ def _r_color(r: float) -> str:
     return "🔴"
 
 
+def _fmt_px(value: float) -> str:
+    return f"{float(value):.5g}"
+
+
+def _fmt_money(value: float) -> str:
+    return f"${float(value):+.2f}"
+
+
+def _fmt_duration(minutes: float) -> str:
+    hrs = int(minutes // 60)
+    mins = int(minutes % 60)
+    return f"{hrs}h {mins}m" if hrs > 0 else f"{mins}m"
+
+
+def _signal_context(signal: Signal) -> tuple[str, str, str, str, float]:
+    meta = signal.meta or {}
+    setup = str(meta.get("setup_family", meta.get("regime_local", "setup"))).replace("_", " ")
+    session = str(meta.get("session", "unknown") or "unknown")
+    tf = str(meta.get("timeframe", "") or "")
+    market = str(meta.get("market_regime", "") or "")
+    htf = str(meta.get("regime_htf_1h", "") or "")
+    macro = str(meta.get("regime_macro_4h", "") or "")
+    regime = " / ".join(x for x in (market, htf, macro) if x) or str(signal.regime)
+    score = float(meta.get("total_score", signal.confidence) or 0.0)
+    return setup, session, tf, regime, score
+
+
 # ── Notification formatters ────────────────────────────────────────────────────
 
 def format_signal_message(
@@ -157,7 +184,6 @@ def format_signal_message(
 ) -> str:
     side = signal.side
     emoji = "🟢" if side == "LONG" else "🔴"
-    arrow = "📈" if side == "LONG" else "📉"
 
     price = float(signal.entry_price)
     sl = float(signal.stop_price)
@@ -176,40 +202,22 @@ def format_signal_message(
     else:
         flow_bias = "Neutral flow"
 
-    funding = float(getattr(sentiment, "funding_rate", 0.0))
-    oi = int(getattr(sentiment, "open_interest", 0) or 0)
-    funding_txt = "Longs crowded" if funding > 0 else "Shorts crowded" if funding < 0 else "Balanced"
-
-    reasons = (signal.reason or "").lower()
-    if "sweep" in reasons:
-        setup = "Liquidity Sweep"
-    elif "choch" in reasons:
-        setup = "Structure Flip"
-    elif "bos" in reasons:
-        setup = "Breakout"
-    else:
-        setup = "Flow Setup"
-
-    strength = int(min(100, max(50, signal.confidence * 100)))
-    regime = signal.regime.replace("_", " ")
-    # Show flow section for all coins that have flow tracking (SOL + SPL tokens)
-    _FLOW_TRACKED = {"SOL", "JTO", "WIF", "FARTCOIN"}
-    flow_section = f"\n🐋 Flow: {flow_bias}" if coin in _FLOW_TRACKED else ""
+    funding = float(getattr(sentiment, "funding_rate", 0.0) or 0.0)
+    funding_txt = "balanced"
+    if funding > 0:
+        funding_txt = "longs pay"
+    elif funding < 0:
+        funding_txt = "shorts pay"
+    setup, session, meta_tf, regime, score = _signal_context(signal)
+    tf = meta_tf or tf_label
 
     return (
-        f"{emoji} *{coin} {side} SIGNAL DETECTED* {arrow}\n\n"
-        f"🎯 Setup: *{setup}*\n"
-        f"🧭 Regime: `{regime}`\n"
-        f"⏱ TF: `{tf_label}`\n\n"
-        f"💰 Entry: `{price:.5g}`\n"
-        f"🛑 SL: `{sl:.5g}`\n"
-        f"🎯 TP: `{tp:.5g}`\n"
-        f"📊 R/R: `{rr:.2f}R`\n\n"
-        f"⚡ Strength: `{strength}%`\n"
-        f"📈 Funding: {funding_txt}\n"
-        f"📦 OI: `{oi}`"
-        f"{flow_section}\n\n"
-        f"🧠 _Signal detected — execution pending_"
+        f"{emoji} *Signal* `{coin} {side}`  `{tf}`  {_mode_tag()}\n"
+        f"`{setup}` | conf `{signal.confidence:.2f}` | score `{score:.2f}` | RR `{rr:.2f}`\n\n"
+        f"Entry `{_fmt_px(price)}`  Stop `{_fmt_px(sl)}`  TP `{_fmt_px(tp)}`\n"
+        f"Context `{session}` | `{regime}`\n"
+        f"Flow `{flow_bias}` | Funding `{funding_txt}`\n\n"
+        "_Execution pending_"
     )
 
 
@@ -241,34 +249,24 @@ def format_fill_message(
     session = meta.get("session", "unknown")
     score = float(meta.get("total_score", signal.confidence))
     setup = meta.get("setup_family", meta.get("regime_local", "setup")).replace("_", " ")
-    htf = meta.get("regime_htf_1h", "")
-    macro = meta.get("regime_macro_4h", "")
-    vol = meta.get("vol_state", "")
+    tf = meta.get("timeframe", "")
 
     partial_line = f"\n⚠️ Partial fill: `{fill_ratio * 100:.0f}%`" if fill_ratio < 0.99 else ""
 
     return (
-        f"{emoji} *{coin} {side} FILLED* {arrow}  {_mode_tag()}\n\n"
-        f"💰 Fill price: `{fill_price:.5g}`{partial_line}\n"
-        f"🛑 Stop: `{sl:.5g}`  `({stop_dist_pct:.2f}% risk)`\n"
-        f"🎯 TP: `{tp:.5g}`  `({tp_dist_pct:.2f}% move)`\n"
-        f"📊 R/R: `{rr:.2f}R`\n\n"
+        f"{emoji} *Opened* `{coin} {side}`  `{tf or '-'}`  {_mode_tag()}\n\n"
+        f"Fill `{_fmt_px(fill_price)}`{partial_line}\n"
+        f"Stop `{_fmt_px(sl)}` ({stop_dist_pct:.2f}%)  TP `{_fmt_px(tp)}` ({tp_dist_pct:.2f}%)\n"
+        f"RR `{rr:.2f}` | Risk `${risk_usd:.2f}` | Size `${size_usd:.0f}`\n\n"
         f"```\n"
-        f"  Size    : ${size_usd:.2f}\n"
-        f"  Risk    : ${risk_usd:.2f}\n"
-        f"  Fee     : ${entry_fee_usd:.2f}\n"
-        f"  Protect : {protection_status or 'unknown'}\n"
-        f"  StopOID : {stop_order_id or '-'}\n"
-        f"  TPOID   : {tp_order_id or '-'}\n"
-        f"  Setup   : {setup}\n"
-        f"  HTF     : {htf}  |  Macro: {macro}\n"
-        f"  Vol     : {vol}\n"
-        f"  Score   : {score:.2f}\n"
-        f"  Session : {session}\n"
-        f"  Slip    : {fill_slippage_bps:.1f}bps\n"
+        f"setup   {setup}\n"
+        f"session {session}\n"
+        f"score   {score:.2f}\n"
+        f"slip    {fill_slippage_bps:.1f}bps\n"
+        f"fee     ${entry_fee_usd:.2f}\n"
+        f"protect {protection_status or 'unknown'}\n"
         f"```\n"
-        f"🆔 `{position_id}`\n"
-        f"🕒 `{utc_now()}`"
+        f"`{position_id}` | `{utc_now()}`"
     )
 
 
@@ -288,18 +286,14 @@ def format_partial_tp_message(
     r_icon = _r_color(r_captured)
 
     return (
-        f"✂️ *{coin} {side} PARTIAL TP* {emoji}  {_mode_tag()}\n\n"
-        f"💰 Exit price: `{exit_price:.5g}`\n"
-        f"📥 Entry: `{entry_price:.5g}`\n\n"
+        f"✂️ *Partial TP* `{coin} {side}`  {_mode_tag()}\n\n"
+        f"Exit `{_fmt_px(exit_price)}` | Entry `{_fmt_px(entry_price)}`\n"
+        f"Locked `{r_captured:+.2f}R` {_r_color(r_captured)} | P&L `{_fmt_money(pnl_usd)}`\n"
+        f"Closed `${size_closed_usd:.0f}` | Runner `${size_remaining_usd:.0f}` | Stop `{_fmt_px(new_stop)}`\n\n"
         f"```\n"
-        f"  R captured  : {r_captured:+.2f}R  {r_icon}\n"
-        f"  P&L         : ${pnl_usd:+.2f}\n"
-        f"  Closed      : ${size_closed_usd:.0f}\n"
-        f"  Remaining   : ${size_remaining_usd:.0f}\n"
-        f"  New stop    : {new_stop:.5g}\n"
+        f"id {position_id}\n"
+        f"time {utc_now()}\n"
         f"```\n"
-        f"🆔 `{position_id}`\n"
-        f"🕒 `{utc_now()}`"
     )
 
 
@@ -320,18 +314,14 @@ def format_stop_message(
     reason_label = "Stop hit" if "full" in reason else "Trailing stop"
 
     return (
-        f"🛑 *{coin} {side} STOPPED* {emoji}  {_mode_tag()}\n\n"
-        f"💰 Exit: `{exit_price:.5g}`\n"
-        f"📥 Entry: `{entry_price:.5g}`\n\n"
+        f"🛑 *Closed* `{coin} {side}`  {_mode_tag()}\n\n"
+        f"{reason_label} | R `{r_final:+.2f}` {_r_color(r_final)} | P&L `{_fmt_money(pnl_usd)}`\n"
+        f"Exit `{_fmt_px(exit_price)}` | Entry `{_fmt_px(entry_price)}` | Slip `{slip_bps:.1f}bps`\n\n"
         f"```\n"
-        f"  Result  : {reason_label}\n"
-        f"  R       : {r_final:+.2f}R  {r_icon}\n"
-        f"  P&L     : ${pnl_usd:+.2f}\n"
-        f"  Size    : ${size_usd:.0f}\n"
-        f"  Slip    : {slip_bps:.1f}bps\n"
+        f"size ${size_usd:.0f}\n"
+        f"id   {position_id}\n"
+        f"time {utc_now()}\n"
         f"```\n"
-        f"🆔 `{position_id}`\n"
-        f"🕒 `{utc_now()}`"
     )
 
 
@@ -354,17 +344,14 @@ def format_tp_message(
     duration_str = f"{hrs}h {mins}m" if hrs > 0 else f"{mins}m"
 
     return (
-        f"🎯 *{coin} {side} TARGET HIT* {emoji}  {_mode_tag()}\n\n"
-        f"💰 Exit: `{exit_price:.5g}`\n"
-        f"📥 Entry: `{entry_price:.5g}`\n\n"
+        f"🎯 *Target Hit* `{coin} {side}`  {_mode_tag()}\n\n"
+        f"R `{r_final:+.2f}` {_r_color(r_final)} | P&L `{_fmt_money(pnl_usd)}` | Hold `{duration_str}`\n"
+        f"Exit `{_fmt_px(exit_price)}` | Entry `{_fmt_px(entry_price)}`\n\n"
         f"```\n"
-        f"  R       : {r_final:+.2f}R  {r_icon}\n"
-        f"  P&L     : ${pnl_usd:+.2f}\n"
-        f"  Size    : ${size_usd:.0f}\n"
-        f"  Hold    : {duration_str}\n"
+        f"size ${size_usd:.0f}\n"
+        f"id   {position_id}\n"
+        f"time {utc_now()}\n"
         f"```\n"
-        f"🆔 `{position_id}`\n"
-        f"🕒 `{utc_now()}`"
     )
 
 
@@ -381,16 +368,14 @@ def format_stale_close_message(
 ) -> str:
     r_icon = _r_color(r_final)
     return (
-        f"⏹ *{coin} {side} CLOSED* `{reason}`  {_mode_tag()}\n\n"
-        f"💰 Exit: `{exit_price:.5g}`\n"
-        f"📥 Entry: `{entry_price:.5g}`\n\n"
+        f"⏹ *Closed* `{coin} {side}`  `{reason}`  {_mode_tag()}\n\n"
+        f"R `{r_final:+.2f}` {r_icon} | P&L `{_fmt_money(pnl_usd)}`\n"
+        f"Exit `{_fmt_px(exit_price)}` | Entry `{_fmt_px(entry_price)}`\n\n"
         f"```\n"
-        f"  R       : {r_final:+.2f}R  {r_icon}\n"
-        f"  P&L     : ${pnl_usd:+.2f}\n"
-        f"  Size    : ${size_usd:.0f}\n"
+        f"size ${size_usd:.0f}\n"
+        f"id   {position_id}\n"
+        f"time {utc_now()}\n"
         f"```\n"
-        f"🆔 `{position_id}`\n"
-        f"🕒 `{utc_now()}`"
     )
 
 
@@ -485,22 +470,27 @@ def extract_recap_summary(stdout: str) -> str:
     return "\n".join(final_lines).strip()[:3000]
 
 
-def build_trader_grade_recap(summary_text: str) -> str:
-    return (
-        "📊 *Cuan Sniffer Daily Recap*\n\n"
-        f"🕒 Time: `{utc_now()}`\n"
-        f"📈 Chart: `{RECAP_CHART}`\n\n"
-        "```text\n"
-        f"{summary_text}\n"
-        "```"
-    )
+def build_trader_grade_recap(summary_text: str, trade_text: str = "") -> str:
+    summary = (summary_text or "No analyzer summary available.").strip()[:1300]
+    trade = (trade_text or "").strip()[:2400]
+    parts = [
+        "📊 *Daily Recap*",
+        f"`{utc_now()}` | chart `{RECAP_CHART}`",
+        "",
+        "*System*",
+        "```text",
+        summary,
+        "```",
+    ]
+    if trade:
+        parts.extend(["", trade])
+    return "\n".join(parts)
 
 
 def _run_recap_worker():
     _recap_running.set()
     try:
         print("[RECAP] Running automatic daily recap...")
-        notify("📊 *Running daily performance recap...*")
         write_last_recap_time(datetime.now(timezone.utc))
         analyzer_args = ["analyze_winrate.py", "--chart", RECAP_CHART]
         if RECAP_NO_FETCH:
@@ -523,13 +513,15 @@ def _run_recap_worker():
                 "```"
             )
             return
-        notify(build_trader_grade_recap(extract_recap_summary(proc.stdout)))
-        print("[RECAP] Daily recap sent.")
+        summary_text = extract_recap_summary(proc.stdout)
+        trade_text = ""
         try:
-            run_trades_recap(notify_fn=notify, starting_balance=RECAP_STARTING_BALANCE)
-            print("[RECAP] Trade P&L recap sent.")
+            trade_text = run_trades_recap(notify_fn=None, starting_balance=RECAP_STARTING_BALANCE)
         except Exception as te:
             print(f"[RECAP] Trade P&L recap failed: {te}")
+            trade_text = f"⚠️ Trade recap unavailable: `{str(te)[:160]}`"
+        notify(build_trader_grade_recap(summary_text, trade_text))
+        print("[RECAP] Daily recap sent.")
     except subprocess.TimeoutExpired:
         notify(
             "❌ *Cuan Sniffer Daily Recap Timed Out*\n\n"
@@ -577,7 +569,7 @@ class CoinState:
     ):
         self.coin = coin
         self.flow_ctx = flow_ctx
-        self.perp_feed = PerpDataFeed(coin=coin, interval="1H", max_candles=400)
+        self.perp_feed = PerpDataFeed(coin=coin, interval="1h", max_candles=400)
         self.sent_feed = PerpSentimentFeed(coin=coin)
         self.engine = engine or _build_signal_engine()
         self.last_rejected_setup: Dict[str, float] = {}

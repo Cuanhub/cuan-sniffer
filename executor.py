@@ -129,6 +129,18 @@ STOP_ATR_FLOOR_MULT_SWING = float(os.getenv("STOP_ATR_FLOOR_MULT_SWING", "1.40")
 STOP_BUFFER_ATR_MULT = float(os.getenv("STOP_BUFFER_ATR_MULT", "0.10"))
 MIN_STOP_ATR_REJECT = float(os.getenv("MIN_STOP_ATR_REJECT", "0.80"))
 MIN_STOP_REDESIGN_RR = float(os.getenv("MIN_STOP_REDESIGN_RR", "1.8"))
+STOP_REDESIGN_RR_TOLERANCE = float(os.getenv("STOP_REDESIGN_RR_TOLERANCE", "0.05"))
+HIGH_CONF_STOP_REDESIGN_MIN_CONFIDENCE = float(
+    os.getenv("HIGH_CONF_STOP_REDESIGN_MIN_CONFIDENCE", "0.93")
+)
+HIGH_CONF_STOP_REDESIGN_RR_TOLERANCE = float(
+    os.getenv("HIGH_CONF_STOP_REDESIGN_RR_TOLERANCE", "0.08")
+)
+HIGH_CONF_STOP_REDESIGN_FAMILIES = {
+    s.strip().lower()
+    for s in os.getenv("HIGH_CONF_STOP_REDESIGN_FAMILIES", "reversal,swing").split(",")
+    if s.strip()
+}
 
 # ── Continuation cap ──────────────────────────────────────────────────
 CONTINUATION_MAX_SIZE_MULT = float(os.getenv("CONTINUATION_MAX_SIZE_MULT", "1.50"))
@@ -140,6 +152,16 @@ HARD_BLOCKED_COINS: set = {
     for c in os.getenv("HARD_BLOCKED_COINS", "").split(",")
     if c.strip()
 }
+# Sprint 1 live book cleanup: continuation and chop are negative-EV in live data.
+HARD_BLOCK_CONTINUATION = (
+    os.getenv("HARD_BLOCK_CONTINUATION", "true").lower() == "true"
+)
+HARD_BLOCK_CHOP = os.getenv("HARD_BLOCK_CHOP", "true").lower() == "true"
+# Sprint 2 cleanup: proven live edge is high-confidence swing with named sessions.
+HARD_BLOCK_UNKNOWN_SESSION = (
+    os.getenv("HARD_BLOCK_UNKNOWN_SESSION", "true").lower() == "true"
+)
+SWING_MIN_CONFIDENCE = float(os.getenv("SWING_MIN_CONFIDENCE", "0.90"))
 # Timeframes blocked until re-validated (default: 4h — 0/15 win rate in live data).
 HARD_BLOCKED_TIMEFRAMES: set = {
     tf.strip().lower()
@@ -296,6 +318,8 @@ SWING_BUCKET_CAP_MULT = float(os.getenv("SWING_BUCKET_CAP_MULT", "1.0"))
 # ── Missed-signal logging ─────────────────────────────────────────────
 MISSED_LOG_FILE = os.getenv("MISSED_LOG_FILE", "missed_signals.csv")
 LOG_MISSED = os.getenv("LOG_MISSED", "true").lower() == "true"
+MISSED_LOG_DEDUPE_TTL_SEC = int(os.getenv("MISSED_LOG_DEDUPE_TTL_SEC", "3600"))
+MISSED_LOG_DEDUPE_MAX_ITEMS = int(os.getenv("MISSED_LOG_DEDUPE_MAX_ITEMS", "5000"))
 REJECT_MEMORY_TTL_SEC = int(os.getenv("REJECT_MEMORY_TTL_SEC", "300"))  # master enable/disable (0=off)
 REJECT_MEMORY_MAX_ITEMS = int(os.getenv("REJECT_MEMORY_MAX_ITEMS", "5000"))
 REJECT_MEMORY_FAMILIES = (
@@ -394,6 +418,7 @@ class Executor:
         self._pending_positions: Dict[str, bool] = {}
         self._pending_positions_lock = threading.Lock()
         self._reject_memory: Dict[Tuple[str, str, str, str, str, str, str, str, str, str], float] = {}
+        self._missed_log_memory: Dict[Tuple[str, ...], float] = {}
         self._venue_margin_cache: Optional[Tuple[float, float, float]] = None
         self._venue_margin_cache_ts: float = 0.0
         self._balance_ready: bool = False
@@ -661,36 +686,33 @@ class Executor:
         )
 
         lines = [
-            "🚀 *Cuan Sniffer — 🔴 LIVE*",
+            "🚀 *Cuan Sniffer Live*",
             "",
             "```",
-            f"  Balance     : ${self._boot_balance:.2f}  ({pct:+.1f}%)",
-            f"  All-time P&L: ${self._boot_all_time_pnl:+.2f}",
-            f"  HWM         : ${self._boot_hwm:.2f}",
-            f"  Drawdown    : {dd_pct:.1f}%",
-            f"  Total closed: {self._boot_total_closed} trades",
-            f"  Today       : {self._boot_closed_today} closed  "
-            f"{self._boot_daily_r:+.2f}R  ${self._boot_daily_pnl:+.2f}",
+            f"balance  ${self._boot_balance:.2f}  ({pct:+.1f}%)",
+            f"pnl      ${self._boot_all_time_pnl:+.2f}",
+            f"drawdown {dd_pct:.1f}%  hwm ${self._boot_hwm:.2f}",
+            f"closed   {self._boot_total_closed} all-time",
+            f"today    {self._boot_closed_today} closed  {self._boot_daily_r:+.2f}R  ${self._boot_daily_pnl:+.2f}",
             "```",
         ]
 
         if self._boot_open:
             lines.append("")
-            lines.append(f"*📂 {len(self._boot_open)} open position(s) restored:*")
+            lines.append(f"*Open positions* `{len(self._boot_open)}`")
             lines.append("```")
             for pos in self._boot_open:
                 state_tag = "⚡partial" if pos.partial_closed else "open"
                 lines.append(
-                    f"  {pos.coin:<6} {str(pos.side):<5} "
-                    f"entry={pos.entry_price:.4f} stop={pos.stop_price:.4f} [{state_tag}]"
+                    f"{pos.coin:<8} {str(pos.side):<5} entry {pos.entry_price:.4f} stop {pos.stop_price:.4f} {state_tag}"
                 )
             lines.append("```")
         else:
-            lines.append("\n_No open positions_")
+            lines.append("\n_Open positions: none_")
 
         sf = self.strategy_filter.summary()
         if sf.strip() not in ("No data yet.", ""):
-            lines.append(f"\n*🔒 Filters:*\n```\n{sf}\n```")
+            lines.append(f"\n*Filters*\n```\n{sf[:700]}\n```")
 
         lines.append(f"\n🕒 `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}`")
         return "\n".join(lines)
@@ -702,7 +724,39 @@ class Executor:
         coin = str(signal.coin).upper()
         bucket = self._factor_bucket(coin)
         track = self._signal_track(signal)
+        setup_family = self._signal_setup_family(signal)
+        market_regime = self._signal_market_regime(signal)
+        market_meta = getattr(signal, "meta", None) or {}
         now = time.time()
+
+        if HARD_BLOCK_UNKNOWN_SESSION and session in {"", "unknown", "none", "null"}:
+            reason = "session_blocked:unknown"
+            print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
+            self._log_missed(signal, sig_id, reason)
+            return ExecutorResult(traded=False, reason=reason)
+
+        if HARD_BLOCK_CONTINUATION and setup_family == "continuation":
+            reason = "hard_blocked_setup_family:continuation"
+            print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
+            self._log_missed(signal, sig_id, reason)
+            return ExecutorResult(traded=False, reason=reason)
+
+        if HARD_BLOCK_CHOP and market_regime == "chop":
+            reason = "market_regime_block:chop"
+            print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
+            self._log_missed(signal, sig_id, reason)
+            return ExecutorResult(traded=False, reason=reason)
+
+        if SWING_MIN_CONFIDENCE > 0 and track == "swing":
+            sig_conf = float(getattr(signal, "confidence", 0.0))
+            if sig_conf < SWING_MIN_CONFIDENCE:
+                reason = (
+                    f"swing_conf_gate:"
+                    f"conf={sig_conf:.2f}<{SWING_MIN_CONFIDENCE:.2f}"
+                )
+                print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
+                self._log_missed(signal, sig_id, reason)
+                return ExecutorResult(traded=False, reason=reason)
 
         if not self._try_mark_coin_pending_open(coin):
             reason = f"pending_open_race:{coin}"
@@ -821,9 +875,6 @@ class Executor:
                 self._log_missed(signal, sig_id, reason)
                 return ExecutorResult(traded=False, reason=reason)
 
-            setup_family = self._signal_setup_family(signal)
-            market_regime = self._signal_market_regime(signal)
-            market_meta = getattr(signal, "meta", None) or {}
             print(
                 f"[REGIME_GATE] {coin} {signal_side} family={setup_family or '?'} "
                 f"mkt={market_regime} "
@@ -1216,7 +1267,19 @@ class Executor:
         tp_dist = abs(tp - entry)
         final_rr = tp_dist / final_stop_dist if final_stop_dist > 0 else 0.0
         min_rr = float(MIN_STOP_REDESIGN_RR)
-        min_rr_tolerance = 0.05
+        setup_family = self._signal_setup_family(signal)
+        market_regime = self._signal_market_regime(signal)
+        sig_conf = float(getattr(signal, "confidence", 0.0) or 0.0)
+        high_conf_rr_tolerance = (
+            sig_conf >= HIGH_CONF_STOP_REDESIGN_MIN_CONFIDENCE
+            and market_regime != "chop"
+            and setup_family in HIGH_CONF_STOP_REDESIGN_FAMILIES
+        )
+        min_rr_tolerance = (
+            HIGH_CONF_STOP_REDESIGN_RR_TOLERANCE
+            if high_conf_rr_tolerance
+            else STOP_REDESIGN_RR_TOLERANCE
+        )
         min_rr_effective = max(0.0, min_rr - min_rr_tolerance)
         if final_rr < min_rr_effective:
             return (
@@ -1246,6 +1309,13 @@ class Executor:
         meta["stop_floor_mult"] = round(floor_mult, 4)
         meta["stop_buffer_mult"] = round(buffer_mult, 4)
         meta["stop_min_atr_reject"] = round(min_stop_atr, 4)
+        meta["stop_rr_min"] = round(min_rr, 4)
+        meta["stop_rr_tolerance"] = round(min_rr_tolerance, 4)
+        meta["stop_rr_min_effective"] = round(min_rr_effective, 4)
+        meta["stop_rr_tolerance_reason"] = (
+            "high_conf_non_chop"
+            if high_conf_rr_tolerance else "base"
+        )
         meta["stop_track"] = track
         signal.meta = meta
 
@@ -1255,7 +1325,8 @@ class Executor:
             f"atr_floor_stop={atr_floor_stop:.6f} "
             f"buffered_stop={buffered_stop:.6f} "
             f"final_stop={final_stop:.6f} "
-            f"final_rr={final_rr:.2f}"
+            f"final_rr={final_rr:.2f} "
+            f"min_rr={min_rr_effective:.2f}"
         )
 
         return None
@@ -1541,6 +1612,63 @@ class Executor:
             return "stale_or_drift"
         return ""
 
+    @staticmethod
+    def _missed_reason_key(reason: str) -> str:
+        text = str(reason or "").strip().lower()
+        if not text:
+            return ""
+        if text.startswith("reject_memory_cooldown:"):
+            return text.split("(", 1)[0].strip()
+        if text.startswith("stop_redesign_reject:"):
+            return text.split("(", 1)[0].strip()
+        if text.startswith("swing_conf_gate:"):
+            return "swing_conf_gate"
+        return text.split("(", 1)[0].strip()
+
+    def _missed_log_signature(self, signal, reason: str) -> Tuple[str, ...]:
+        meta = getattr(signal, "meta", None) or {}
+        return (
+            self._coin_key(getattr(signal, "coin", "")),
+            self._side_str(getattr(signal, "side", "")),
+            str(meta.get("timeframe", "")).strip().lower(),
+            str(meta.get("setup_family", meta.get("regime_local", ""))).strip().lower(),
+            str(meta.get("session", "")).strip().lower(),
+            str(getattr(signal, "regime", "")).strip().lower(),
+            f"{float(getattr(signal, 'entry_price', 0.0) or 0.0):.8f}",
+            f"{float(getattr(signal, 'stop_price', 0.0) or 0.0):.8f}",
+            f"{float(getattr(signal, 'tp_price', 0.0) or 0.0):.8f}",
+            f"{float(getattr(signal, 'confidence', 0.0) or 0.0):.3f}",
+            self._missed_reason_key(reason),
+        )
+
+    def _should_skip_missed_log(self, signal, reason: str) -> bool:
+        if MISSED_LOG_DEDUPE_TTL_SEC <= 0:
+            return False
+
+        now = time.time()
+        signature = self._missed_log_signature(signal, reason)
+        last_seen = float(self._missed_log_memory.get(signature, 0.0) or 0.0)
+        if last_seen > 0 and now - last_seen < MISSED_LOG_DEDUPE_TTL_SEC:
+            return True
+
+        self._missed_log_memory[signature] = now
+        if len(self._missed_log_memory) > MISSED_LOG_DEDUPE_MAX_ITEMS:
+            cutoff = now - max(1, MISSED_LOG_DEDUPE_TTL_SEC * 2)
+            stale_keys = [
+                key for key, ts in self._missed_log_memory.items()
+                if ts < cutoff
+            ]
+            for key in stale_keys:
+                self._missed_log_memory.pop(key, None)
+        if len(self._missed_log_memory) > MISSED_LOG_DEDUPE_MAX_ITEMS:
+            oldest_key = min(
+                self._missed_log_memory.items(),
+                key=lambda item: item[1],
+            )[0]
+            self._missed_log_memory.pop(oldest_key, None)
+
+        return False
+
     def _reject_signature(self, signal, signal_side: str) -> Tuple[str, str, str, str, str, str, str, str, str]:
         meta = getattr(signal, "meta", None) or {}
         coin = self._coin_key(getattr(signal, "coin", ""))
@@ -1704,9 +1832,23 @@ class Executor:
     @staticmethod
     def _signal_market_regime(signal) -> str:
         meta = getattr(signal, "meta", None) or {}
+        for key in ("market_regime", "regime_htf_1h", "regime_macro_4h"):
+            if str(meta.get(key, "")).strip().lower() == "chop":
+                return "chop"
+        regime_text = str(getattr(signal, "regime", "")).strip().lower()
+        for token in regime_text.split("|"):
+            token = token.strip()
+            if token in {"chop", "mkt_chop", "htf_chop", "macro_chop"} or token.endswith("_chop"):
+                return "chop"
         tag = str(meta.get("market_regime", "unknown")).strip().lower()
         if tag in {"chop", "weak_trend", "strong_trend"}:
             return tag
+        for token in regime_text.split("|"):
+            token = token.strip()
+            if token in {"weak_trend", "mkt_weak_trend"}:
+                return "weak_trend"
+            if token in {"strong_trend", "mkt_strong_trend"}:
+                return "strong_trend"
         return "unknown"
 
     @staticmethod
@@ -2070,6 +2212,8 @@ class Executor:
 
     def _log_missed(self, signal, sig_id: int, reason: str):
         if not LOG_MISSED:
+            return
+        if self._should_skip_missed_log(signal, reason):
             return
 
         meta = signal.meta or {}
@@ -3248,22 +3392,16 @@ class Executor:
             stop_order_id = str(getattr(pos, "stop_order_id", "") or "-")
             tp_order_id = str(getattr(pos, "tp_order_id", "") or "-")
             msg = (
-                f"✂️ *{pos.coin} {pos.side} PARTIAL TP* 🔴 LIVE\n\n"
-                f"💰 Exit price: `{fill_price:.5g}`\n"
-                f"📥 Entry: `{pos.entry_price:.5g}`\n\n"
+                f"✂️ *Partial TP* `{pos.coin} {pos.side}`  🔴 LIVE\n\n"
+                f"Exit `{fill_price:.5g}` | Entry `{pos.entry_price:.5g}`\n"
+                f"Locked `{net_partial_r:+.2f}R` | P&L `${net_partial_usd:+.2f}`\n"
+                f"Closed `${closed_notional_usd:.0f}` ({close_frac_pct:.0f}%) | Runner `${remaining_notional_usd:.0f}`\n"
+                f"Stop `{pos.stop_price:.5g}` | Fees `${total_fees_usd:.2f}`\n\n"
                 f"```\n"
-                f"  R captured  : {net_partial_r:+.2f}R\n"
-                f"  P&L         : ${net_partial_usd:+.2f}\n"
-                f"  Closed      : ${closed_notional_usd:.0f} ({close_frac_pct:.0f}%)\n"
-                f"  Remaining   : ${remaining_notional_usd:.0f}\n"
-                f"  New stop    : {pos.stop_price:.5g}\n"
-                f"  Fees        : entry=${entry_fee_usd:.2f} exit=${exit_fees_usd:.2f} total=${total_fees_usd:.2f}\n"
-                f"  Protect     : {protection_status}\n"
-                f"  StopOID     : {stop_order_id}\n"
-                f"  TPOID       : {tp_order_id}\n"
+                f"protect {protection_status}\n"
+                f"id      {pos.position_id}\n"
+                f"time    {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
                 f"```\n"
-                f"🆔 `{pos.position_id}`\n"
-                f"🕒 `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}`"
             )
             self.notify(msg)
         except Exception as e:
@@ -3314,26 +3452,19 @@ class Executor:
                 label = reason.value.upper()
 
             msg = (
-                f"{title} *{pos.coin} {pos.side} {label}* 🔴 LIVE\n\n"
-                f"💰 Exit: `{fill_price:.5g}`\n"
-                f"📥 Entry: `{pos.entry_price:.5g}`\n\n"
+                f"{title} *Closed* `{pos.coin} {pos.side}`  `{label}`  🔴 LIVE\n\n"
+                f"R `{realized_r:+.2f}` | P&L `${pnl_usd:+.2f}` | Hold `{duration_str}`\n"
+                f"Exit `{fill_price:.5g}` | Entry `{pos.entry_price:.5g}` | Slip `{slip_bps:.1f}bps`\n\n"
                 f"```\n"
-                f"  Reason  : {reason.value}\n"
-                f"  Net R   : {realized_r:+.2f}R\n"
-                f"  P&L     : ${pnl_usd:+.2f}\n"
-                f"  Closed  : ${closed_size_usd:.0f} ({close_fraction_pct:.0f}%)\n"
-                f"  Original: ${original_size_usd:.0f}\n"
-                f"  Fees    : entry=${entry_fee_usd:.2f} exit=${exit_fees_usd:.2f} funding=${funding_usd:.2f} total=${total_fees_usd:.2f}\n"
-                f"  Source  : {source}\n"
-                f"  Wallet  : flat={wallet_flat} reconciled={reconciled}\n"
-                f"  Protect : {protection_status}\n"
-                f"  StopOID : {stop_order_id}\n"
-                f"  TPOID   : {tp_order_id}\n"
-                f"  Slip    : {slip_bps:.1f}bps\n"
-                f"  Hold    : {duration_str}\n"
+                f"reason  {reason.value}\n"
+                f"closed  ${closed_size_usd:.0f} ({close_fraction_pct:.0f}%) of ${original_size_usd:.0f}\n"
+                f"fees    ${total_fees_usd:.2f}  funding ${funding_usd:.2f}\n"
+                f"source  {source}\n"
+                f"wallet  flat={wallet_flat} reconciled={reconciled}\n"
+                f"protect {protection_status}\n"
+                f"id      {pos.position_id}\n"
+                f"time    {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
                 f"```\n"
-                f"🆔 `{pos.position_id}`\n"
-                f"🕒 `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}`"
             )
             self.notify(msg)
         except Exception as e:

@@ -62,6 +62,22 @@ def load_closed_trades(since_date: Optional[date] = None) -> List[Dict]:
 
 # ── Stats computation ──────────────────────────────────────────────────────────
 
+def _num(value, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _trade_net_r(trade: Dict) -> float:
+    gross_r = _num(trade.get("realized_r", 0.0))
+    r_value = _num(trade.get("r_value", 0.0))
+    fee_r = (_num(trade.get("total_fees_usd", 0.0)) / r_value) if r_value > 0 else 0.0
+    return gross_r - fee_r
+
+
 def compute_trade_stats(trades: List[Dict]) -> Dict:
     """
     Compute full P&L stats from a list of closed trade rows.
@@ -70,14 +86,16 @@ def compute_trade_stats(trades: List[Dict]) -> Dict:
         return {}
 
     total_trades = len(trades)
-    wins   = [t for t in trades if float(t.get("realized_r", 0)) > 0]
-    losses = [t for t in trades if float(t.get("realized_r", 0)) <= 0]
+    wins   = [t for t in trades if _trade_net_r(t) > 0]
+    losses = [t for t in trades if _trade_net_r(t) <= 0]
 
-    total_r   = sum(float(t.get("realized_r", 0)) for t in trades)
-    total_pnl = sum(float(t.get("pnl_usd",    0)) for t in trades)
+    total_r   = sum(_trade_net_r(t) for t in trades)
+    gross_r   = sum(_num(t.get("realized_r", 0.0)) for t in trades)
+    total_pnl = sum(_num(t.get("pnl_usd", 0.0)) for t in trades)
+    fees_usd  = sum(_num(t.get("total_fees_usd", 0.0)) for t in trades)
     win_rate  = len(wins) / total_trades * 100 if total_trades > 0 else 0.0
 
-    r_vals = [float(t.get("realized_r", 0)) for t in trades]
+    r_vals = [_trade_net_r(t) for t in trades]
     best  = max(r_vals) if r_vals else 0.0
     worst = min(r_vals) if r_vals else 0.0
 
@@ -97,8 +115,8 @@ def compute_trade_stats(trades: List[Dict]) -> Dict:
     coin_stats: Dict[str, Dict] = {}
     for t in trades:
         coin = t.get("coin", "?")
-        r    = float(t.get("realized_r", 0))
-        pnl  = float(t.get("pnl_usd",   0))
+        r    = _trade_net_r(t)
+        pnl  = _num(t.get("pnl_usd", 0.0))
         if coin not in coin_stats:
             coin_stats[coin] = {"n": 0, "wins": 0, "total_r": 0.0, "total_pnl": 0.0}
         coin_stats[coin]["n"]         += 1
@@ -108,8 +126,8 @@ def compute_trade_stats(trades: List[Dict]) -> Dict:
             coin_stats[coin]["wins"] += 1
 
     # Best and worst trade
-    best_trade  = max(trades, key=lambda t: float(t.get("realized_r", 0)))
-    worst_trade = min(trades, key=lambda t: float(t.get("realized_r", 0)))
+    best_trade  = max(trades, key=_trade_net_r)
+    worst_trade = min(trades, key=_trade_net_r)
 
     # Avg trade duration
     durations = []
@@ -130,7 +148,9 @@ def compute_trade_stats(trades: List[Dict]) -> Dict:
         "losses":           len(losses),
         "win_rate":         win_rate,
         "total_r":          total_r,
+        "gross_r":          gross_r,
         "total_pnl":        total_pnl,
+        "fees_usd":         fees_usd,
         "best_r":           best,
         "worst_r":          worst,
         "max_dd_r":         max_dd,
@@ -156,54 +176,47 @@ def _dur(minutes: float) -> str:
 def build_daily_recap(stats: Dict, trade_date: date) -> str:
     if not stats:
         return (
-            f"📋 *[PAPER] Daily Trade Recap — {trade_date}*\n\n"
+            f"📋 *Daily Trading Recap* `{trade_date}`\n\n"
             "_No closed trades today._"
         )
 
     total_r   = stats["total_r"]
     total_pnl = stats["total_pnl"]
-    pnl_emoji = "✅" if total_pnl >= 0 else "❌"
-    r_emoji   = "🟢" if total_r   >= 0 else "🔴"
+    pnl_emoji = "✅" if total_r >= 0 else "❌"
 
     lines = [
-        f"📋 *[PAPER] Daily Trade Recap — {trade_date}*",
+        f"📋 *Daily Trading Recap* `{trade_date}`",
         "",
         f"🕒 `{_utc_now_str()}`",
         "",
         "```",
-        f"  Trades      : {stats['total_trades']}  "
-        f"(W:{stats['wins']} / L:{stats['losses']})",
-        f"  Win rate    : {stats['win_rate']:.1f}%",
-        f"  Total R     : {total_r:+.2f}R",
-        f"  P&L (USD)   : ${total_pnl:+.2f}",
-        f"  Max DD      : {stats['max_dd_r']:.2f}R",
-        f"  Avg duration: {_dur(stats['avg_duration_min'])}",
+        f"trades  {stats['total_trades']}  W:{stats['wins']} L:{stats['losses']}  WR:{stats['win_rate']:.1f}%",
+        f"net     {total_r:+.2f}R  ${total_pnl:+.2f}",
+        f"fees    ${stats['fees_usd']:.2f}",
+        f"max_dd  {stats['max_dd_r']:.2f}R",
+        f"avg_hold {_dur(stats['avg_duration_min'])}",
         "",
-        f"  Best trade  : {float(stats['best_trade'].get('realized_r',0)):+.2f}R "
-        f"({stats['best_trade'].get('coin','?')} {stats['best_trade'].get('side','?')})",
-        f"  Worst trade : {float(stats['worst_trade'].get('realized_r',0)):+.2f}R "
-        f"({stats['worst_trade'].get('coin','?')} {stats['worst_trade'].get('side','?')})",
+        f"best    {stats['best_r']:+.2f}R  {stats['best_trade'].get('coin','?')} {stats['best_trade'].get('side','?')}",
+        f"worst   {stats['worst_r']:+.2f}R  {stats['worst_trade'].get('coin','?')} {stats['worst_trade'].get('side','?')}",
     ]
 
     # Per-coin rows (sorted by total_r)
     if stats["coin_stats"]:
         lines.append("")
-        lines.append("  By coin:")
+        lines.append("by_coin")
         sorted_coins = sorted(
             stats["coin_stats"].items(),
             key=lambda x: x[1]["total_r"],
             reverse=True
-        )
+        )[:5]
         for coin, cs in sorted_coins:
             wr = cs["wins"] / cs["n"] * 100 if cs["n"] > 0 else 0
             lines.append(
-                f"    {coin:<6}  {cs['total_r']:+.2f}R  "
-                f"${cs['total_pnl']:+.2f}  "
-                f"WR:{wr:.0f}%  n={cs['n']}"
+                f"{coin:<8} {cs['total_r']:+.2f}R  ${cs['total_pnl']:+.2f}  WR:{wr:.0f}% n={cs['n']}"
             )
 
     lines.append("```")
-    lines.append(f"{pnl_emoji} {r_emoji} Net: `{total_r:+.2f}R`  `${total_pnl:+.2f}`")
+    lines.append(f"{pnl_emoji} Net: `{total_r:+.2f}R`  `${total_pnl:+.2f}`")
 
     return "\n".join(lines)
 
@@ -216,7 +229,7 @@ def build_alltime_recap(
 ) -> str:
     if not stats_all:
         return (
-            "📊 *[PAPER] All-Time P&L Statement*\n\n"
+            "📊 *Trading Book Snapshot*\n\n"
             "_No closed trades yet._"
         )
 
@@ -230,41 +243,34 @@ def build_alltime_recap(
     today_pnl = stats_today.get("total_pnl", 0.0) if stats_today else 0.0
 
     lines = [
-        "📊 *[PAPER] All-Time P&L Statement*",
-        "",
-        f"🕒 `{_utc_now_str()}`",
+        "📊 *Trading Book Snapshot*",
         "",
         "```",
-        f"  Balance     : ${balance:.2f}  (start: ${starting_balance:.2f})",
-        f"  Total P&L   : ${total_pnl:+.2f}  ({pct_gain:+.1f}%)",
-        f"  Total R     : {total_r:+.2f}R",
+        f"balance ${balance:.2f}  start ${starting_balance:.2f}",
+        f"return  ${total_pnl:+.2f}  {pct_gain:+.1f}%",
+        f"net_r   {total_r:+.2f}R",
+        f"fees    ${stats_all['fees_usd']:.2f}",
         "",
-        f"  Trades      : {stats_all['total_trades']}  "
-        f"(W:{stats_all['wins']} / L:{stats_all['losses']})",
-        f"  Win rate    : {stats_all['win_rate']:.1f}%",
-        f"  Max DD      : {stats_all['max_dd_r']:.2f}R",
-        f"  Avg duration: {_dur(stats_all['avg_duration_min'])}",
+        f"trades  {stats_all['total_trades']}  W:{stats_all['wins']} L:{stats_all['losses']}  WR:{stats_all['win_rate']:.1f}%",
+        f"max_dd  {stats_all['max_dd_r']:.2f}R",
+        f"avg_hold {_dur(stats_all['avg_duration_min'])}",
         "",
-        f"  Today ({trade_date}):",
-        f"    R   : {today_r:+.2f}R",
-        f"    P&L : ${today_pnl:+.2f}",
+        f"today   {today_r:+.2f}R  ${today_pnl:+.2f}",
     ]
 
     # All-time coin breakdown
     if stats_all["coin_stats"]:
         lines.append("")
-        lines.append("  All-time by coin:")
+        lines.append("by_coin")
         sorted_coins = sorted(
             stats_all["coin_stats"].items(),
             key=lambda x: x[1]["total_r"],
             reverse=True
-        )
+        )[:6]
         for coin, cs in sorted_coins:
             wr = cs["wins"] / cs["n"] * 100 if cs["n"] > 0 else 0
             lines.append(
-                f"    {coin:<6}  {cs['total_r']:+.2f}R  "
-                f"${cs['total_pnl']:+.2f}  "
-                f"WR:{wr:.0f}%  n={cs['n']}"
+                f"{coin:<8} {cs['total_r']:+.2f}R  ${cs['total_pnl']:+.2f}  WR:{wr:.0f}% n={cs['n']}"
             )
 
     lines.append("```")
@@ -291,11 +297,11 @@ def run_trades_recap(notify_fn=None, starting_balance: float = 1000.0) -> str:
     daily_msg   = build_daily_recap(stats_today, today)
     alltime_msg = build_alltime_recap(stats_today, stats_all, today, starting_balance)
 
+    combined = f"{daily_msg}\n\n{alltime_msg}"
     if notify_fn:
-        notify_fn(daily_msg)
-        notify_fn(alltime_msg)
+        notify_fn(combined)
 
-    return f"{daily_msg}\n\n{alltime_msg}"
+    return combined
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────

@@ -124,6 +124,7 @@ SMC_SWING_MIN_CONFLUENCE_1H = int(os.getenv("SMC_SWING_MIN_CONFLUENCE_1H", "3"))
 SMC_ENABLE_4H_LIVE = os.getenv("SMC_ENABLE_4H_LIVE", "false").lower() == "true"
 SMC_4H_MIN_CONFIDENCE = float(os.getenv("SMC_4H_MIN_CONFIDENCE", "0.88"))
 SMC_4H_MIN_RR = float(os.getenv("SMC_4H_MIN_RR", "2.5"))
+SMC_4H_ATR_TP_MULT = float(os.getenv("SMC_4H_ATR_TP_MULT", "3.25"))
 SMC_4H_REQUIRE_OB_OR_SWEEP = (
     os.getenv("SMC_4H_REQUIRE_OB_OR_SWEEP", "true").lower() == "true"
 )
@@ -2140,6 +2141,7 @@ class AdaptiveSignalEngine:
         price: float,
         row: pd.Series,
         df: pd.DataFrame,
+        atr_tp_mult_override: Optional[float] = None,
     ) -> Tuple[Optional[float], Optional[float], float, float, float, Dict[str, Any]]:
         atr_val = float(row.get("atr_14", 0.0))
         stop_meta: Dict[str, Any] = {
@@ -2160,7 +2162,11 @@ class AdaptiveSignalEngine:
         recent_high = float(lookback["high"].max())
 
         stop_dist_atr = self.atr_stop_mult * atr_val
-        tp_dist_atr = self.atr_tp_mult * atr_val
+        tp_mult = self.atr_tp_mult
+        if atr_tp_mult_override is not None and atr_tp_mult_override > 0:
+            tp_mult = float(atr_tp_mult_override)
+
+        tp_dist_atr = tp_mult * atr_val
         stop_dist_min = price * self.min_stop_pct
         tp_dist_min = price * self.min_tp_pct
 
@@ -2226,6 +2232,8 @@ class AdaptiveSignalEngine:
             "ob_level": ob_level if ob_stop is not None else 0.0,
             "stop": stop,
             "stop_dist_atr": actual_stop_dist / atr_val if atr_val > 0 else 0.0,
+            "tp_dist_atr": tp_dist / atr_val if atr_val > 0 else 0.0,
+            "tp_mult": tp_mult,
             "ob_reject_reason": ob_reject_reason,
         })
 
@@ -2951,7 +2959,11 @@ class AdaptiveSignalEngine:
             return None
 
         stop, tp, atr_val, stop_dist, tp_dist, stop_meta = self._build_trade_levels(
-            side=side, price=price, row=row, df=df_feat,
+            side=side,
+            price=price,
+            row=row,
+            df=df_feat,
+            atr_tp_mult_override=SMC_4H_ATR_TP_MULT if swing_tf == "4h" else None,
         )
         if stop is None or tp is None:
             self._log_smc_candidate(
