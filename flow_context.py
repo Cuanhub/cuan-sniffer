@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 
 from db import FlowEvent
 from known_entities import is_known_entity
+from token_config import MIN_TOKEN_FLOW_USD
 
 # How long a computed snapshot is considered fresh before the next DB query.
 # Set to 0 to disable caching (always recompute).  Default: 30s — short enough
@@ -63,16 +64,16 @@ class FlowContext:
         """
         Fetch flow events for self.coin from DB since a given time, excluding
         known exchange/program wallets whose moves are routine operations.
+        Token coins also apply a USD minimum retroactively (SOL already pre-filtered
+        at write time by MIN_SOL_ALERT which converts to well above MIN_TOKEN_FLOW_USD).
         """
-        events = (
-            session.query(FlowEvent)
-            .filter(
-                FlowEvent.created_at >= since,
-                FlowEvent.coin == self.coin,
-            )
-            .order_by(FlowEvent.created_at.desc())
-            .all()
+        query = session.query(FlowEvent).filter(
+            FlowEvent.created_at >= since,
+            FlowEvent.coin == self.coin,
         )
+        if self.coin != "SOL":
+            query = query.filter(FlowEvent.usd_value >= MIN_TOKEN_FLOW_USD)
+        events = query.order_by(FlowEvent.created_at.desc()).all()
         return [ev for ev in events if not is_known_entity(ev.address)]
 
     # -----------------------------------------------------------
@@ -119,17 +120,36 @@ class FlowContext:
         finally:
             session.close()
 
-        # Flow momentum: short-window acceleration vs medium window
+        # Flow momentum: rate-based acceleration (per-minute), not absolute subtraction.
+        # Old formula subtracted absolute net_flow values — 30m window always dominated
+        # because it accumulates more volume. Rate normalisation makes windows comparable.
         try:
-            flow_momentum = snapshot["5m"]["net_flow"] - snapshot["30m"]["net_flow"]
+            rate_5m = snapshot["5m"]["net_flow"] / 5.0
+            rate_30m = snapshot["30m"]["net_flow"] / 30.0
+            flow_momentum = rate_5m - rate_30m  # positive = accelerating inflow
         except KeyError:
             flow_momentum = 0.0
 
-        # Whale pressure: imbalance weighted by distinct wallet count
+        # Whale pressure: volume-intensity weighted imbalance (self-calibrating).
+        # Old formula used wallet count as the amplifier — that boosted RETAIL signals
+        # (many small wallets) and underweighted institutional (few large wallets).
+        # New formula: compare 30m volume vs the average 30m-equivalent rate from the 2h
+        # window. If the current 30m is busier than the 2h baseline, intensity > 1.
         try:
             imbalance = snapshot["30m"]["imbalance"]
-            whales = snapshot["30m"]["whale_count"]
-            whale_pressure = imbalance * (1 + whales / 5)
+            total_30m = snapshot["30m"]["inflow"] + snapshot["30m"]["outflow"]
+            total_2h = (
+                snapshot.get("2h", {}).get("inflow", 0.0)
+                + snapshot.get("2h", {}).get("outflow", 0.0)
+            )
+            if total_2h > 0:
+                avg_rate_2h_per_30m = total_2h / 4.0
+                vol_intensity = min(total_30m / avg_rate_2h_per_30m, 5.0)
+            elif total_30m > 0:
+                vol_intensity = 1.0
+            else:
+                vol_intensity = 0.0
+            whale_pressure = imbalance * vol_intensity
         except KeyError:
             whale_pressure = 0.0
 

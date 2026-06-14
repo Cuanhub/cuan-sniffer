@@ -31,7 +31,7 @@ WATCHED_MINTS: frozenset = frozenset(v["mint"] for v in TOKEN_MINTS.values())
 # ── Alert threshold ───────────────────────────────────────────────────────────
 # Minimum USD value of a token move before it is recorded as a FlowEvent.
 # Equivalent to MIN_SOL_ALERT in engine.py but denominated in USD.
-MIN_TOKEN_FLOW_USD = float(os.getenv("MIN_TOKEN_FLOW_USD", "1000.0"))
+MIN_TOKEN_FLOW_USD = float(os.getenv("MIN_TOKEN_FLOW_USD", "5000.0"))
 
 # ── Price cache ───────────────────────────────────────────────────────────────
 _HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info"
