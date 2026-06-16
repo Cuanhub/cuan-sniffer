@@ -35,7 +35,7 @@ from smc_live_log import init_smc_live_log
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
 
-ENGINE_SCORE_THRESHOLD = float(os.getenv("MIN_SIGNAL_SCORE", "0.66"))
+ENGINE_SCORE_THRESHOLD = float(os.getenv("MIN_SIGNAL_SCORE", "0.72"))
 ENGINE_ATR_STOP_MULT = float(os.getenv("ENGINE_ATR_STOP_MULT", "1.3"))
 ENGINE_ATR_TP_MULT = float(os.getenv("ENGINE_ATR_TP_MULT", "4.0"))
 ENGINE_MIN_STOP_PCT = float(os.getenv("ENGINE_MIN_STOP_PCT", "0.004"))
@@ -62,8 +62,9 @@ if "SOL" not in TRACKED_COINS:
     TRACKED_COINS.insert(0, "SOL")
 
 WARMUP_BARS: Dict[str, int] = {
-    "SOL": 40, "ETH": 40, "BTC": 40,
+    "SOL": 40, "ETH": 40, "BTC": 40, "BNB": 40,
     "JUP": 30, "JTO": 30, "WIF": 25, "PYTH": 30,
+    "PENGU": 25, "SUI": 30, "NEAR": 30, "TAO": 30, "ZEC": 30,
 }
 DEFAULT_WARMUP = 30
 
@@ -128,6 +129,87 @@ def validate_env() -> bool:
         print("[ENV] ERROR: TRACKED_COINS is empty — nothing to scan")
         ok = False
     return ok
+
+
+def validate_thresholds() -> bool:
+    """
+    Print a unified threshold summary at startup and warn if any confidence gate
+    diverges from UNIVERSAL_MIN_CONFIDENCE. Returns True if all gates are aligned.
+    """
+    universal = float(os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
+
+    # Confidence gates — all should equal UNIVERSAL_MIN_CONFIDENCE unless intentionally overridden
+    conf_gates = {
+        "SWING_MIN_CONFIDENCE":        float(os.getenv("SWING_MIN_CONFIDENCE", str(universal))),
+        "SMC_4H_MIN_CONFIDENCE":       float(os.getenv("SMC_4H_MIN_CONFIDENCE", str(universal))),
+        "WEAK_TREND_MIN_CONFIDENCE":   float(os.getenv("WEAK_TREND_MIN_CONFIDENCE", str(universal))),
+        "CHOP_REVERSAL_MIN_CONFIDENCE":float(os.getenv("CHOP_REVERSAL_MIN_CONFIDENCE", str(universal))),
+        "MIN_SIGNAL_CONFIDENCE":       float(os.getenv("MIN_SIGNAL_CONFIDENCE", str(universal))),
+    }
+
+    score_thresholds = {
+        "REGIME_SCORE_THRESHOLD_STRONG": float(os.getenv("REGIME_SCORE_THRESHOLD_STRONG", "0.64")),
+        "REGIME_SCORE_THRESHOLD_WEAK":   float(os.getenv("REGIME_SCORE_THRESHOLD_WEAK",   "0.64")),
+        "REGIME_SCORE_THRESHOLD_CHOP":   float(os.getenv("REGIME_SCORE_THRESHOLD_CHOP",   "0.64")),
+    }
+
+    rr_gates = {
+        "MIN_STOP_REDESIGN_RR":       float(os.getenv("MIN_STOP_REDESIGN_RR", "1.60")),
+        "MIN_EXECUTION_EFFECTIVE_RR": float(os.getenv("MIN_EXECUTION_EFFECTIVE_RR", "1.55")),
+    }
+
+    feature_flags = {
+        "SMC_ENABLE_4H_LIVE":      os.getenv("SMC_ENABLE_4H_LIVE",      "true"),
+        "HARD_BLOCK_CONTINUATION": os.getenv("HARD_BLOCK_CONTINUATION", "false"),
+    }
+
+    sep = "─" * 58
+    print(f"\n[THRESHOLD SUMMARY] {sep}")
+    print(f"  UNIVERSAL_MIN_CONFIDENCE  = {universal:.2f}  ← master confidence floor")
+
+    print(f"  {sep}")
+    print("  CONFIDENCE GATES (should all match UNIVERSAL_MIN_CONFIDENCE):")
+    all_aligned = True
+    for name, val in conf_gates.items():
+        marker = ""
+        if abs(val - universal) > 1e-9:
+            marker = "  ← [THRESHOLD WARNING] diverges from universal"
+            all_aligned = False
+        print(f"    {name:<36} = {val:.2f}{marker}")
+
+    print(f"  {sep}")
+    print("  SCORE PRE-FILTERS (permissive — should all be ~0.64):")
+    for name, val in score_thresholds.items():
+        marker = ""
+        if abs(val - 0.64) > 0.001:
+            marker = "  ← [THRESHOLD WARNING] not unified at 0.64"
+            all_aligned = False
+        print(f"    {name:<36} = {val:.2f}{marker}")
+
+    print(f"  {sep}")
+    print("  RR GATES (simplified — should be 1.60 / 1.55):")
+    expected_rr = {"MIN_STOP_REDESIGN_RR": 1.60, "MIN_EXECUTION_EFFECTIVE_RR": 1.55}
+    for name, val in rr_gates.items():
+        marker = ""
+        if abs(val - expected_rr[name]) > 0.001:
+            marker = f"  ← [THRESHOLD WARNING] expected {expected_rr[name]:.2f}"
+            all_aligned = False
+        print(f"    {name:<36} = {val:.2f}{marker}")
+
+    print(f"  {sep}")
+    print("  FEATURE FLAGS:")
+    for name, val in feature_flags.items():
+        print(f"    {name:<36} = {val}")
+
+    print(f"[THRESHOLD SUMMARY] {sep}\n")
+
+    if not all_aligned:
+        print(
+            "[THRESHOLD WARNING] One or more thresholds diverge from the unified framework.\n"
+            "  Review .env and ensure intentional overrides are documented.\n"
+        )
+
+    return all_aligned
 
 
 def _mode_tag() -> str:
@@ -850,6 +932,8 @@ def main():
     if not validate_env():
         print("[AGENT] Invalid environment. Exiting.")
         return
+
+    validate_thresholds()
 
     init_db()
     init_signal_log()

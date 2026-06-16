@@ -1,279 +1,676 @@
-# 🚀 Cuan Sniffer — Live Execution Engine for Crypto Trading
+# 🚀 Cuan Sniffer — Institutional-Grade Crypto Execution Engine
 
 > **Not a signal bot. Not a toy backtester.**
-> Cuan Sniffer is a **live-capable, capital-aware execution system** designed to convert high-quality signals into disciplined, risk-controlled trades.
+>
+> Cuan Sniffer is a live-capable, capital-aware execution engine designed to identify asymmetric opportunities, deploy capital efficiently, and compound profitable edge through disciplined execution.
 
 ---
 
-## 🧠 Philosophy
+# 🧠 Core Philosophy
 
-Markets don’t pay for being early.
-They don’t pay for being active.
-They pay for **precision and discipline**.
+Markets do not reward activity.
 
-Cuan Sniffer is built on three principles:
+Markets do not reward prediction.
 
-* **Only take asymmetric trades** (high RR, strong structure)
-* **Protect capital above all else**
-* **Execute like a machine, not a trader**
+Markets reward:
 
----
+* Risk-adjusted decision making
+* Capital efficiency
+* Consistent execution
+* Surviving long enough for edge to compound
 
-## ⚙️ System Overview
+Cuan Sniffer is built around four principles:
 
-Cuan Sniffer is a **modular trading engine** composed of:
-
-* Signal Engine → Generates trade ideas
-* Executor → Validates & executes trades
-* Risk Manager → Controls capital exposure
-* Protection Layer → Ensures stop/TP integrity
-* Live Monitor → Reconciles real positions
-
-Everything flows through a **strict validation pipeline** before capital is deployed.
+1. Find asymmetric opportunities
+2. Execute with discipline
+3. Protect capital during adverse conditions
+4. Scale proven edge aggressively
 
 ---
 
-## 🧬 Execution Integrity (Core Edge)
+# 📍 Current System Status
 
-Cuan Sniffer enforces **execution-time discipline**, not just signal-time logic.
+## Post-Candle Integrity Era
 
-### 🔒 Hard Guarantees
+On 2026-06-16 the system underwent a full architecture audit and candle integrity rebuild.
 
-* **Execution-time RR validation**
-  Trades must meet minimum RR *at fill*, not just at signal
+Critical fixes included:
 
-* **TP-consumed rejection**
-  No entering trades where the move already happened
+* Open-time vs close-time candle correction
+* HTF regime contamination removal
+* Macro regime contamination removal
+* Daily zone contamination removal
+* 4H SMC signal path rewiring
+* Unified Threshold Framework implementation
+* Cross-layer threshold validation
+* Gate telemetry instrumentation
 
-* **ATR-based staleness filtering**
-  Rejects signals that drift too far from original setup
+Historical data collected before these fixes is archived and treated as legacy research data.
 
-* **Overextension guard**
-  Avoids chasing exhausted moves
-
-* **Fail-closed execution**
-  No trade executes without valid market data
-
-👉 Result: fewer trades, higher quality, cleaner equity curve
+All future optimization decisions should prioritize post-fix live data.
 
 ---
 
-## 💰 Portfolio-Aware Execution
+# 🔄 Current Development Phase
 
-Cuan Sniffer doesn’t just take trades — it **allocates capital intelligently**.
+## Phase 1 — Integrity (Complete ✅)
 
-### 🧠 Portfolio Logic
+Completed:
 
-* Max open positions enforced
-* Bucketed exposure (majors / SOL beta / alts)
-* Directional caps (long vs short)
-* Intraday vs swing separation
+* Candle timestamp audit
+* HTF contamination removal
+* Macro contamination removal
+* Daily zone contamination removal
+* Threshold unification
+* 4H SMC path validation
 
-### 🔄 Position Replacement
+## Phase 2 — Observability (Active 🔄)
 
-When full:
+The system now records:
 
-* Weakest position can be replaced
-* Stronger signals take priority
+* Engine rejections
+* Executor rejections
+* Score distributions
+* Trade outcomes
+* Missed opportunities
 
-Protected positions:
+Primary objective:
 
-* Partial profits locked
-* Trades in profit
-* Trades near TP
+Determine which filters improve expectancy versus which filters only reduce trade frequency.
 
-👉 Capital is always deployed to the **highest expected value opportunities**
+## Phase 3 — Profitability Optimization (Upcoming)
+
+Future optimization decisions will be based on:
+
+* Post-fix live data only
+* Gate rejection analytics
+* Walk-forward validation
+* Risk-adjusted returns
+* Execution quality metrics
+
+No parameter changes should be made without supporting telemetry evidence.
 
 ---
 
-## 📊 Risk Management
+# ⚙️ System Architecture
 
-Risk is defined in **R (risk units)**, not emotions.
+Cuan Sniffer is composed of multiple independent layers.
+
+```text
+Market Data
+    ↓
+Candle Integrity Layer
+    ↓
+Signal Engine
+    ↓
+Score Filter
+    ↓
+Confidence Model
+    ↓
+Executor Validation
+    ↓
+RR Validation
+    ↓
+Risk Manager
+    ↓
+Execution Engine
+    ↓
+Live Monitoring
+```
+
+Each layer has a single responsibility and can reject a trade candidate before capital is deployed.
+
+---
+
+# 🔬 Candle Integrity Layer
+
+The candle integrity layer exists to eliminate look-ahead bias and incomplete-bar contamination.
+
+### Guarantees
+
+* Uses candle open time as canonical timestamp
+* Tracks candle close time separately
+* Removes forming candles before signal generation
+* Removes incomplete HTF bars before regime calculation
+* Removes incomplete macro bars before trend analysis
+* Removes incomplete daily bars before zone classification
+
+### Validation
+
+The repository includes:
+
+```bash
+python3 test_candle_integrity.py
+```
+
+Current status:
+
+```text
+23 / 23 checks passing
+```
+
+No strategy changes should be evaluated until candle integrity remains green.
+
+---
+
+# 🧩 Signal Engine
+
+The signal engine identifies trade opportunities.
+
+Current strategy families:
+
+## Continuation
+
+Trend-following entries aligned with higher timeframe structure.
+
+## Reversal
+
+Liquidity-driven reversals following exhaustion or sweep conditions.
+
+## Multi-Timeframe Confluence
+
+Setups requiring alignment across:
+
+* Structure
+* Regime
+* Liquidity
+* Risk/Reward
+
+## 4H SMC Path
+
+Institutional-style Smart Money Concepts framework.
+
+Requires:
+
+* Order block interaction
+* Liquidity sweep or displacement
+* HTF alignment
+* Macro alignment
+* Minimum confluence score
+
+---
+
+# 🎯 Signal Quality Pipeline
+
+Every signal passes through a strict validation process.
+
+```text
+Setup Detected
+      ↓
+Structure Valid
+      ↓
+Score Threshold
+      ↓
+Confidence Model
+      ↓
+RR Validation
+      ↓
+Executor Validation
+      ↓
+Risk Validation
+      ↓
+Trade Opened
+```
+
+Signals can be rejected at any stage.
+
+Rejection is treated as valuable information rather than failure.
+
+---
+
+# 📊 Unified Threshold Framework
+
+Implemented after the candle integrity rebuild.
+
+The objective is to eliminate hidden threshold divergence between components.
+
+## Master Confidence Floor
+
+```env
+UNIVERSAL_MIN_CONFIDENCE=0.90
+```
+
+Single source of truth for all confidence gates.
+
+Inherited by:
+
+```env
+MIN_SIGNAL_CONFIDENCE
+SWING_MIN_CONFIDENCE
+SMC_4H_MIN_CONFIDENCE
+WEAK_TREND_MIN_CONFIDENCE
+CHOP_REVERSAL_MIN_CONFIDENCE
+```
+
+## Score Thresholds
+
+```env
+REGIME_SCORE_THRESHOLD_STRONG=0.64
+REGIME_SCORE_THRESHOLD_WEAK=0.64
+REGIME_SCORE_THRESHOLD_CHOP=0.64
+```
+
+Purpose:
+
+Remove structurally poor setups before confidence evaluation.
+
+Score is intentionally permissive.
+
+Confidence is the primary quality gate.
+
+## Risk / Reward Floors
+
+Signal generation:
+
+```env
+MIN_STOP_REDESIGN_RR=1.60
+```
+
+Execution:
+
+```env
+MIN_EXECUTION_EFFECTIVE_RR=1.55
+```
+
+This allows minor fill drift while preserving expectancy.
+
+---
+
+# 🏛 4H Institutional SMC Framework
+
+4H SMC remains enabled.
+
+```env
+SMC_ENABLE_4H_LIVE=true
+```
+
+The system intentionally favors quality over frequency on the 4H path.
+
+Requirements:
+
+* Order Block interaction
+* Liquidity sweep
+* HTF confirmation
+* Macro confirmation
+* Confidence threshold
+* RR threshold
+
+The previous 0% win-rate observations occurred during the pre-fix candle era and are no longer considered valid evidence.
+
+---
+
+# 💰 Portfolio-Aware Execution
+
+Capital is allocated at the portfolio level.
+
+The system evaluates:
+
+* Open positions
+* Directional exposure
+* Sector exposure
+* Available risk budget
 
 ### Controls
 
-* Fixed % risk per trade
-* Daily loss limit (R-based)
-* Max drawdown halt
+* Maximum open positions
+* Directional caps
+* Bucket exposure controls
+* Dynamic replacement logic
+
+When capital is fully allocated:
+
+The weakest position may be replaced by a stronger opportunity.
+
+---
+
+# 📈 Risk Management
+
+Risk is measured in R.
+
+Not dollars.
+
+Not emotions.
+
+### Controls
+
+* Fixed risk per trade
+* Daily loss limits
+* Drawdown limits
 * Confidence-weighted sizing
-* Track-based risk (intraday vs swing)
+* Position concentration controls
 
 ### Live Capital Sync
 
-* Balance derived from **exchange equity**
-* Wallet = source of truth
-* Automatic recovery after restart
+Exchange equity is the source of truth.
 
-👉 No drift between model and reality
+The system automatically reconciles:
 
----
-
-## 🎯 Trade Lifecycle
-
-Cuan Sniffer uses a **structured profit-taking model**.
-
-### Default Model
-
-* Partial close at **+1R**
-* Stop moves to **breakeven**
-* Remaining position runs to TP
-
-### Optional Modes
-
-* Full TP mode (no partials)
-* Runner-based exits
-
-👉 Wins are protected, runners capture upside
+* Position state
+* Wallet state
+* Open orders
+* Available margin
 
 ---
 
-## 🛡️ Protection Layer
+# 🎯 Trade Lifecycle
 
-Every position is protected at the venue level.
+Default trade management:
 
-* Native stop-loss placement
-* Native take-profit placement
-* Auto-repair on missing protection
-* Continuous protection auditing
+```text
+Entry
+ ↓
++1R Partial
+ ↓
+Stop to Breakeven
+ ↓
+Runner Management
+ ↓
+Final Exit
+```
 
-> The exchange is treated as the **final authority** for all positions.
+Objectives:
+
+* Protect capital
+* Lock gains
+* Allow outlier winners
 
 ---
 
-## 🔄 Live Position Reconciliation
+# 🛡 Protection Layer
 
-Cuan Sniffer is built for real-world conditions:
+Every position is protected at the exchange level.
 
-* Detects positions closed outside the bot
-* Handles restarts without losing state
-* Re-syncs with wallet automatically
+### Guarantees
 
-👉 No phantom positions. No desync risk.
+* Native stop-loss
+* Native take-profit
+* Protection verification
+* Missing-order repair
+* Continuous auditing
+
+The exchange is treated as the final authority.
 
 ---
 
-## ⚡ Execution Engine
+# ⚡ Execution Engine
 
-Designed for **real fills, not theory**.
+Designed for real fills.
+
+Not backtest fills.
+
+### Features
 
 * Slippage-aware execution
-* Partial fill handling
-* Order lifecycle tracking
-* Retry logic for edge cases
+* Partial-fill handling
+* Order lifecycle management
+* Retry logic
+* Fill verification
+* Position reconciliation
 
 ---
 
-## 🧪 Modes
+# 🔄 Live Monitoring
 
-### PAPER MODE
+The system continuously validates:
 
-* Simulated execution
-* Full logic testing
+* Position state
+* Open orders
+* Risk state
+* Equity state
+* Protection integrity
 
-### LIVE MODE
+Supports:
 
-* Real capital
-* Venue-integrated execution
-* Wallet-authoritative state
-
----
-
-## 🌐 Web3 Native Considerations
-
-This system is built with **crypto-native realities** in mind:
-
-* Volatility is a feature, not a bug
-* Liquidity can disappear instantly
-* Execution matters more than signals
-* Wallet state > local state
-
-Or simply:
-
-> **Don’t trust your bot. Trust the chain.**
+* Restarts
+* Exchange disconnects
+* State recovery
 
 ---
 
-## 🧩 Strategy Layer (Pluggable)
+# 📡 Observability Layer
 
-Cuan Sniffer is **strategy-agnostic**.
+Optimization is evidence-driven.
 
-Current signal types:
+Not opinion-driven.
 
-* Continuation setups
-* Reversal setups
-* Multi-timeframe confluence
+The system tracks:
 
-Future-ready for:
+## Trade Data
 
-* On-chain signals
-* Liquidity flows
-* AI-driven strategies
+```text
+trades.csv
+orders.csv
+```
+
+## Signal Data
+
+```text
+signals.csv
+missed_signals.csv
+```
+
+## Engine Telemetry
+
+```text
+gate_rejects.csv
+score_distribution.csv
+```
+
+## Execution Telemetry
+
+```text
+executor_rejects.csv
+```
+
+These datasets allow the team to answer:
+
+* Why did a trade execute?
+* Why did a trade not execute?
+* Which gate rejects most opportunities?
+* Which filters improve expectancy?
+* Which filters only reduce volume?
 
 ---
 
-## 📈 Metrics That Matter
+# 🔍 Gate Analytics
+
+The system includes rejection-path telemetry and audit tooling.
+
+Run:
+
+```bash
+python audit_gate_rejections.py
+```
+
+Available modes:
+
+```bash
+python audit_gate_rejections.py
+python audit_gate_rejections.py --hours 24
+python audit_gate_rejections.py --gate-only
+python audit_gate_rejections.py --executor-only
+```
+
+The objective is to identify:
+
+* Dominant rejection paths
+* Confidence bottlenecks
+* Score bottlenecks
+* RR bottlenecks
+* Session bottlenecks
+* Structural bottlenecks
+
+Future threshold changes should be justified by telemetry rather than intuition.
+
+---
+
+# 🔬 Research Methodology
+
+The system is developed using evidence-first research.
+
+Evaluation sources:
+
+* Live trades
+* Missed trades
+* Gate rejection analysis
+* Walk-forward validation
+* Expectancy analysis
+* Risk-adjusted returns
+
+The objective is not finding the best historical parameter.
+
+The objective is finding robust parameter zones that survive future market conditions.
+
+---
+
+# 📊 Primary Success Metrics
 
 The system optimizes for:
 
-* Expectancy (R-based)
-* Drawdown control
-* Capital efficiency
-* Execution quality
+## Expectancy
 
-Not vanity metrics.
+Average R per trade.
+
+## Profit Factor
+
+Gross wins divided by gross losses.
+
+## Drawdown
+
+Maximum capital decline.
+
+## Capital Efficiency
+
+Return per unit of deployed risk.
+
+## Execution Quality
+
+How closely fills match modeled assumptions.
 
 ---
 
-## 🛠️ Configuration
+# 🧪 Operating Modes
 
-Fully environment-driven via `.env`
+## LIVE MODE
 
-Key controls:
+Primary operating mode.
 
-* Risk per trade
+Real capital.
+
+Real fills.
+
+Real risk.
+
+## PAPER MODE
+
+Available for development and infrastructure testing.
+
+Production research prioritizes live observations whenever practical.
+
+---
+
+# ⚙️ Configuration
+
+All behavior is controlled via:
+
+```env
+.env
+```
+
+Key categories:
+
+* Risk controls
 * Position limits
-* Slippage thresholds
-* Session filters
-* Execution tuning
+* Confidence thresholds
+* RR thresholds
+* Session logic
+* Execution controls
+* SMC controls
 
-👉 No hardcoded behavior. Everything is adjustable.
+See:
+
+```text
+.env.example
+RUNBOOK.md
+```
+
+for complete reference.
 
 ---
 
-## 🚀 Deployment
+# 🚀 Deployment
 
-Typical flow:
+Typical startup sequence:
 
 ```bash
 git pull
+
 pip install -r requirements.txt
+
+python3 test_candle_integrity.py
+
+python3 test_unified_thresholds.py
+
 python main.py
 ```
 
-Runs continuously as a live trading agent.
+Recommended workflow:
+
+1. Pull latest code
+2. Run integrity tests
+3. Run threshold tests
+4. Verify configuration
+5. Start engine
 
 ---
 
-## ⚠️ Disclaimer
+# 🏷 Current Baseline
 
-This is a **live trading system**.
+Current research baseline:
+
+```text
+telemetry-baseline-v1
+```
+
+This tag represents:
+
+* Candle integrity fixed
+* HTF contamination removed
+* Macro contamination removed
+* Daily zone contamination removed
+* Threshold framework unified
+* 4H SMC enabled
+* Telemetry instrumentation installed
+
+Future research should compare against this baseline.
+
+---
+
+# ⚠️ Disclaimer
+
+This is a live trading system.
 
 * Losses will occur
+* Markets evolve
+* Edge decays
 * Misconfiguration can be costly
-* Always test before deploying capital
+
+Risk management exists because uncertainty is permanent.
 
 ---
 
-## 🧠 Final Note
+# 🧠 Final Note
 
-Cuan Sniffer is not trying to predict the market.
+Cuan Sniffer is not attempting to predict the future.
 
-It is designed to:
+Its purpose is to identify favorable risk/reward situations, deploy capital efficiently, and compound edge while preserving survivability.
 
-> **Execute only when the odds are already in your favor — and survive when they’re not.**
+The goal is simple:
+
+> Find edge. Deploy capital. Compound intelligently.
 
 ---
 
-## 🪙 Tagline
+# 🪙 Tagline
 
-**Trade less. Execute better. Survive longer.**
+**Capture asymmetric moves. Scale winning systems. Protect capital while compounding.**

@@ -13,15 +13,19 @@ Changes vs prior version:
   causing the executor's live-price check to see a large spurious gap.
 - Required column names preserved as atr_14, rsi_14, vwap_dev, body_pct.
 - _build_feature_frame correctly indented as a class method.
-- Regime helpers receive full df_ohlcv — one forming 15m candle is negligible
-  on resampled 1h/4h data.
+- Regime helpers internally drop the forming 1H candle and the last resampled
+  bar to guarantee all HTF/macro/daily context uses only closed bars.
 """
 
 from dataclasses import dataclass
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
 
+import csv
 import os
+import threading
+
 import pandas as pd
 
 from features import add_features
@@ -30,6 +34,117 @@ from smc_zones import add_smc_zones
 from smc_sweeps import add_sweep_features
 from perp_sentiment import PerpSentimentSnapshot
 from smc_live_log import append_smc_live_event
+
+# ── Gate telemetry ────────────────────────────────────────────────────────────
+# All logging functions are try/except-wrapped — they must never crash the engine.
+
+GATE_REJECTS_PATH = os.getenv("GATE_REJECTS_PATH", "gate_rejects.csv")
+SCORE_DIST_PATH = os.getenv("SCORE_DIST_PATH", "score_distribution.csv")
+
+_GATE_REJECT_LOCK = threading.Lock()
+_SCORE_DIST_LOCK = threading.Lock()
+
+_GATE_REJECT_FIELDS = [
+    "timestamp", "symbol", "timeframe", "side", "reject_reason",
+    "raw_score", "threshold", "confidence", "rr",
+    "market_regime", "htf_regime", "macro_regime", "session",
+    "setup_family", "atr", "price", "metadata",
+]
+_SCORE_DIST_FIELDS = [
+    "timestamp", "symbol", "timeframe", "side", "score", "threshold",
+    "confidence", "rr", "setup_family", "market_regime", "htf_regime", "macro_regime",
+]
+
+
+def _telemetry_ensure_csv(path: str, fields: list) -> None:
+    if not os.path.exists(path):
+        with open(path, "w", newline="") as fh:
+            csv.DictWriter(fh, fieldnames=fields).writeheader()
+
+
+def log_gate_reject(
+    *,
+    symbol: str,
+    timeframe: str = "1h",
+    side: str = "",
+    reject_reason: str,
+    raw_score: float = 0.0,
+    threshold: float = 0.0,
+    confidence: float = 0.0,
+    rr: float = 0.0,
+    market_regime: str = "",
+    htf_regime: str = "",
+    macro_regime: str = "",
+    session: str = "",
+    setup_family: str = "",
+    atr: float = 0.0,
+    price: float = 0.0,
+    metadata: str = "",
+) -> None:
+    try:
+        row = {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "side": side,
+            "reject_reason": reject_reason,
+            "raw_score": round(float(raw_score), 4),
+            "threshold": round(float(threshold), 4),
+            "confidence": round(float(confidence), 4),
+            "rr": round(float(rr), 4),
+            "market_regime": market_regime,
+            "htf_regime": htf_regime,
+            "macro_regime": macro_regime,
+            "session": session,
+            "setup_family": setup_family,
+            "atr": round(float(atr), 8),
+            "price": round(float(price), 6),
+            "metadata": metadata,
+        }
+        with _GATE_REJECT_LOCK:
+            _telemetry_ensure_csv(GATE_REJECTS_PATH, _GATE_REJECT_FIELDS)
+            with open(GATE_REJECTS_PATH, "a", newline="") as fh:
+                csv.DictWriter(fh, fieldnames=_GATE_REJECT_FIELDS).writerow(row)
+    except Exception:
+        pass
+
+
+def log_score_candidate(
+    *,
+    symbol: str,
+    timeframe: str = "1h",
+    side: str = "",
+    score: float,
+    threshold: float,
+    rr: float = 0.0,
+    setup_family: str = "",
+    market_regime: str = "",
+    htf_regime: str = "",
+    macro_regime: str = "",
+) -> None:
+    try:
+        confidence = round(min(0.95, max(0.50, float(score))), 4)
+        row = {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "side": side,
+            "score": round(float(score), 4),
+            "threshold": round(float(threshold), 4),
+            "confidence": confidence,
+            "rr": round(float(rr), 4),
+            "setup_family": setup_family,
+            "market_regime": market_regime,
+            "htf_regime": htf_regime,
+            "macro_regime": macro_regime,
+        }
+        with _SCORE_DIST_LOCK:
+            _telemetry_ensure_csv(SCORE_DIST_PATH, _SCORE_DIST_FIELDS)
+            with open(SCORE_DIST_PATH, "a", newline="") as fh:
+                csv.DictWriter(fh, fieldnames=_SCORE_DIST_FIELDS).writerow(row)
+    except Exception:
+        pass
+
 
 # ── Market regime classification (signal-time) ───────────────────────────────
 MARKET_REGIME_LOOKBACK = int(os.getenv("MARKET_REGIME_LOOKBACK", "30"))
@@ -102,11 +217,19 @@ DAILY_ZONE_ALIGNED_BONUS = float(os.getenv("DAILY_ZONE_ALIGNED_BONUS", "0.10"))
 DAILY_ZONE_OPPOSED_PENALTY = -abs(float(os.getenv("DAILY_ZONE_OPPOSED_PENALTY", "0.12")))
 DAILY_ZONE_EXTREME_BONUS = float(os.getenv("DAILY_ZONE_EXTREME_BONUS", "0.05"))
 
+# ── Unified Threshold Framework ───────────────────────────────────────────────
+# UNIVERSAL_MIN_CONFIDENCE is the single confidence quality gate. All per-gate
+# confidence defaults fall back to this value. Set in .env; default 0.90.
+UNIVERSAL_MIN_CONFIDENCE = float(os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
+
 # ── Signal gating / dedup tuning ─────────────────────────────────────────────
 LOW_VOL_SCORE_PENALTY = -abs(float(os.getenv("LOW_VOL_SCORE_PENALTY", "-0.05")))
+# Score thresholds are permissive pre-filters — NOT quality gates.
+# The confidence gate (UNIVERSAL_MIN_CONFIDENCE) does the quality work.
+# All three thresholds unified at 0.64 to eliminate regime-specific divergence.
 REGIME_SCORE_THRESHOLD_STRONG = float(os.getenv("REGIME_SCORE_THRESHOLD_STRONG", "0.64"))
-REGIME_SCORE_THRESHOLD_WEAK = float(os.getenv("REGIME_SCORE_THRESHOLD_WEAK", "0.66"))
-REGIME_SCORE_THRESHOLD_CHOP = float(os.getenv("REGIME_SCORE_THRESHOLD_CHOP", "0.69"))
+REGIME_SCORE_THRESHOLD_WEAK = float(os.getenv("REGIME_SCORE_THRESHOLD_WEAK", "0.64"))
+REGIME_SCORE_THRESHOLD_CHOP = float(os.getenv("REGIME_SCORE_THRESHOLD_CHOP", "0.64"))
 
 DEDUP_ANTI_SPAM_FLOOR_SEC = int(os.getenv("DEDUP_ANTI_SPAM_FLOOR_SEC", "60"))
 DEDUP_PRICE_MOVE_ATR_MULT = float(os.getenv("DEDUP_PRICE_MOVE_ATR_MULT", "0.50"))
@@ -120,15 +243,24 @@ SMC_OB_STOP_MAX_ATR = float(os.getenv("SMC_OB_STOP_MAX_ATR", "2.50"))
 SMC_SWING_NEAR_ZONE_ATR = float(os.getenv("SMC_SWING_NEAR_ZONE_ATR", "0.75"))
 SMC_SWING_MIN_CONFLUENCE_1H = int(os.getenv("SMC_SWING_MIN_CONFLUENCE_1H", "3"))
 
-# 4H remains off unless explicitly enabled and still must pass executor hard-blocks.
-SMC_ENABLE_4H_LIVE = os.getenv("SMC_ENABLE_4H_LIVE", "false").lower() == "true"
-SMC_4H_MIN_CONFIDENCE = float(os.getenv("SMC_4H_MIN_CONFIDENCE", "0.88"))
+# 4H re-enabled post-candle-fix. Architecture is now structurally sound (closed-bar
+# resampling, no look-ahead in regime/daily zone). Default mirrors UNIVERSAL_MIN_CONFIDENCE.
+SMC_ENABLE_4H_LIVE = os.getenv("SMC_ENABLE_4H_LIVE", "true").lower() == "true"
+SMC_4H_MIN_CONFIDENCE = float(
+    os.getenv("SMC_4H_MIN_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
+)
 SMC_4H_MIN_RR = float(os.getenv("SMC_4H_MIN_RR", "2.5"))
 SMC_4H_ATR_TP_MULT = float(os.getenv("SMC_4H_ATR_TP_MULT", "3.25"))
 SMC_4H_REQUIRE_OB_OR_SWEEP = (
     os.getenv("SMC_4H_REQUIRE_OB_OR_SWEEP", "true").lower() == "true"
 )
 SMC_4H_MIN_CONFLUENCE = int(os.getenv("SMC_4H_MIN_CONFLUENCE", "4"))
+
+# ── Engine-level RR floor (mirrors executor MIN_STOP_REDESIGN_RR) ─────────────
+# Used to reject/adjust trade levels before the signal even reaches the executor.
+# Must stay in sync with executor MIN_STOP_REDESIGN_RR to avoid silent divergence.
+ENGINE_MIN_RR_FLOOR = float(os.getenv("MIN_STOP_REDESIGN_RR", "1.60"))
+ENGINE_MIN_RR_TOLERANCE = float(os.getenv("STOP_REDESIGN_RR_TOLERANCE", "0.05"))
 
 
 @dataclass
@@ -460,7 +592,12 @@ class AdaptiveSignalEngine:
         """
         Receives full df_ohlcv (1H bars with 1H feed).
         Regime uses resampled 4H bars — HTF context for 1H signal generation.
-        With 400×1H bars we get ~100 bars of 4H, giving clean EMA10/30 trend.
+        With 400×1H bars we get ~98 closed bars of 4H, giving clean EMA10/30 trend.
+
+        Candle policy (two layers):
+          1. Drop the last 1H row before resampling — always the forming candle.
+          2. Drop the last 4H bar after resampling — the currently forming 4H period
+             which may contain fewer than 4 closed 1H bars.
         """
         notes: List[str] = []
 
@@ -468,6 +605,10 @@ class AdaptiveSignalEngine:
             return "unknown", ["htf_no_data"]
 
         df_raw = df_ohlcv.copy()
+
+        # Layer 1: remove the forming 1H candle (always the last row).
+        if len(df_raw) > 1:
+            df_raw = df_raw.iloc[:-1]
 
         if "time" in df_raw.columns:
             df_raw["time"] = pd.to_datetime(df_raw["time"])
@@ -491,6 +632,10 @@ class AdaptiveSignalEngine:
             if self.debug:
                 print("[HTF_REGIME_DEBUG] Resample 4h failed: " + str(e))
             return "unknown", ["htf_resample_error"]
+
+        # Layer 2: remove the last 4H bar — the currently forming 4H period.
+        if len(df_4h) > 1:
+            df_4h = df_4h.iloc[:-1]
 
         if len(df_4h) < 10:
             return "unknown", ["htf_insufficient_bars"]
@@ -532,8 +677,12 @@ class AdaptiveSignalEngine:
         """
         Receives full df_ohlcv (1H bars with 1H feed).
         Regime uses resampled 1D bars — daily macro trend context.
-        With 400×1H bars we get ~16 daily bars; EMA5/10 is appropriate.
+        With 400×1H bars we get ~15 closed daily bars; EMA5/10 is appropriate.
         Shorter EMA spans than htf (4H) since daily bars are fewer.
+
+        Candle policy (two layers):
+          1. Drop the last 1H row before resampling — always the forming candle.
+          2. Drop the last 1D bar after resampling — the current incomplete day.
         """
         notes: List[str] = []
 
@@ -541,6 +690,10 @@ class AdaptiveSignalEngine:
             return "unknown", ["macro_no_data"]
 
         df_raw = df_ohlcv.copy()
+
+        # Layer 1: remove the forming 1H candle (always the last row).
+        if len(df_raw) > 1:
+            df_raw = df_raw.iloc[:-1]
 
         if "time" in df_raw.columns:
             df_raw["time"] = pd.to_datetime(df_raw["time"])
@@ -564,6 +717,10 @@ class AdaptiveSignalEngine:
             if self.debug:
                 print("[MACRO_REGIME_DEBUG] Resample 1D failed: " + str(e))
             return "unknown", ["macro_resample_error"]
+
+        # Layer 2: remove the last 1D bar — the currently forming (incomplete) day.
+        if len(df_1d) > 1:
+            df_1d = df_1d.iloc[:-1]
 
         if len(df_1d) < 8:
             return "unknown", ["macro_insufficient_bars"]
@@ -610,11 +767,17 @@ class AdaptiveSignalEngine:
         the range = premium (SHORT bias).  Price below DAILY_ZONE_DISCOUNT_THRESHOLD
         = discount (LONG bias).  Signals taken against the zone are penalised.
 
-        With 400×1H bars the feed provides ~16 daily bars — sufficient to
+        With 400×1H bars the feed provides ~15 closed daily bars — sufficient to
         define the meaningful swing range and trend direction.
 
         Returns a dict with keys: zone, zone_pct, trend, swing_high, swing_low.
         Returns {"zone": "unknown"} on insufficient data.
+
+        Candle policy (two layers):
+          1. Drop the last 1H row before resampling — always the forming candle.
+          2. Drop the last 1D bar after resampling — the current incomplete day.
+             Including today's intraday high/low in the swing range introduces
+             look-ahead bias into premium/discount zone classification.
         """
         empty: Dict[str, Any] = {"zone": "unknown", "zone_pct": 0.5, "trend": "unknown"}
 
@@ -622,6 +785,11 @@ class AdaptiveSignalEngine:
             return empty
 
         df_raw = df_ohlcv.copy()
+
+        # Layer 1: remove the forming 1H candle (always the last row).
+        if len(df_raw) > 1:
+            df_raw = df_raw.iloc[:-1]
+
         if "time" in df_raw.columns:
             df_raw["time"] = pd.to_datetime(df_raw["time"])
             df_raw = df_raw.set_index("time")
@@ -642,6 +810,10 @@ class AdaptiveSignalEngine:
             )
         except Exception:
             return empty
+
+        # Layer 2: remove the last 1D bar — the currently forming (incomplete) day.
+        if len(df_1d) > 1:
+            df_1d = df_1d.iloc[:-1]
 
         if len(df_1d) < 5:
             return empty
@@ -2314,7 +2486,7 @@ class AdaptiveSignalEngine:
             "ob_reject_reason": ob_reject_reason,
         })
 
-        if tp_dist / actual_stop_dist < 1.8:
+        if tp_dist / actual_stop_dist < ENGINE_MIN_RR_FLOOR:
             tp_dist = actual_stop_dist * 2.0
             tp = price + tp_dist if side == "LONG" else price - tp_dist
 
@@ -2418,6 +2590,13 @@ class AdaptiveSignalEngine:
             )
             if self.debug:
                 print("[SIGNAL_DEBUG] Quality blocked: " + ", ".join(quality_notes))
+            log_gate_reject(
+                symbol=coin, timeframe="1h", side="",
+                reject_reason="quality_block:" + "|".join(quality_notes),
+                price=price, atr=float(row.get("atr_14", 0.0)),
+                market_regime=market_regime, htf_regime=htf_regime,
+                macro_regime=macro_regime, session=session_label,
+            )
             return None
 
         cont_side, cont_score, cont_notes = self._build_continuation_signal(
@@ -2475,6 +2654,29 @@ class AdaptiveSignalEngine:
                 )
                 if self.debug:
                     print("[SIGNAL_DEBUG] No valid setup family.")
+                _all_builder_notes = (
+                    (cont_notes or []) + (rev_notes or []) + (fb_notes or [])
+                )
+                _specific_reason = next(
+                    (
+                        n for n in _all_builder_notes
+                        if isinstance(n, str) and any(
+                            n.startswith(pfx) for pfx in (
+                                "continuation_blocked_", "reversal_blocked_",
+                                "fallback_continuation_blocked_",
+                            )
+                        )
+                    ),
+                    "no_valid_setup_family",
+                )
+                log_gate_reject(
+                    symbol=coin, timeframe="1h", side="",
+                    reject_reason=_specific_reason,
+                    price=price, atr=float(row.get("atr_14", 0.0)),
+                    market_regime=market_regime, htf_regime=htf_regime,
+                    macro_regime=macro_regime, session=session_label,
+                    metadata="|".join(str(n) for n in _all_builder_notes[:5]),
+                )
                 return None
             chosen_side, chosen_score, chosen_notes, setup_family = (
                 fb_side,
@@ -2534,6 +2736,14 @@ class AdaptiveSignalEngine:
                 f" | reasons={chosen_notes}"
             )
 
+        # Log every scored candidate to score_distribution.csv before the gate.
+        log_score_candidate(
+            symbol=coin, timeframe="1h", side=chosen_side,
+            score=chosen_score, threshold=effective_threshold,
+            setup_family=setup_family,
+            market_regime=market_regime, htf_regime=htf_regime, macro_regime=macro_regime,
+        )
+
         if abs(chosen_score) < effective_threshold:
             self._log_smc_candidate(
                 coin=coin,
@@ -2553,6 +2763,15 @@ class AdaptiveSignalEngine:
             if self.debug:
                 print("[SIGNAL_DEBUG] score=" + str(round(chosen_score, 3)) +
                       " < threshold=" + str(round(effective_threshold, 3)))
+            log_gate_reject(
+                symbol=coin, timeframe="1h", side=chosen_side,
+                reject_reason=f"score_below_threshold:{chosen_score:.3f}<{effective_threshold:.3f}",
+                raw_score=chosen_score, threshold=effective_threshold,
+                price=price, atr=float(row.get("atr_14", 0.0)),
+                market_regime=market_regime, htf_regime=htf_regime,
+                macro_regime=macro_regime, session=session_label,
+                setup_family=setup_family,
+            )
             return None
 
         stop, tp, atr_val, stop_dist, tp_dist, stop_meta = self._build_trade_levels(
@@ -2579,11 +2798,21 @@ class AdaptiveSignalEngine:
             )
             if self.debug:
                 print("[SIGNAL_DEBUG] Could not build valid trade levels.")
+            log_gate_reject(
+                symbol=coin, timeframe="1h", side=chosen_side,
+                reject_reason="invalid_trade_levels",
+                raw_score=chosen_score,
+                price=price, atr=float(row.get("atr_14", 0.0)),
+                market_regime=market_regime, htf_regime=htf_regime,
+                macro_regime=macro_regime, session=session_label,
+                setup_family=setup_family,
+                metadata=stop_meta.get("ob_reject_reason", ""),
+            )
             return None
 
         rr = abs((tp - price) / (price - stop)) if price != stop else 0.0
-        rr_floor = 1.8
-        rr_floor_tolerance = 0.05
+        rr_floor = ENGINE_MIN_RR_FLOOR
+        rr_floor_tolerance = ENGINE_MIN_RR_TOLERANCE
         rr_floor_effective = max(0.0, rr_floor - rr_floor_tolerance)
         if rr < rr_floor_effective:
             self._log_smc_candidate(
@@ -2607,6 +2836,15 @@ class AdaptiveSignalEngine:
             )
             if self.debug:
                 print("[SIGNAL_DEBUG] RR too low: " + str(round(rr, 2)))
+            log_gate_reject(
+                symbol=coin, timeframe="1h", side=chosen_side,
+                reject_reason=f"rr_too_low:{rr:.3f}<{rr_floor_effective:.3f}",
+                raw_score=chosen_score, rr=rr, threshold=rr_floor_effective,
+                price=price, atr=float(row.get("atr_14", 0.0)),
+                market_regime=market_regime, htf_regime=htf_regime,
+                macro_regime=macro_regime, session=session_label,
+                setup_family=setup_family,
+            )
             return None
 
         confidence = round(min(0.95, max(0.50, chosen_score)), 3)
@@ -2680,6 +2918,15 @@ class AdaptiveSignalEngine:
             if self.debug:
                 print(f"[SIGNAL_DEBUG] {coin} {chosen_side} suppressed — "
                       f"dedup_active_for_repeat")
+            log_gate_reject(
+                symbol=coin, timeframe="1h", side=chosen_side,
+                reject_reason="dedup_active_for_repeat",
+                raw_score=chosen_score, confidence=confidence, rr=rr,
+                price=price, atr=atr_val,
+                market_regime=market_regime, htf_regime=htf_regime,
+                macro_regime=macro_regime, session=session_label,
+                setup_family=setup_family,
+            )
             return None
 
         meta = {
@@ -2774,6 +3021,13 @@ class AdaptiveSignalEngine:
             return None
 
         df_raw = df_ohlcv.copy()
+
+        # Remove the forming 1H candle before resampling so the last resampled bar
+        # contains only closed 1H input. _build_feature_frame will then drop
+        # the last resampled bar (the currently forming 1H or 4H period).
+        if len(df_raw) > 1:
+            df_raw = df_raw.iloc[:-1]
+
         if "time" in df_raw.columns:
             df_raw["time"] = pd.to_datetime(df_raw["time"])
             df_raw = df_raw.set_index("time")
@@ -2985,6 +3239,14 @@ class AdaptiveSignalEngine:
             )
             if self.debug:
                 print("[SWING_DEBUG] No valid " + swing_tf + " swing setup.")
+            log_gate_reject(
+                symbol=coin, timeframe=swing_tf, side="",
+                reject_reason="no_valid_swing_structure_or_alignment",
+                price=price, atr=float(row.get("atr_14", 0.0)),
+                market_regime=market_regime, htf_regime=htf_regime,
+                macro_regime=macro_regime, session=session_label,
+                setup_family="swing",
+            )
             return None
 
         side, score, reasons, confluence_count, swing_family = max(candidates, key=lambda item: item[1])
@@ -3010,11 +3272,30 @@ class AdaptiveSignalEngine:
                     f"[SWING_DEBUG] {swing_tf} insufficient confluence "
                     f"{confluence_count}<{min_confluence}"
                 )
+            log_gate_reject(
+                symbol=coin, timeframe=swing_tf, side=side,
+                reject_reason=f"insufficient_swing_confluence:{confluence_count}<{min_confluence}",
+                raw_score=score,
+                price=price, atr=float(row.get("atr_14", 0.0)),
+                market_regime=market_regime, htf_regime=htf_regime,
+                macro_regime=macro_regime, session=session_label,
+                setup_family="swing",
+                metadata=f"confluence={confluence_count}|required={min_confluence}",
+            )
             return None
 
         threshold = self.swing_thresholds.get(swing_tf, 0.6)
         if swing_tf == "4h":
             threshold = max(threshold, SMC_4H_MIN_CONFIDENCE)
+
+        # Log all swing candidates before the score gate.
+        log_score_candidate(
+            symbol=coin, timeframe=swing_tf, side=side,
+            score=score, threshold=threshold,
+            setup_family=swing_family,
+            market_regime=market_regime, htf_regime=htf_regime, macro_regime=macro_regime,
+        )
+
         if score < threshold:
             self._log_smc_candidate(
                 coin=coin,
@@ -3033,6 +3314,15 @@ class AdaptiveSignalEngine:
             )
             if self.debug:
                 print("[SWING_DEBUG] " + swing_tf + " score " + str(round(score, 3)) + " below threshold " + str(threshold))
+            log_gate_reject(
+                symbol=coin, timeframe=swing_tf, side=side,
+                reject_reason=f"score_below_threshold:{score:.3f}<{threshold:.3f}",
+                raw_score=score, threshold=threshold,
+                price=price, atr=float(row.get("atr_14", 0.0)),
+                market_regime=market_regime, htf_regime=htf_regime,
+                macro_regime=macro_regime, session=session_label,
+                setup_family=swing_family,
+            )
             return None
 
         stop, tp, atr_val, stop_dist, tp_dist, stop_meta = self._build_trade_levels(
@@ -3060,6 +3350,16 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime,
                 market_regime=market_regime,
                 session=session_label,
+            )
+            log_gate_reject(
+                symbol=coin, timeframe=swing_tf, side=side,
+                reject_reason="invalid_trade_levels",
+                raw_score=score,
+                price=price, atr=float(row.get("atr_14", 0.0)),
+                market_regime=market_regime, htf_regime=htf_regime,
+                macro_regime=macro_regime, session=session_label,
+                setup_family=swing_family,
+                metadata=stop_meta.get("ob_reject_reason", ""),
             )
             return None
         rr = abs((tp - price) / (price - stop)) if price != stop else 0.0
@@ -3094,6 +3394,15 @@ class AdaptiveSignalEngine:
                     market_regime=market_regime,
                     session=session_label,
                 )
+                log_gate_reject(
+                    symbol=coin, timeframe=swing_tf, side=side,
+                    reject_reason="4h_missing_required_ob_fvg_or_sweep",
+                    raw_score=score, rr=rr,
+                    price=price, atr=float(row.get("atr_14", 0.0)),
+                    market_regime=market_regime, htf_regime=htf_regime,
+                    macro_regime=macro_regime, session=session_label,
+                    setup_family=swing_family,
+                )
                 return None
             if not aligned:
                 self._log_smc_candidate(
@@ -3115,6 +3424,16 @@ class AdaptiveSignalEngine:
                     market_regime=market_regime,
                     session=session_label,
                 )
+                log_gate_reject(
+                    symbol=coin, timeframe=swing_tf, side=side,
+                    reject_reason="4h_missing_dual_htf_macro_alignment",
+                    raw_score=score, rr=rr,
+                    price=price, atr=float(row.get("atr_14", 0.0)),
+                    market_regime=market_regime, htf_regime=htf_regime,
+                    macro_regime=macro_regime, session=session_label,
+                    setup_family=swing_family,
+                    metadata=f"htf={htf_regime}|macro={macro_regime}",
+                )
                 return None
             if rr < SMC_4H_MIN_RR:
                 self._log_smc_candidate(
@@ -3135,6 +3454,15 @@ class AdaptiveSignalEngine:
                     macro_regime=macro_regime,
                     market_regime=market_regime,
                     session=session_label,
+                )
+                log_gate_reject(
+                    symbol=coin, timeframe=swing_tf, side=side,
+                    reject_reason=f"4h_rr_below_min:{rr:.3f}<{SMC_4H_MIN_RR:.3f}",
+                    raw_score=score, rr=rr, threshold=SMC_4H_MIN_RR,
+                    price=price, atr=float(row.get("atr_14", 0.0)),
+                    market_regime=market_regime, htf_regime=htf_regime,
+                    macro_regime=macro_regime, session=session_label,
+                    setup_family=swing_family,
                 )
                 return None
 

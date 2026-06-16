@@ -27,6 +27,20 @@ COIN_ROLLING_N       = int(os.getenv("COIN_ROLLING_N",      "15"))   # (was 10)
 COIN_PAUSE_HOURS     = int(os.getenv("COIN_PAUSE_HOURS",    "6"))    # (was 12)
 STRATEGY_FILTER_STATE_FILE = os.getenv("STRATEGY_FILTER_STATE_FILE", "strategy_filter_state.json")
 
+# ── Per-coin adaptive confidence floor (Level 1 self-learning) ────────────────
+# After COIN_FLOOR_MIN_TRADES recorded outcomes, the swing_conf gate uses a
+# coin-specific floor rather than the global SWING_MIN_CONFIDENCE constant.
+# Elite performers earn a lower bar; structural underperformers get a higher bar.
+# Adjustment is capped at ±COIN_FLOOR_MAX_DELTA so no coin drifts far from base.
+COIN_FLOOR_MIN_TRADES     = int(os.getenv("COIN_FLOOR_MIN_TRADES",    "5"))
+COIN_FLOOR_ELITE_WR       = float(os.getenv("COIN_FLOOR_ELITE_WR",    "0.65"))  # ≥65% WR → −0.05
+COIN_FLOOR_ELITE_BONUS    = float(os.getenv("COIN_FLOOR_ELITE_BONUS", "0.05"))
+COIN_FLOOR_HIGH_WR        = float(os.getenv("COIN_FLOOR_HIGH_WR",     "0.55"))  # ≥55% WR → −0.03
+COIN_FLOOR_HIGH_BONUS     = float(os.getenv("COIN_FLOOR_HIGH_BONUS",  "0.03"))
+COIN_FLOOR_LOW_WR         = float(os.getenv("COIN_FLOOR_LOW_WR",      "0.35"))  # ≤35% WR → +0.03
+COIN_FLOOR_LOW_PENALTY    = float(os.getenv("COIN_FLOOR_LOW_PENALTY", "0.03"))
+COIN_FLOOR_MAX_DELTA      = float(os.getenv("COIN_FLOOR_MAX_DELTA",   "0.05"))
+
 
 def _utc() -> datetime:  # TODO: identical helper in position.py and live_position_monitor.py — consolidate into a shared utils module
     return datetime.now(timezone.utc)
@@ -262,17 +276,73 @@ class StrategyFilter:
                   f"WR={wr*100:.0f}% ({sum(results)}/{len(results)}) "
                   f"< {KILL_WIN_RATE*100:.0f}% threshold")
 
+    # ── Per-coin adaptive floor (Level 1 self-learning) ─────────────────────
+
+    @staticmethod
+    def _floor_delta(wr: float, n: int) -> float:
+        """Single source of truth for the per-coin floor adjustment delta."""
+        if n < COIN_FLOOR_MIN_TRADES:
+            return 0.0
+        if wr >= COIN_FLOOR_ELITE_WR:
+            raw = -COIN_FLOOR_ELITE_BONUS
+        elif wr >= COIN_FLOOR_HIGH_WR:
+            raw = -COIN_FLOOR_HIGH_BONUS
+        elif wr <= COIN_FLOOR_LOW_WR:
+            raw = COIN_FLOOR_LOW_PENALTY
+        else:
+            raw = 0.0
+        return max(-COIN_FLOOR_MAX_DELTA, min(COIN_FLOOR_MAX_DELTA, raw))
+
+    def coin_confidence_floor(self, coin: str, base_floor: float) -> float:
+        """
+        Return a per-coin confidence floor adjusted by live rolling win rate.
+
+        Returns base_floor unchanged until COIN_FLOOR_MIN_TRADES are recorded.
+        Adjustments:
+          WR ≥ COIN_FLOOR_ELITE_WR  → floor − COIN_FLOOR_ELITE_BONUS  (e.g. 0.90 → 0.85)
+          WR ≥ COIN_FLOOR_HIGH_WR   → floor − COIN_FLOOR_HIGH_BONUS   (e.g. 0.90 → 0.87)
+          WR ≤ COIN_FLOOR_LOW_WR    → floor + COIN_FLOOR_LOW_PENALTY   (e.g. 0.90 → 0.93)
+          otherwise                 → base_floor unchanged
+        Total adjustment capped at ±COIN_FLOOR_MAX_DELTA.
+        """
+        results = self._coin_results.get(str(coin).upper())
+        if not results:
+            return base_floor
+        wr = sum(results) / len(results)
+        return round(base_floor + self._floor_delta(wr, len(results)), 4)
+
+    def coin_wr_stats(self) -> Dict[str, Dict]:
+        """
+        Return WR, trade count, and floor delta for all coins with recorded outcomes.
+        Used by param_suggester.py and boot status logging.
+        """
+        out: Dict[str, Dict] = {}
+        for coin, results in self._coin_results.items():
+            n = len(results)
+            wr = sum(results) / n if n > 0 else 0.0
+            out[coin] = {
+                "n": n,
+                "wr": round(wr, 3),
+                "floor_delta": round(self._floor_delta(wr, n), 4),
+                "active": n >= COIN_FLOOR_MIN_TRADES,
+            }
+        return out
+
     # ── Status ────────────────────────────────────────────────────────────────
 
     def summary(self) -> str:
         now = _utc()
         lines = []
 
+        all_stats = self.coin_wr_stats()  # compute once — not inside the loop
         for coin, results in sorted(self._coin_results.items()):
             wr = sum(results) / len(results) * 100 if results else 0
             paused = coin in self._coin_paused_until and now < self._coin_paused_until[coin]
             tag = " [PAUSED]" if paused else ""
-            lines.append(f"  {coin:6s} coin WR: {wr:5.1f}% n={len(results)}{tag}")
+            s = all_stats.get(coin, {})
+            delta = s.get("floor_delta", 0.0)
+            floor_tag = f" floor_adj={delta:+.2f}" if delta != 0.0 and s.get("active") else ""
+            lines.append(f"  {coin:8s} WR={wr:5.1f}% n={len(results)}{floor_tag}{tag}")
 
         for (coin, setup, htf), results in sorted(self._setup_results.items()):
             wr = sum(results) / len(results) * 100 if results else 0

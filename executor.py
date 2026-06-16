@@ -96,8 +96,66 @@ SIGNAL_STALE_ATR_MULT = float(
 # Useful for strong-trend signals where price runs away then pulls back.
 # Default 0.0 = disabled (fully backward compatible).
 SIGNAL_MOMENTUM_REENTRY_ATR = float(os.getenv("SIGNAL_MOMENTUM_REENTRY_ATR", "0.0"))
+# ── Executor gate telemetry ───────────────────────────────────────────────────
+EXECUTOR_REJECTS_PATH = os.getenv("EXECUTOR_REJECTS_PATH", "executor_rejects.csv")
+_EXECUTOR_REJECT_LOCK = threading.Lock()
+_EXECUTOR_REJECT_FIELDS = [
+    "timestamp", "symbol", "side", "confidence", "required_confidence",
+    "rr", "required_rr", "reject_reason", "session", "setup_family",
+    "market_regime", "timeframe",
+]
+
+
+def _exec_ensure_csv(path: str, fields: list) -> None:
+    if not os.path.exists(path):
+        with open(path, "w", newline="") as fh:
+            csv.DictWriter(fh, fieldnames=fields).writeheader()
+
+
+def log_executor_reject(
+    *,
+    symbol: str,
+    side: str = "",
+    confidence: float = 0.0,
+    required_confidence: float = 0.0,
+    rr: float = 0.0,
+    required_rr: float = 0.0,
+    reject_reason: str,
+    session: str = "",
+    setup_family: str = "",
+    market_regime: str = "",
+    timeframe: str = "1h",
+) -> None:
+    try:
+        row = {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "symbol": symbol,
+            "side": side,
+            "confidence": round(float(confidence), 4),
+            "required_confidence": round(float(required_confidence), 4),
+            "rr": round(float(rr), 4),
+            "required_rr": round(float(required_rr), 4),
+            "reject_reason": reject_reason,
+            "session": session,
+            "setup_family": setup_family,
+            "market_regime": market_regime,
+            "timeframe": timeframe,
+        }
+        with _EXECUTOR_REJECT_LOCK:
+            _exec_ensure_csv(EXECUTOR_REJECTS_PATH, _EXECUTOR_REJECT_FIELDS)
+            with open(EXECUTOR_REJECTS_PATH, "a", newline="") as fh:
+                csv.DictWriter(fh, fieldnames=_EXECUTOR_REJECT_FIELDS).writerow(row)
+    except Exception:
+        pass
+
+
+# ── Unified Threshold Framework ───────────────────────────────────────────────
+# UNIVERSAL_MIN_CONFIDENCE: single confidence quality gate used as default for all
+# per-gate confidence variables below. Override individual gates only with intent.
+UNIVERSAL_MIN_CONFIDENCE = float(os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
+
 MIN_EXECUTION_EFFECTIVE_RR = float(
-    os.getenv("MIN_EXECUTION_EFFECTIVE_RR", os.getenv("MIN_EFFECTIVE_RR", "1.75"))
+    os.getenv("MIN_EXECUTION_EFFECTIVE_RR", os.getenv("MIN_EFFECTIVE_RR", "1.55"))
 )
 
 # ── Overextension / trailing / venue flatness ─────────────────────────
@@ -128,7 +186,7 @@ STOP_ATR_FLOOR_MULT_INTRADAY = float(os.getenv("STOP_ATR_FLOOR_MULT_INTRADAY", "
 STOP_ATR_FLOOR_MULT_SWING = float(os.getenv("STOP_ATR_FLOOR_MULT_SWING", "1.40"))
 STOP_BUFFER_ATR_MULT = float(os.getenv("STOP_BUFFER_ATR_MULT", "0.10"))
 MIN_STOP_ATR_REJECT = float(os.getenv("MIN_STOP_ATR_REJECT", "0.80"))
-MIN_STOP_REDESIGN_RR = float(os.getenv("MIN_STOP_REDESIGN_RR", "1.8"))
+MIN_STOP_REDESIGN_RR = float(os.getenv("MIN_STOP_REDESIGN_RR", "1.60"))
 STOP_REDESIGN_RR_TOLERANCE = float(os.getenv("STOP_REDESIGN_RR_TOLERANCE", "0.05"))
 HIGH_CONF_STOP_REDESIGN_MIN_CONFIDENCE = float(
     os.getenv("HIGH_CONF_STOP_REDESIGN_MIN_CONFIDENCE", "0.93")
@@ -152,25 +210,40 @@ HARD_BLOCKED_COINS: set = {
     for c in os.getenv("HARD_BLOCKED_COINS", "").split(",")
     if c.strip()
 }
-# Sprint 1 live book cleanup: continuation and chop are negative-EV in live data.
+# Continuation hard block removed post-candle-fix (2026-06-16). Pre-fix -19.77R was
+# under contaminated HTF regime data. Continuation still must pass UNIVERSAL_MIN_CONFIDENCE,
+# score pre-filter, RR gate, WEAK_CONTINUATION_MIN_SCORE, and chop/regime protections.
 HARD_BLOCK_CONTINUATION = (
-    os.getenv("HARD_BLOCK_CONTINUATION", "true").lower() == "true"
+    os.getenv("HARD_BLOCK_CONTINUATION", "false").lower() == "true"
 )
 HARD_BLOCK_CHOP = os.getenv("HARD_BLOCK_CHOP", "true").lower() == "true"
-# Sprint 2 cleanup: proven live edge is high-confidence swing with named sessions.
+# Sprint 8: backtest Jun 10-15 (n=54 setups) showed chop-blocked reversal signals had
+# 42% WR and +0.52 ExpR — real edge. Exception bypasses the blanket chop block for
+# high-confidence reversal signals when HTF is bullish. All downstream gates still apply.
+CHOP_REVERSAL_EXCEPTION = os.getenv("CHOP_REVERSAL_EXCEPTION", "false").lower() == "true"
+# All confidence gates below default to UNIVERSAL_MIN_CONFIDENCE so the system has
+# one source of truth. Override individually in .env only with explicit justification.
+CHOP_REVERSAL_MIN_CONFIDENCE = float(
+    os.getenv("CHOP_REVERSAL_MIN_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
+)
 HARD_BLOCK_UNKNOWN_SESSION = (
     os.getenv("HARD_BLOCK_UNKNOWN_SESSION", "true").lower() == "true"
 )
-SWING_MIN_CONFIDENCE = float(os.getenv("SWING_MIN_CONFIDENCE", "0.90"))
-# Timeframes blocked until re-validated (default: 4h — 0/15 win rate in live data).
+SWING_MIN_CONFIDENCE = float(
+    os.getenv("SWING_MIN_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
+)
+# 4H re-enabled post-candle-fix. Default empty (no timeframes blocked at code level).
 HARD_BLOCKED_TIMEFRAMES: set = {
     tf.strip().lower()
-    for tf in os.getenv("HARD_BLOCKED_TIMEFRAMES", "4h").split(",")
+    for tf in os.getenv("HARD_BLOCKED_TIMEFRAMES", "").split(",")
     if tf.strip()
 }
-# Minimum confidence required in weak_trend regime. Signals below this are rejected.
-# Data: mkt_weak_trend at <0.85 conf drove -19.91R. Above 0.85 is the only viable band.
-WEAK_TREND_MIN_CONFIDENCE = float(os.getenv("WEAK_TREND_MIN_CONFIDENCE", "0.0"))
+# Weak-trend confidence gate — unified to UNIVERSAL_MIN_CONFIDENCE.
+# Pre-fix data: weak_trend at any confidence < 0.90 was net negative. Gate is now active
+# by default (was 0.0 = disabled in code default; .env now sets 0.90 explicitly).
+WEAK_TREND_MIN_CONFIDENCE = float(
+    os.getenv("WEAK_TREND_MIN_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
+)
 
 # ── Score-based regime quality gates ─────────────────────────────────
 # Gate 4: weak continuation — only allow when score >= threshold.
@@ -729,39 +802,96 @@ class Executor:
         market_meta = getattr(signal, "meta", None) or {}
         now = time.time()
 
+        # Shared fields for executor gate telemetry — computed once.
+        _telemetry_conf = float(getattr(signal, "confidence", 0.0))
+        _telemetry_tf = str(market_meta.get("timeframe", "1h"))
+        _telemetry_rr = float(market_meta.get("rr_planned", 0.0))
+
         if HARD_BLOCK_UNKNOWN_SESSION and session in {"", "unknown", "none", "null"}:
             reason = "session_blocked:unknown"
             print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
             self._log_missed(signal, sig_id, reason)
+            log_executor_reject(
+                symbol=coin, side=signal_side,
+                confidence=_telemetry_conf, rr=_telemetry_rr,
+                reject_reason=reason, session=session,
+                setup_family=setup_family, market_regime=market_regime,
+                timeframe=_telemetry_tf,
+            )
             return ExecutorResult(traded=False, reason=reason)
 
         if HARD_BLOCK_CONTINUATION and setup_family == "continuation":
             reason = "hard_blocked_setup_family:continuation"
             print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
             self._log_missed(signal, sig_id, reason)
+            log_executor_reject(
+                symbol=coin, side=signal_side,
+                confidence=_telemetry_conf, rr=_telemetry_rr,
+                reject_reason=reason, session=session,
+                setup_family=setup_family, market_regime=market_regime,
+                timeframe=_telemetry_tf,
+            )
             return ExecutorResult(traded=False, reason=reason)
 
         if HARD_BLOCK_CHOP and market_regime == "chop":
-            reason = "market_regime_block:chop"
-            print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
-            self._log_missed(signal, sig_id, reason)
-            return ExecutorResult(traded=False, reason=reason)
+            _chop_conf = float(getattr(signal, "confidence", 0.0))
+            _chop_htf  = str(market_meta.get("regime_htf_1h", "")).strip().lower()
+            if (
+                CHOP_REVERSAL_EXCEPTION
+                and setup_family == "reversal"
+                and _chop_htf == "up"
+                and _chop_conf >= CHOP_REVERSAL_MIN_CONFIDENCE
+            ):
+                print(
+                    f"[EXECUTOR] {coin} {signal_side} chop_reversal_exception:"
+                    f" htf={_chop_htf} conf={_chop_conf:.2f}>={CHOP_REVERSAL_MIN_CONFIDENCE}"
+                )
+            else:
+                reason = "market_regime_block:chop"
+                print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
+                self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
+                return ExecutorResult(traded=False, reason=reason)
 
         if SWING_MIN_CONFIDENCE > 0 and track == "swing":
             sig_conf = float(getattr(signal, "confidence", 0.0))
-            if sig_conf < SWING_MIN_CONFIDENCE:
-                reason = (
-                    f"swing_conf_gate:"
-                    f"conf={sig_conf:.2f}<{SWING_MIN_CONFIDENCE:.2f}"
-                )
+            _floor = self.strategy_filter.coin_confidence_floor(coin, SWING_MIN_CONFIDENCE)
+            if sig_conf < _floor:
+                _adj = f"|coin_floor:{_floor:.2f}" if _floor != SWING_MIN_CONFIDENCE else ""
+                reason = f"swing_conf_gate:conf={sig_conf:.2f}<{_floor:.2f}{_adj}"
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=sig_conf, required_confidence=_floor, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
+            if _floor != SWING_MIN_CONFIDENCE:
+                print(
+                    f"[EXECUTOR] {coin} adaptive floor={_floor:.2f} "
+                    f"(base={SWING_MIN_CONFIDENCE:.2f}) — conf={sig_conf:.2f} passes"
+                )
 
         if not self._try_mark_coin_pending_open(coin):
             reason = f"pending_open_race:{coin}"
             print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
             self._log_missed(signal, sig_id, reason)
+            log_executor_reject(
+                symbol=coin, side=signal_side,
+                confidence=_telemetry_conf, rr=_telemetry_rr,
+                reject_reason=reason, session=session,
+                setup_family=setup_family, market_regime=market_regime,
+                timeframe=_telemetry_tf,
+            )
             return ExecutorResult(traded=False, reason=reason)
 
         try:
@@ -769,6 +899,13 @@ class Executor:
                 reason = f"pending_or_open_position:{coin}"
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             if self._live_mode and not self._balance_ready:
@@ -778,6 +915,13 @@ class Executor:
                     f"balance not initialized (waiting for venue sync)"
                 )
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             hard_blocked = self._get_hard_blocked_sessions(bucket)
@@ -786,6 +930,13 @@ class Executor:
                     reason = f"session_blocked:{session}"
                     print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                     self._log_missed(signal, sig_id, reason)
+                    log_executor_reject(
+                        symbol=coin, side=signal_side,
+                        confidence=_telemetry_conf, rr=_telemetry_rr,
+                        reject_reason=reason, session=session,
+                        setup_family=setup_family, market_regime=market_regime,
+                        timeframe=_telemetry_tf,
+                    )
                     return ExecutorResult(traded=False, reason=reason)
 
             session_soft_blocked = (
@@ -813,6 +964,13 @@ class Executor:
                         f"(override_min={required_score:.2f})"
                     )
                     self._log_missed(signal, sig_id, reason)
+                    log_executor_reject(
+                        symbol=coin, side=signal_side,
+                        confidence=_telemetry_conf, rr=_telemetry_rr,
+                        reject_reason=reason, session=session,
+                        setup_family=setup_family, market_regime=market_regime,
+                        timeframe=_telemetry_tf,
+                    )
                     return ExecutorResult(traded=False, reason=reason)
 
             cooldown_key = (coin, signal_side, track)
@@ -822,6 +980,13 @@ class Executor:
                 reason = f"cooldown ({remaining}s remaining)"
                 print(f"[EXECUTOR] {coin} {signal_side} COOLDOWN — {remaining}s")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             coin_fill_key = (coin, signal_side, track)
@@ -831,6 +996,13 @@ class Executor:
                 reason = f"coin_reentry_cooldown:{coin}:{signal_side} ({remaining}s remaining)"
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             bucket_key = (bucket, signal_side, track)
@@ -843,6 +1015,13 @@ class Executor:
                 )
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             dir_limit = self._track_bucket_dir_limit(bucket, signal_side, track)
@@ -857,6 +1036,13 @@ class Executor:
                 reason = f"bucket_dir_limit_disabled:{bucket}:{signal_side}:{track}"
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             if same_bucket_same_dir >= dir_limit:
@@ -866,6 +1052,13 @@ class Executor:
                 )
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             stop_reject = self._apply_entry_stop_redesign(signal=signal, track=track)
@@ -873,6 +1066,13 @@ class Executor:
                 reason = f"stop_redesign_reject: {stop_reject}"
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             print(
@@ -891,6 +1091,13 @@ class Executor:
                 reason = "market_regime_block:continuation_in_chop"
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             if BLOCK_REVERSAL_AGAINST_DUAL_TREND and setup_family == "reversal":
@@ -903,6 +1110,13 @@ class Executor:
                     reason = f"market_regime_block:reversal_against_dual_trend(htf={htf},macro={macro})"
                     print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                     self._log_missed(signal, sig_id, reason)
+                    log_executor_reject(
+                        symbol=coin, side=signal_side,
+                        confidence=_telemetry_conf, rr=_telemetry_rr,
+                        reject_reason=reason, session=session,
+                        setup_family=setup_family, market_regime=market_regime,
+                        timeframe=_telemetry_tf,
+                    )
                     return ExecutorResult(traded=False, reason=reason)
 
             # ── Profitability gates (data-driven, archive-validated) ──────────
@@ -911,6 +1125,13 @@ class Executor:
                 reason = f"hard_blocked_coin:{coin}"
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             # Gate 2: hard-blocked timeframes — 4h had 0/15 live win rate.
@@ -919,6 +1140,13 @@ class Executor:
                 reason = f"hard_blocked_timeframe:{_sig_tf}"
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             # Gate 3: weak-trend confidence floor — sub-0.85 weak_trend drove -19.91R.
@@ -931,6 +1159,15 @@ class Executor:
                     )
                     print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                     self._log_missed(signal, sig_id, reason)
+                    log_executor_reject(
+                        symbol=coin, side=signal_side,
+                        confidence=_sig_conf,
+                        required_confidence=WEAK_TREND_MIN_CONFIDENCE,
+                        rr=_telemetry_rr,
+                        reject_reason=reason, session=session,
+                        setup_family=setup_family, market_regime=market_regime,
+                        timeframe=_telemetry_tf,
+                    )
                     return ExecutorResult(traded=False, reason=reason)
 
             # ── Score-based regime quality gates ─────────────────────────────
@@ -948,6 +1185,14 @@ class Executor:
                     f"(score={_gate_score:.3f} < {WEAK_CONTINUATION_MIN_SCORE:.2f})"
                 )
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=f"{reason}:score={_gate_score:.3f}<{WEAK_CONTINUATION_MIN_SCORE:.2f}",
+                    session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             # Gate 5: reversal quality in chop/weak-trend — low-score reversals are noise.
@@ -962,6 +1207,14 @@ class Executor:
                     f"(score={_gate_score:.3f} < {REVERSAL_CHOP_MIN_SCORE:.2f})"
                 )
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=f"{reason}:score={_gate_score:.3f}<{REVERSAL_CHOP_MIN_SCORE:.2f}",
+                    session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             self._refresh_runtime_balance_from_venue(source=f"pre_entry:{coin}")
@@ -969,6 +1222,13 @@ class Executor:
                 reason = "venue_sync_unhealthy:missing_or_zero_equity"
                 print(f"[EXECUTOR][WARNING] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=reason, session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
             decision = self.risk.check_signal(signal)
             if not decision.approved:
@@ -983,15 +1243,37 @@ class Executor:
                             reason = f"replacement_post_check_failed:{decision.reason}"
                             print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                             self._log_missed(signal, sig_id, reason)
+                            log_executor_reject(
+                                symbol=coin, side=signal_side,
+                                confidence=_telemetry_conf, rr=_telemetry_rr,
+                                reject_reason=reason, session=session,
+                                setup_family=setup_family, market_regime=market_regime,
+                                timeframe=_telemetry_tf,
+                            )
                             return ExecutorResult(traded=False, reason=reason)
                     else:
                         reason = f"{decision.reason} | replacement={replace_reason}"
                         print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                         self._log_missed(signal, sig_id, reason)
+                        log_executor_reject(
+                            symbol=coin, side=signal_side,
+                            confidence=_telemetry_conf, rr=_telemetry_rr,
+                            reject_reason=reason, session=session,
+                            setup_family=setup_family, market_regime=market_regime,
+                            timeframe=_telemetry_tf,
+                        )
                         return ExecutorResult(traded=False, reason=reason)
                 else:
                     print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {decision.reason}")
                     self._log_missed(signal, sig_id, decision.reason)
+                    log_executor_reject(
+                        symbol=coin, side=signal_side,
+                        confidence=_telemetry_conf, rr=_telemetry_rr,
+                        reject_reason=f"risk_check:{decision.reason}",
+                        session=session,
+                        setup_family=setup_family, market_regime=market_regime,
+                        timeframe=_telemetry_tf,
+                    )
                     return ExecutorResult(traded=False, reason=decision.reason)
 
             (
@@ -1031,6 +1313,14 @@ class Executor:
                 reason = self._apply_reject_throttle(signal, signal_side, margin_reject)
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=f"margin_reject:{reason}",
+                    session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             if (
@@ -1067,6 +1357,13 @@ class Executor:
                     reason = "market_regime_weak_trend_size_too_small"
                     print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                     self._log_missed(signal, sig_id, reason)
+                    log_executor_reject(
+                        symbol=coin, side=signal_side,
+                        confidence=_telemetry_conf, rr=_telemetry_rr,
+                        reject_reason=reason, session=session,
+                        setup_family=setup_family, market_regime=market_regime,
+                        timeframe=_telemetry_tf,
+                    )
                     return ExecutorResult(traded=False, reason=reason)
 
             entry_reject = self._validate_entry(signal, session)
@@ -1074,6 +1371,14 @@ class Executor:
                 reason = self._apply_reject_throttle(signal, signal_side, entry_reject)
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=f"entry_validate:{reason}",
+                    session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             print(f"[EXECUTOR] {coin} {signal_side} APPROVED — {decision.reason}")
@@ -1108,6 +1413,14 @@ class Executor:
                 reason = self._apply_reject_throttle(signal, signal_side, raw_reason or reason)
                 print(f"[EXECUTOR] {coin} FILL REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason=f"fill_rejected:{raw_reason or 'unknown'}",
+                    session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                )
                 return ExecutorResult(traded=False, reason=reason)
 
             self._session_entry_slippage_bps.append(fill.slippage_bps)

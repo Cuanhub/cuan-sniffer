@@ -154,7 +154,7 @@ def fetch_candles(coin: str, timestamp_iso: str, minutes: int = EVALUATION_WINDO
 
     candles = []
     for c in data:
-        ts = datetime.fromtimestamp((c.get("T") or c.get("t")) / 1000, tz=timezone.utc)
+        ts = datetime.fromtimestamp((c.get("t") or c.get("T")) / 1000, tz=timezone.utc)
         candles.append({
             "time": ts,
             "open": float(c["o"]),

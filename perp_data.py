@@ -292,12 +292,17 @@ class PerpDataFeed:
         candles = []
         for c in data:
             try:
-                t_ms = c.get("T") or c.get("t")
-                ts = datetime.fromtimestamp(t_ms / 1000.0, tz=timezone.utc)
+                open_ms = c.get("t") or c.get("T")    # open time — canonical candle timestamp
+                close_ms = c.get("T") or c.get("t")   # close time — completeness metadata
+                if not open_ms:
+                    continue
+                ts = datetime.fromtimestamp(open_ms / 1000.0, tz=timezone.utc)
+                close_ts = datetime.fromtimestamp((close_ms or open_ms) / 1000.0, tz=timezone.utc)
 
                 candles.append(
                     {
-                        "time": ts,
+                        "time": ts,              # candle open time — canonical index
+                        "close_time": close_ts,  # candle close time — for completeness checks
                         "open": float(c["o"]),
                         "high": float(c["h"]),
                         "low": float(c["l"]),
@@ -408,7 +413,7 @@ class PerpDataFeed:
             data = list(self._candles)
 
         if not data:
-            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
+            return pd.DataFrame(columns=["time", "close_time", "open", "high", "low", "close", "volume"])
 
         df = pd.DataFrame(data)
         df = df.sort_values("time").reset_index(drop=True)

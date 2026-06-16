@@ -40,7 +40,12 @@ RISK_PCT_MULT_SWING = float(os.getenv("RISK_PCT_MULT_SWING", "1.0"))
 DAILY_LOSS_LIMIT_R = float(os.getenv("DAILY_LOSS_LIMIT_R", "3.0"))
 MAX_DD_PCT = float(os.getenv("MAX_DD_PCT", "15.0"))
 
-MIN_SIGNAL_CONFIDENCE = float(os.getenv("MIN_SIGNAL_CONFIDENCE", "0.64"))
+# MIN_SIGNAL_CONFIDENCE: fallback confidence floor in the risk manager.
+# Defaults to UNIVERSAL_MIN_CONFIDENCE so all layers share the same quality bar.
+UNIVERSAL_MIN_CONFIDENCE = float(os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
+MIN_SIGNAL_CONFIDENCE = float(
+    os.getenv("MIN_SIGNAL_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
+)
 MIN_SIGNAL_SCORE = float(os.getenv("MIN_SIGNAL_SCORE", "0.68"))
 
 STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "1000.0"))

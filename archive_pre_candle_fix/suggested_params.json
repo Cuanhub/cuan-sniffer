@@ -1,0 +1,159 @@
+{
+  "analysis_period_days": 7,
+  "disclaimer": "price_move_r is an at-logging-time directional proxy \u2014 positive means price moved toward TP when the rejection was recorded. Run backtest_missed.py for full TP/SL simulation before applying any suggestion to .env.",
+  "gate_analysis": {
+    "chop_reversal_gate": {
+      "all_chop_stats": {
+        "mean_r": 0.255,
+        "n": 96,
+        "pct_positive": 0.562,
+        "pct_win_proxy": 0.323
+      },
+      "checked": 96,
+      "scan_band": {
+        "mean_r": 0.57,
+        "n": 17,
+        "pct_positive": 0.529,
+        "pct_win_proxy": 0.412
+      },
+      "suggestion": null
+    },
+    "continuation_gate": {
+      "all_stats": {
+        "mean_r": -0.44,
+        "n": 56,
+        "pct_positive": 0.375,
+        "pct_win_proxy": 0.071
+      },
+      "checked": 56,
+      "suggestion": null
+    },
+    "reversal_score_gate": {
+      "checked": 0,
+      "note": "no reversal score-gate rejections in window",
+      "suggestion": null
+    },
+    "swing_conf_gate": {
+      "checked": 6,
+      "scan_band": {
+        "mean_r": 0.799,
+        "n": 2,
+        "pct_positive": 0.5,
+        "pct_win_proxy": 0.5
+      },
+      "suggestion": null
+    }
+  },
+  "gate_thresholds_used": {
+    "CHOP_REVERSAL_MIN_CONFIDENCE": 0.9,
+    "REVERSAL_CHOP_MIN_SCORE": 0.78,
+    "SWING_MIN_CONFIDENCE": 0.9,
+    "WEAK_TREND_MIN_CONFIDENCE": 0.8
+  },
+  "generated_at": "2026-06-15T15:06:35.301551+00:00",
+  "n_total_missed": 160,
+  "output_path": "suggested_params.json",
+  "per_coin": {
+    "FARTCOIN": {
+      "by_reason": {},
+      "total_missed": {
+        "mean_r": 0.091,
+        "n": 14,
+        "pct_positive": 0.429,
+        "pct_win_proxy": 0.143
+      }
+    },
+    "HYPE": {
+      "by_reason": {},
+      "total_missed": {
+        "mean_r": 1.513,
+        "n": 21,
+        "pct_positive": 0.667,
+        "pct_win_proxy": 0.571
+      }
+    },
+    "JTO": {
+      "by_reason": {},
+      "total_missed": {
+        "mean_r": -0.858,
+        "n": 46,
+        "pct_positive": 0.326,
+        "pct_win_proxy": 0.087
+      }
+    },
+    "SOL": {
+      "by_reason": {},
+      "total_missed": {
+        "mean_r": -0.001,
+        "n": 63,
+        "pct_positive": 0.54,
+        "pct_win_proxy": 0.238
+      }
+    },
+    "WIF": {
+      "by_reason": {},
+      "total_missed": {
+        "mean_r": 0.131,
+        "n": 16,
+        "pct_positive": 0.562,
+        "pct_win_proxy": 0.25
+      }
+    }
+  },
+  "regime_heatmap": {},
+  "reject_reason_summary": {
+    "hard_blocked_setup_family:continuation": {
+      "mean_r": -0.44,
+      "n": 56,
+      "pct_positive": 0.375
+    },
+    "market_regime_block:chop": {
+      "mean_r": 0.255,
+      "n": 96,
+      "pct_positive": 0.562
+    },
+    "market_regime_block:reversal_against_dual_trend(htf=up,macro=up)": {
+      "mean_r": -3.593,
+      "n": 2,
+      "pct_positive": 0.0
+    },
+    "swing_conf_gate:conf=0.73<0.90": {
+      "mean_r": 1.746,
+      "n": 1,
+      "pct_positive": 1.0
+    },
+    "swing_conf_gate:conf=0.74<0.90": {
+      "mean_r": -0.619,
+      "n": 1,
+      "pct_positive": 0.0
+    },
+    "swing_conf_gate:conf=0.76<0.90": {
+      "mean_r": 0.506,
+      "n": 1,
+      "pct_positive": 1.0
+    },
+    "swing_conf_gate:conf=0.78<0.90": {
+      "mean_r": -0.277,
+      "n": 1,
+      "pct_positive": 0.0
+    },
+    "swing_conf_gate:conf=0.84<0.90": {
+      "mean_r": -0.148,
+      "n": 1,
+      "pct_positive": 0.0
+    },
+    "swing_conf_gate:conf=0.89<0.90": {
+      "mean_r": 1.746,
+      "n": 1,
+      "pct_positive": 1.0
+    }
+  },
+  "suggester_calibration": {
+    "max_step": 0.05,
+    "min_evidence_n": 8,
+    "min_mean_r": 0.2,
+    "min_positive_rate": 0.5,
+    "scan_band": 0.08
+  },
+  "suggestions": []
+}

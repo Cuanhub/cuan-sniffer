@@ -191,6 +191,74 @@ def build_structure(
         df.at[idx, "choch_bear"] = choch_bear
         df.at[idx, "trend"] = trend
 
+    # Live break detection.
+    #
+    # The pivot labels above are confirmed with a symmetric lookback, so the
+    # latest closed candle cannot itself be a pivot. Since the live engine only
+    # scores the latest closed candle, BOS/CHoCH would otherwise never fire in
+    # production. Use confirmed prior swings as levels and mark a break on the
+    # first close through that level.
+    last_high: Optional[float] = None
+    last_low: Optional[float] = None
+    broken_high_level: Optional[float] = None
+    broken_low_level: Optional[float] = None
+    live_trend: Trend = "neutral"
+    prev_close: Optional[float] = None
+
+    for idx, row in df.iterrows():
+        close = float(row["close"])
+
+        if (
+            last_high is not None
+            and prev_close is not None
+            and broken_high_level != last_high
+            and prev_close <= last_high
+            and close > last_high
+        ):
+            df.at[idx, "bos_bull"] = True
+            if live_trend == "bear":
+                df.at[idx, "choch_bull"] = True
+            live_trend = "bull"
+            broken_high_level = last_high
+
+        if (
+            last_low is not None
+            and prev_close is not None
+            and broken_low_level != last_low
+            and prev_close >= last_low
+            and close < last_low
+        ):
+            df.at[idx, "bos_bear"] = True
+            if live_trend == "bull":
+                df.at[idx, "choch_bear"] = True
+            live_trend = "bear"
+            broken_low_level = last_low
+
+        if bool(df.at[idx, "bos_bull"]):
+            if live_trend == "bear":
+                df.at[idx, "choch_bull"] = True
+            live_trend = "bull"
+        elif bool(df.at[idx, "bos_bear"]):
+            if live_trend == "bull":
+                df.at[idx, "choch_bear"] = True
+            live_trend = "bear"
+        elif live_trend == "neutral":
+            label = str(df.at[idx, "structure_label"])
+            if label in ("HH", "HL"):
+                live_trend = "bull"
+            elif label in ("LL", "LH"):
+                live_trend = "bear"
+
+        if bool(row["swing_high"]):
+            last_high = float(row["high"])
+            broken_high_level = None
+        if bool(row["swing_low"]):
+            last_low = float(row["low"])
+            broken_low_level = None
+
+        df.at[idx, "trend"] = live_trend
+        prev_close = close
+
     # Forward-fill trend so non-pivot bars inherit the last known structure bias
     df["trend"] = df["trend"].replace("neutral", pd.NA).ffill().fillna("neutral")
 

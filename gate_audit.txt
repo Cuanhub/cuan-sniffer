@@ -1,0 +1,294 @@
+SIGNAL ENGINE — REJECTION PATH AUDIT
+signal_engine.py — classified return None inventory
+Generated: 2026-06-16
+=======================================================================
+
+Legend:
+  PATH = calling function
+  LINE = signal_engine.py line number
+  LOG  = reject_reason written to smc_live_log
+  CAT  = rejection category
+
+=======================================================================
+SECTION 1 — HARD BLOCKS (binary, stops the signal dead)
+=======================================================================
+
+──────────────────────────────────────────────────────────────────────
+CAT: CONTINUATION
+──────────────────────────────────────────────────────────────────────
+
+[C-1] CHOP HARD BLOCK
+  PATH: _build_continuation_signal line 1946
+        _fallback_setup_family    line 1848/1850
+  LOG:  continuation_blocked_hard_chop_stack
+  LOGIC: market_regime == "chop" → continuation is 100% blocked
+  IMPACT: HIGH — chop is the most common intraday regime
+
+[C-2] WEAK TREND WITHOUT DUAL HTF+MACRO ALIGNMENT
+  PATH: _build_continuation_signal line 2079–2086
+        _fallback_setup_family    line 1852–1859
+  LOG:  continuation_blocked_weak_trend_without_dual_htf_alignment
+  LOGIC: market_regime=="weak_trend" AND NOT (htf==up AND macro==up
+         OR htf==down AND macro==down)
+  IMPACT: MEDIUM — weak_trend single-aligned setups blocked
+
+[C-3] LATE ENTRY HARD BLOCK
+  PATH: _build_continuation_signal line 2108–2110
+        _fallback_setup_family    line 1881–1884
+  LOG:  continuation_hard_block_extension_atr=X.XX  OR
+        continuation_hard_block_late_entry body_atr=X.XX range_atr=X.XX
+  LOGIC: extension from EMA-50 >= EXTENSION_HARD_BLOCK_ATR
+         OR directional body_atr >= BODY_HARD_BLOCK_ATR
+         OR range_atr >= RANGE_HARD_BLOCK_ATR
+  IMPACT: MEDIUM — fires on impulse candles already extended
+
+──────────────────────────────────────────────────────────────────────
+CAT: HTF / MACRO
+──────────────────────────────────────────────────────────────────────
+
+[H-1] REVERSAL — HTF CHOP + MACRO BEAR BLOCK
+  PATH: _build_reversal_signal line 2139–2140
+  LOG:  reversal_blocked_chop_bear
+  LOGIC: htf_regime=="chop" AND macro_regime=="down"
+  IMPACT: MODERATE — blocks shorts in HTF chop + macro bear
+
+[H-2] SWING — NO VALID STRUCTURE OR HTF ALIGNMENT
+  PATH: generate_swing_signal line 3026–3052
+  LOG:  no_valid_swing_structure_or_alignment
+  LOGIC: trigger absent OR (trigger present but neither htf NOR macro
+         aligns to trade direction)
+  IMPACT: HIGH for swing path — structural pre-screen
+
+[H-3] 4H SWING — MISSING OB / FVG / SWEEP
+  PATH: generate_swing_signal line 3141–3161
+  LOG:  4h_missing_required_ob_fvg_or_sweep
+  LOGIC: swing_tf=="4h" AND SMC_4H_REQUIRE_OB_OR_SWEEP AND no SMC trigger
+  IMPACT: LOW frequency (4H rare); HIGH precision gate when active
+
+[H-4] 4H SWING — MISSING DUAL HTF+MACRO ALIGNMENT
+  PATH: generate_swing_signal line 3162–3182
+  LOG:  4h_missing_dual_htf_macro_alignment
+  LOGIC: NOT (LONG AND htf=="up" AND macro=="up")
+         AND NOT (SHORT AND htf=="down" AND macro=="down")
+  IMPACT: LOW frequency; filters single-sided 4H setups
+
+──────────────────────────────────────────────────────────────────────
+CAT: SCORE
+──────────────────────────────────────────────────────────────────────
+
+[S-1] 1H SIGNAL — SCORE BELOW EFFECTIVE THRESHOLD
+  PATH: generate_signal line 2594–2613
+  LOG:  score_below_threshold:{score:.3f}<{threshold:.3f}
+  LOGIC: abs(chosen_score) < _effective_score_threshold(market_regime)
+         threshold = REGIME_SCORE_THRESHOLD_STRONG/WEAK/CHOP (all 0.64)
+  IMPACT: VERY HIGH — single largest rejection gate by volume
+
+[S-2] SWING — SCORE BELOW THRESHOLD
+  PATH: generate_swing_signal line 3079–3100
+  LOG:  score_below_threshold:{score:.3f}<{threshold:.3f}
+  LOGIC: score < swing_thresholds[swing_tf]
+         1H swing: < 0.60   4H swing: < max(0.65, SMC_4H_MIN_CONFIDENCE=0.90)
+  IMPACT: HIGH for 4H (0.90 is strict); MODERATE for 1H swing
+
+[S-3] SWING — INSUFFICIENT CONFLUENCE COUNT
+  PATH: generate_swing_signal line 3056–3077
+  LOG:  insufficient_swing_confluence:{count}<{min_confluence}
+  LOGIC: confluence_count < SMC_4H_MIN_CONFLUENCE (4 for 4H)
+                           < SMC_SWING_MIN_CONFLUENCE_1H (3 for 1H)
+  IMPACT: MEDIUM — counts structure + OB + sweep + FVG + HTF/macro
+
+[S-4] NO VALID SETUP FAMILY
+  PATH: generate_signal line 2508–2535
+  LOG:  no_valid_setup_family
+  LOGIC: cont==None AND rev==None AND fallback==None
+         (no trigger of any kind on this candle)
+  IMPACT: HIGH by volume — fires when no SMC trigger exists at all
+
+──────────────────────────────────────────────────────────────────────
+CAT: RR
+──────────────────────────────────────────────────────────────────────
+
+[R-1] 1H — RR TOO LOW AT ENGINE GATE
+  PATH: generate_signal line 2645–2667
+  LOG:  rr_too_low:{rr:.3f}<{rr_floor_effective:.3f}
+  LOGIC: rr < ENGINE_MIN_RR_FLOOR - ENGINE_MIN_RR_TOLERANCE = 1.55
+  NOTE: TP floor already auto-adjusts to 2.0×stop in _build_trade_levels.
+        This gate fires AFTER the floor — i.e. OB-based stop is so wide
+        that even 2×stop doesn't make 1.55 RR.
+  IMPACT: REDUCED since RR gate lowered 1.8 → 1.6 (was 82% near-miss)
+
+[R-2] 4H SWING — RR BELOW MINIMUM (stricter, separate gate)
+  PATH: generate_swing_signal line 3183–3203
+  LOG:  4h_rr_below_min:{rr:.3f}<{SMC_4H_MIN_RR:.3f}
+  LOGIC: rr < SMC_4H_MIN_RR = 2.5
+  IMPACT: LOW frequency; significant when it fires on 4H
+
+──────────────────────────────────────────────────────────────────────
+CAT: LIQUIDITY
+──────────────────────────────────────────────────────────────────────
+
+[L-1] QUALITY FILTER — UNKNOWN VOL STATE
+  PATH: _quality_filter → generate_signal line 2461–2478
+  LOG:  quality_block:unknown_vol_block
+  LOGIC: vol_state == "unknown" — ATR/volume data indeterminate
+  IMPACT: RARE — data gaps or startup state only
+
+[L-2] LATE ENTRY (see also C-3 — same method, continuation context)
+  Two sub-cases that set hard_block=True:
+    a. Extension from EMA-50 >= CONT_LATE_ENTRY_EXTENSION_HARD_BLOCK_ATR
+    b. Directional candle with body_atr >= BODY_HARD_BLOCK or range_atr >= RANGE_HARD_BLOCK
+  Soft penalty (not hard block): body_atr >= CONT_LATE_ENTRY_BODY_PENALTY_ATR (0.90)
+
+──────────────────────────────────────────────────────────────────────
+CAT: DATA / STRUCTURAL (not strategy gates)
+──────────────────────────────────────────────────────────────────────
+
+[D-1] INVALID ATR
+  PATH: _build_trade_levels line 2289–2291
+  LOG:  (propagates as invalid_trade_levels in callers)
+  LOGIC: atr_val <= 0 — can't compute stop/TP
+
+[D-2] INVALID STOP DISTANCE
+  PATH: _build_trade_levels line 2359–2362
+  LOG:  (propagates as invalid_trade_levels in callers)
+  LOGIC: actual_stop_dist <= 0 — OB geometry produced stop above entry
+
+[D-3] INVALID TRADE LEVELS (caller wrapper)
+  PATH: generate_signal line 2618–2639
+        generate_swing_signal line 3109–3128
+  LOG:  invalid_trade_levels
+
+[D-4] DEDUP — STALE REPEAT SIGNAL
+  PATH: generate_signal line 2712–2740 via _is_stale_repeat
+        generate_swing_signal line 2875–2877 via timestamp check
+  LOG:  dedup_active_for_repeat (1H)
+        silent (swing — timestamp comparison)
+  IMPACT: MODERATE — suppresses repeated signals between polls
+
+[D-5] DATA INSUFFICIENCY (swing path, startup/warmup)
+  PATH: generate_swing_signal lines 2824–2868
+  INCLUDES: invalid TF, 4H disabled by flag, empty OHLCV, no datetime index,
+            resample exception, too few bars (<50 for 1H / <18 for 4H),
+            feature frame empty
+  IMPACT: LOW in warm state; expected on startup
+
+=======================================================================
+SECTION 2 — SOFT GATES (reduce score, may push below threshold)
+=======================================================================
+
+SESSION PENALTIES (score adjustments, NOT hard blocks in engine):
+  ny_pm:           -0.05
+  dead_zone:       -0.05
+  london_open cont: -0.05
+  ny_open:         +0.05 (bonus)
+
+OTHER SCORE PENALTIES (may accumulate to push below 0.64):
+  low_vol_score_penalty         (LOW_VOL_SCORE_PENALTY, negative constant)
+  htf_chop_penalty_continuation (-0.08)
+  macro_chop_penalty_cont       (-0.03)
+  htf_macro_disagreement        (-0.08 when htf up + macro down)
+  macro_down_counter_long       (-0.18, swing path)
+  macro_up_counter_short        (-0.18, swing path)
+  chop regime penalty (swing)   (-0.14)
+  daily_zone_opposed            (-0.12 from _score_daily_zone)
+  directional_loss_memory       (variable negative for recent coin losses)
+  breakout_failure_cluster      (negative per recent failed breakout)
+  rsi_extreme                   (negative when RSI overextended)
+  vwap_deviation_opposed        (negative when price far against VWAP)
+  dead_calm_flow                (negative when whale pressure neutral)
+  late_entry_body_penalty       (-CONT_LATE_ENTRY_PENALTY_SCORE when body_atr>=0.90)
+
+IMPORTANT: "Rejected by Session" and "Rejected by Confidence" do NOT exist
+in signal_engine.py. Both live in executor.py:
+  Session hard blocks: BLOCKED_SESSIONS, SOFT_BLOCKED_SESSIONS, HARD_BLOCK_UNKNOWN_SESSION
+  Confidence gates:    UNIVERSAL_MIN_CONFIDENCE, SWING_MIN_CONFIDENCE,
+                       WEAK_TREND_MIN_CONFIDENCE, CHOP_REVERSAL_MIN_CONFIDENCE,
+                       MIN_SIGNAL_CONFIDENCE
+
+The engine produces a confidence value (= score clamped to 0.50–0.95).
+The executor applies the confidence gate to that value.
+
+=======================================================================
+SECTION 3 — RANKED BY ESTIMATED REJECTION VOLUME
+=======================================================================
+
+ #  | reject_reason                                  | Category     | Volume
+----|------------------------------------------------|--------------|----------
+ 1  | score_below_threshold (1H)                     | Score [S-1]  | VERY HIGH
+    | chosen_score < 0.64 after all factors          |              | ~50-60%
+    |                                                |              | of candidates
+----|------------------------------------------------|--------------|----------
+ 2  | no_valid_setup_family                          | Score [S-4]  | HIGH
+    | No SMC trigger present on this candle          |              | ~20-30%
+----|------------------------------------------------|--------------|----------
+ 3  | continuation_blocked_hard_chop                 | Cont  [C-1]  | HIGH
+    | market_regime==chop kills all cont signals     |              | ~15-25%
+    |                                                |              | of cont path
+----|------------------------------------------------|--------------|----------
+ 4  | no_valid_swing_structure_or_alignment          | HTF   [H-2]  | MED-HIGH
+    | No trigger or no htf/macro alignment           |              | dominates
+    |                                                |              | swing rejects
+----|------------------------------------------------|--------------|----------
+ 5  | dedup_active_for_repeat                        | Data  [D-4]  | MEDIUM
+    | Same setup within cooldown window              |              | intraday
+    |                                                |              | polling
+----|------------------------------------------------|--------------|----------
+ 6  | continuation_blocked_weak_trend                | Cont  [C-2]  | MEDIUM
+    |   _without_dual_htf_alignment                 |              | ranging mkt
+----|------------------------------------------------|--------------|----------
+ 7  | late_entry_hard_block                          | Liq   [C-3]  | MEDIUM
+    | Body/extension too large on trigger candle     |              | impulse mvts
+----|------------------------------------------------|--------------|----------
+ 8  | rr_too_low (1H, effective floor 1.55)          | RR    [R-1]  | REDUCED
+    | After TP floor auto-adjust, still < 1.55       |              | since 1.8→1.6
+----|------------------------------------------------|--------------|----------
+ 9  | reversal_blocked_chop_bear                     | HTF   [H-1]  | MODERATE
+    | htf==chop AND macro==down                      |              | bear market
+----|------------------------------------------------|--------------|----------
+10  | insufficient_swing_confluence                  | Score [S-3]  | MODERATE
+    | count < 4 (4H) or < 3 (1H swing)              |              | 4H strictest
+----|------------------------------------------------|--------------|----------
+11  | score_below_threshold (swing)                  | Score [S-2]  | MODERATE
+    | 4H: score < 0.90 (strict)                      |              | lower path vol
+    | 1H swing: score < 0.60                         |              |
+----|------------------------------------------------|--------------|----------
+12  | 4h_missing_dual_htf_macro_alignment            | HTF   [H-4]  | LOW
+    | Both HTF AND macro must agree for 4H           |              | 4H only
+----|------------------------------------------------|--------------|----------
+13  | 4h_missing_required_ob_fvg_or_sweep            | Liq   [H-3]  | LOW
+    | No SMC trigger on 4H bar                       |              | 4H only
+----|------------------------------------------------|--------------|----------
+14  | 4h_rr_below_min (rr < 2.5)                     | RR    [R-2]  | LOW
+    | 4H-only strict RR floor                        |              | 4H only
+----|------------------------------------------------|--------------|----------
+15  | quality_block:unknown_vol_block                | Liq   [L-1]  | RARE
+    | Vol state indeterminate                        |              | data gaps
+----|------------------------------------------------|--------------|----------
+16  | invalid_trade_levels / invalid_atr             | Data  [D-1/3]| RARE
+    | ATR=0 or stop geometry degenerate              |              | data issue
+----|------------------------------------------------|--------------|----------
+17  | data_insufficiency (swing startup)             | Data  [D-5]  | STARTUP
+    | Too few bars, resample fail, etc.              |              | warmup only
+
+=======================================================================
+SECTION 4 — CATEGORY SUMMARY
+=======================================================================
+
+Category      | Hard-block paths | Soft penalizers | Engine or Executor?
+--------------|-----------------|-----------------|---------------------
+Score         | 4 paths         | 12+ score terms | Engine (score gate)
+Continuation  | 3 paths         | -               | Engine
+HTF / Macro   | 4 paths         | 6 score terms   | Engine
+RR            | 2 paths         | -               | Engine
+Liquidity     | 2 paths         | 1 soft          | Engine (late entry)
+Data/Struct   | 5 paths         | -               | Engine (data qual)
+Session       | 0 in engine     | 3 score adj     | Executor hard-blocks
+Daily Zone    | 0               | 2 score terms   | Engine (soft only)
+Confidence    | 0 in engine     | -               | Executor hard-blocks
+
+KEY FINDING:
+Confidence and Session do NOT reject in signal_engine.py.
+The engine uses score as a proxy for confidence.
+The REAL confidence gate (UNIVERSAL_MIN_CONFIDENCE=0.90) fires in executor.py.
+That gate is the FIRST thing executor checks — it sits above all the
+executor-side session/continuation/chop gates.

@@ -1,0 +1,36 @@
+Archived after candle integrity audit.
+Archive date: 2026-06-16
+
+Critical fixes applied before this archive boundary:
+- Timestamp alignment: candle 'time' now uses open time (t) not close time (T)
+- HTF regime look-ahead removal: _compute_htf_regime now drops forming 1H candle and last 4H bar
+- Macro regime contamination removal: _compute_macro_regime_4h drops forming 1H candle and current incomplete day
+- Daily zone contamination removal: _compute_daily_zone drops forming 1H candle and current incomplete day's high/low
+- Swing signal contamination removal: generate_swing_signal drops forming 1H candle before resample
+- Backtest timestamp fix: analyze_winrate.py and backtest_missed.py use open time (t), not close time (T)
+
+Do NOT combine archived performance metrics with post-fix metrics.
+
+All data in this directory was collected under the pre-fix code and is
+considered a separate research dataset. The regime classifications, daily zone
+scores, HTF trend readings, and VWAP anchors in this data were computed using
+partially formed bars. Performance statistics (win rate, R, profit factor)
+derived from this data are not valid benchmarks for the post-fix system.
+
+Files archived:
+  trades.csv             — 107 closed live trades (2026-04-17 to 2026-06-09)
+  orders.csv             — 1026 order fill/state rows
+  signals.csv            — 16,249 signal rows (mixed 15m/1h/4h eras)
+  signals_evaluated.csv  — 452 backtest cache rows (pre-2026-04-03, stale)
+  missed_signals.csv     — 13,195 rejected signal rows
+  smc_live_log.csv       — 488,026 SMC engine event rows (192MB)
+  strategy_filter_state.json  — coin/setup paused state from pre-fix era
+  suggested_params.json  — parameter suggestions derived from contaminated data
+  last_recap.txt         — recap timestamp from pre-fix era
+  winrate_report.png     — analysis chart from contaminated data
+  reset_backup/          — prior backup set (pre-2026-04-17 data)
+
+Git commit of candle integrity fix:
+  Branch: sprint-3-built-alpha-scoring
+  Relevant files changed: perp_data.py, signal_engine.py, analyze_winrate.py,
+                          backtest_missed.py
