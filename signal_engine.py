@@ -41,9 +41,19 @@ from smc_live_log import append_smc_live_event
 
 GATE_REJECTS_PATH = os.getenv("GATE_REJECTS_PATH", "gate_rejects.csv")
 SCORE_DIST_PATH = os.getenv("SCORE_DIST_PATH", "score_distribution.csv")
+SHADOW_SCORES_PATH = os.getenv("SHADOW_SCORES_PATH", "shadow_scores.csv")
 
 _GATE_REJECT_LOCK = threading.Lock()
 _SCORE_DIST_LOCK = threading.Lock()
+_SHADOW_SCORES_LOCK = threading.Lock()
+
+_SHADOW_SCORES_FIELDS = [
+    "timestamp", "symbol", "side", "timeframe", "setup_family", "session",
+    "market_regime", "htf_regime", "macro_regime",
+    "score_v1", "confidence_v1", "score_v2", "rr",
+    "would_live_execute", "live_reject_reason",
+    "score_v2_version", "score_v2_tags", "score_v2_reason",
+]
 
 _GATE_REJECT_FIELDS = [
     "timestamp", "symbol", "timeframe", "side", "reject_reason",
@@ -143,6 +153,68 @@ def log_score_candidate(
             _telemetry_ensure_csv(SCORE_DIST_PATH, _SCORE_DIST_FIELDS)
             with open(SCORE_DIST_PATH, "a", newline="") as fh:
                 csv.DictWriter(fh, fieldnames=_SCORE_DIST_FIELDS).writerow(row)
+    except Exception:
+        pass
+
+
+def _log_shadow_score(
+    *,
+    coin: str,
+    side: str,
+    timeframe: str = "1h",
+    setup_family: str = "",
+    session: str = "",
+    market_regime: str = "",
+    htf_regime: str = "",
+    macro_regime: str = "",
+    score_v1: float = 0.0,
+    confidence_v1: float = 0.0,
+    rr: float = 0.0,
+    meta: dict = None,
+    accepted: bool = False,
+    reject_reason: str = "",
+) -> None:
+    try:
+        meta = meta or {}
+        score_v2 = float(meta.get("score_v2", 0.0) or 0.0)
+        if score_v2 <= 0:
+            from score_v2 import compute_shadow_score_v2
+            _ctx = dict(meta)
+            _ctx.update({"symbol": coin, "side": side, "coin": coin})
+            _v2 = compute_shadow_score_v2(_ctx)
+            score_v2 = _v2["score_v2"]
+            v2_version = _v2["score_v2_version"]
+            v2_tags = ",".join(_v2["score_v2_tags"])
+            v2_reason = _v2["score_v2_reason"]
+        else:
+            v2_version = str(meta.get("score_v2_version", ""))
+            v2_tags = str(meta.get("score_v2_tags", ""))
+            v2_reason = str(meta.get("score_v2_reason", ""))
+
+        row = {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "symbol": coin,
+            "side": side,
+            "timeframe": timeframe,
+            "setup_family": setup_family,
+            "session": session,
+            "market_regime": market_regime,
+            "htf_regime": htf_regime,
+            "macro_regime": macro_regime,
+            "score_v1": round(float(score_v1), 4),
+            "confidence_v1": round(float(confidence_v1), 4),
+            "score_v2": round(float(score_v2), 4),
+            "rr": round(float(rr), 4),
+            "would_live_execute": "true" if accepted else "false",
+            "live_reject_reason": str(reject_reason)[:200],
+            "score_v2_version": v2_version,
+            "score_v2_tags": v2_tags,
+            "score_v2_reason": v2_reason,
+        }
+        with _SHADOW_SCORES_LOCK:
+            _telemetry_ensure_csv(SHADOW_SCORES_PATH, _SHADOW_SCORES_FIELDS)
+            with open(SHADOW_SCORES_PATH, "a", newline="") as fh:
+                csv.DictWriter(fh, fieldnames=_SHADOW_SCORES_FIELDS).writerow(row)
     except Exception:
         pass
 
@@ -3013,6 +3085,22 @@ class AdaptiveSignalEngine:
             market_regime=market_regime, htf_regime=htf_regime, macro_regime=macro_regime,
         )
 
+        # Shadow score v2 for ALL scored candidates (accepted + rejected)
+        try:
+            from score_v2 import compute_shadow_score_v2 as _csv2
+            _pre_ctx = {
+                "symbol": coin, "coin": coin, "side": chosen_side,
+                "setup_family": setup_family, "session": session_label,
+                "market_regime": market_regime, "htf_regime": htf_regime,
+                "macro_regime": macro_regime, "score": chosen_score,
+                "total_score": chosen_score, "timeframe": "1h",
+                "stop_method": stop_meta.get("stop_method", "atr") if stop_meta else "atr",
+                **triggers,
+            }
+            _pre_v2 = _csv2(_pre_ctx)
+        except Exception:
+            _pre_v2 = {"score_v2": 0.0, "score_v2_version": "", "score_v2_tags": [], "score_v2_reason": ""}
+
         if abs(chosen_score) < effective_threshold:
             self._log_smc_candidate(
                 coin=coin,
@@ -3041,6 +3129,18 @@ class AdaptiveSignalEngine:
                 market_regime=market_regime, htf_regime=htf_regime,
                 macro_regime=macro_regime, session=session_label,
                 setup_family=setup_family,
+            )
+            _log_shadow_score(
+                coin=coin, side=chosen_side, timeframe="1h",
+                setup_family=setup_family, session=session_label,
+                market_regime=market_regime, htf_regime=htf_regime,
+                macro_regime=macro_regime, score_v1=chosen_score,
+                confidence_v1=round(min(0.95, max(0.50, chosen_score)), 3),
+                rr=0.0, accepted=False,
+                reject_reason=f"score_below_threshold:{chosen_score:.3f}<{effective_threshold:.3f}",
+                meta={"score_v2": _pre_v2["score_v2"], "score_v2_version": _pre_v2["score_v2_version"],
+                       "score_v2_tags": ",".join(_pre_v2.get("score_v2_tags", [])),
+                       "score_v2_reason": _pre_v2["score_v2_reason"]},
             )
             return None
 
@@ -3235,9 +3335,25 @@ class AdaptiveSignalEngine:
             **divergence_meta,
         }
 
+        # Shadow score v2 — research only, never used for live gating
+        try:
+            from score_v2 import compute_shadow_score_v2
+            _v2_ctx = dict(meta)
+            _v2_ctx.update({"symbol": coin, "side": chosen_side, "coin": coin})
+            _v2 = compute_shadow_score_v2(_v2_ctx)
+            meta["score_v2"] = _v2["score_v2"]
+            meta["score_v2_version"] = _v2["score_v2_version"]
+            meta["score_v2_tags"] = ",".join(_v2["score_v2_tags"])
+            meta["score_v2_reason"] = _v2["score_v2_reason"]
+        except Exception as _v2_err:
+            if self.debug:
+                print(f"[SCORE_V2] compute failed: {_v2_err}")
+
         if self.debug:
+            _v2_display = meta.get("score_v2", "n/a")
             print("[SIGNAL_DEBUG] " + coin + " " + chosen_side +
                   " score=" + str(round(chosen_score, 3)) +
+                  " score_v2=" + str(_v2_display) +
                   " rr=" + str(round(rr, 2)) +
                   " session=" + session_label +
                   " vol=" + vol_state)
@@ -3262,6 +3378,15 @@ class AdaptiveSignalEngine:
             market_regime=market_regime,
             session=session_label,
             governance=governance_summary,
+        )
+
+        _log_shadow_score(
+            coin=coin, side=chosen_side, timeframe="1h",
+            setup_family=setup_family, session=session_label,
+            market_regime=market_regime, htf_regime=htf_regime,
+            macro_regime=macro_regime, score_v1=chosen_score,
+            confidence_v1=confidence, rr=rr, meta=meta,
+            accepted=True, reject_reason="",
         )
 
         return Signal(
