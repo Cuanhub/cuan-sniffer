@@ -82,6 +82,63 @@ class SolFlowEngine:
 
     # ---------------------------------------------------
 
+    @staticmethod
+    def _flow_event_exists(
+        session,
+        *,
+        address: str,
+        signature: str,
+        coin: str,
+        direction: str,
+    ) -> bool:
+        return session.query(FlowEvent).filter_by(
+            address=address,
+            signature=signature,
+            coin=coin,
+            direction=direction,
+        ).first() is not None
+
+    def _add_flow_event_once(
+        self,
+        session,
+        *,
+        address: str,
+        direction: str,
+        amount: float,
+        usd_value: float,
+        signature: str,
+        slot: int,
+        coin: str,
+    ) -> bool:
+        coin = str(coin).upper()
+        direction = str(direction).upper()
+        if self._flow_event_exists(
+            session,
+            address=address,
+            signature=signature,
+            coin=coin,
+            direction=direction,
+        ):
+            print(
+                f"[FLOW/{coin}] duplicate ignored direction={direction} "
+                f"signature={signature[:10]}... address={address}"
+            )
+            return False
+
+        session.add(FlowEvent(
+            address=address,
+            direction=direction,
+            sol_amount=amount,
+            usd_value=usd_value,
+            signature=signature,
+            slot=slot,
+            coin=coin,
+            created_at=datetime.utcnow(),
+        ))
+        return True
+
+    # ---------------------------------------------------
+
     def _should_scan_wallet(self, address: str) -> bool:
         """
         Decide whether we should actually hit Helius for this wallet
@@ -136,7 +193,11 @@ class SolFlowEngine:
         try:
             wallet_record = self._ensure_wallet_record(session, address)
 
-            last_sig = self.last_signatures.get(address)
+            last_sig = self.last_signatures.get(address) or getattr(
+                wallet_record,
+                "last_signature",
+                "",
+            )
             sigs = get_signatures_for_address(address, limit=10)
 
             if not sigs:
@@ -162,6 +223,9 @@ class SolFlowEngine:
 
             # Update pointer
             self.last_signatures[address] = new_sigs[0]["signature"]
+            wallet_record.last_signature = new_sigs[0]["signature"]
+            wallet_record.updated_at = datetime.utcnow()
+            session.commit()
 
         except Exception as e:
             print(f"[ERROR] Engine crashed on wallet {address}: {e}")
@@ -217,28 +281,30 @@ class SolFlowEngine:
             amount = abs(delta)
             usd_val = amount * get_sol_price()
 
-            session.add(FlowEvent(
+            event_added = self._add_flow_event_once(
+                session,
                 address=address,
                 direction=direction,
-                sol_amount=amount,
+                amount=amount,
                 usd_value=usd_val,
                 signature=signature,
                 slot=slot,
                 coin="SOL",
-                created_at=datetime.utcnow(),
-            ))
-            any_event_written = True
+            )
+            any_event_written = any_event_written or event_added
 
             state = self.wallet_state.setdefault(
                 address, {"last_scan": 0.0, "last_big_move": 0.0}
             )
-            state["last_big_move"] = time.time()
+            if event_added:
+                state["last_big_move"] = time.time()
 
-            emoji = "🟢" if direction == "IN" else "🔴"
-            print(
-                f"[FLOW/SOL] {emoji} {direction} {amount:.2f} SOL "
-                f"(~${usd_val:,.0f}) | {address} | slot {slot}"
-            )
+            if event_added:
+                emoji = "🟢" if direction == "IN" else "🔴"
+                print(
+                    f"[FLOW/SOL] {emoji} {direction} {amount:.2f} SOL "
+                    f"(~${usd_val:,.0f}) | {address} | slot {slot}"
+                )
         else:
             print(f"[DEBUG] {address}: Δ {delta:.3f} SOL (below threshold)")
 
@@ -272,30 +338,34 @@ class SolFlowEngine:
                 direction = transfer["direction"]
                 # sol_amount stores USD value for token events so FlowContext
                 # imbalance calculations stay in comparable units per coin.
-                session.add(FlowEvent(
+                event_added = self._add_flow_event_once(
+                    session,
                     address=address,
                     direction=direction,
-                    sol_amount=usd_val,   # USD equivalent — see flow_context.py
+                    # USD equivalent — see flow_context.py.
+                    amount=usd_val,
                     usd_value=usd_val,
                     signature=signature,
                     slot=slot,
                     coin=coin_symbol,
-                    created_at=datetime.utcnow(),
-                ))
-                any_event_written = True
+                )
+                any_event_written = any_event_written or event_added
 
                 state = self.wallet_state.setdefault(
                     address, {"last_scan": 0.0, "last_big_move": 0.0}
                 )
-                state["last_big_move"] = time.time()
+                if event_added:
+                    state["last_big_move"] = time.time()
 
-                emoji = "🟢" if direction == "IN" else "🔴"
-                print(
-                    f"[FLOW/{coin_symbol}] {emoji} {direction} {delta_ui:.2f} "
-                    f"{coin_symbol} (~${usd_val:,.0f}) | {address} | slot {slot}"
-                )
+                if event_added:
+                    emoji = "🟢" if direction == "IN" else "🔴"
+                    print(
+                        f"[FLOW/{coin_symbol}] {emoji} {direction} {delta_ui:.2f} "
+                        f"{coin_symbol} (~${usd_val:,.0f}) | {address} | slot {slot}"
+                    )
 
         # ── Persist all events atomically ─────────────────────────────────────
+        record.last_signature = signature
         if any_event_written or True:   # always commit balance update
             try:
                 session.commit()

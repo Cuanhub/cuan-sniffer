@@ -14,8 +14,11 @@ Live-only cleanup:
 import os
 import sys
 import time
+import fcntl
 import subprocess
 import threading
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 
@@ -24,13 +27,18 @@ from db import init_db, SessionLocal
 from perp_data import PerpDataFeed
 from flow_context import FlowContext
 from perp_sentiment import PerpSentimentFeed
-from signal_engine import AdaptiveSignalEngine, Signal
+from signal_engine import AdaptiveSignalEngine, Signal, log_gate_reject
 from notifier import send_telegram_message
 from signal_log import init_signal_log, append_signal
 from alerts import AlertManager
 from executor import Executor
 from trades_recap import run_trades_recap
 from smc_live_log import init_smc_live_log
+from live_data_guard import (
+    LIVE_MAX_CANDLE_CACHE_AGE_SECONDS,
+    LIVE_MAX_SENTIMENT_CACHE_AGE_SECONDS,
+    api_backoff_status,
+)
 
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
@@ -51,6 +59,13 @@ AGENT_POLL_INTERVAL_SECONDS = int(os.getenv(
 
 PERP_FEED_INTERVAL_SECONDS = int(os.getenv("PERP_FEED_INTERVAL_SECONDS", "60"))
 SENTIMENT_FEED_INTERVAL_SECONDS = int(os.getenv("SENTIMENT_FEED_INTERVAL_SECONDS", "45"))
+MIN_1H_CANDLE_POLL_SECONDS = int(os.getenv("MIN_1H_CANDLE_POLL_SECONDS", "60"))
+DATA_HEALTH_HEARTBEAT_SECONDS = int(os.getenv("DATA_HEALTH_HEARTBEAT_SECONDS", "60"))
+DATA_HEALTH_STALE_SYMBOL_BLOCK_PCT = float(os.getenv("DATA_HEALTH_STALE_SYMBOL_BLOCK_PCT", "0.30"))
+DATA_HEALTH_MIN_STALE_SYMBOLS = int(os.getenv("DATA_HEALTH_MIN_STALE_SYMBOLS", "3"))
+DATA_HEALTH_BREAKER_LOG_SECONDS = int(os.getenv("DATA_HEALTH_BREAKER_LOG_SECONDS", "60"))
+AGENT_LOCK_FILE = os.getenv("AGENT_LOCK_FILE", "agent.py.lock")
+PAUSE_NEW_SIGNALS = os.getenv("PAUSE_NEW_SIGNALS", "false").lower() == "true"
 
 # ── Coin list ──────────────────────────────────────────────────────────────────
 
@@ -97,6 +112,54 @@ _recap_running = threading.Event()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+class AgentLockUnavailable(RuntimeError):
+    pass
+
+
+@contextmanager
+def agent_process_lock(lock_file: str = AGENT_LOCK_FILE):
+    """
+    Prevent two trading-agent processes from running at the same time.
+    """
+    lock_path = Path(lock_file)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.touch(exist_ok=True)
+
+    lock_f = open(lock_path, "r+")
+    locked = False
+    try:
+        try:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock_f.seek(0)
+            owner = lock_f.read().strip()
+            raise AgentLockUnavailable(
+                f"another_agent_instance_running lock_file={lock_path}"
+                f"{' owner=' + owner if owner else ''}"
+            ) from None
+
+        locked = True
+        lock_f.seek(0)
+        lock_f.truncate()
+        lock_f.write(
+            f"pid={os.getpid()} started_at={datetime.now(timezone.utc).isoformat()}\n"
+        )
+        lock_f.flush()
+        os.fsync(lock_f.fileno())
+        print(f"[AGENT_LOCK] acquired lock_file={lock_path} pid={os.getpid()}")
+        yield
+    finally:
+        try:
+            if locked:
+                lock_f.seek(0)
+                lock_f.truncate()
+                lock_f.flush()
+                fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+                print(f"[AGENT_LOCK] released lock_file={lock_path} pid={os.getpid()}")
+        finally:
+            lock_f.close()
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -157,6 +220,7 @@ def validate_thresholds() -> bool:
         "MIN_STOP_REDESIGN_RR":       float(os.getenv("MIN_STOP_REDESIGN_RR", "1.60")),
         "MIN_EXECUTION_EFFECTIVE_RR": float(os.getenv("MIN_EXECUTION_EFFECTIVE_RR", "1.55")),
     }
+    regime_tp_cap_r = float(os.getenv("REGIME_TP_CAP_R", "1.75"))
 
     feature_flags = {
         "SMC_ENABLE_4H_LIVE":      os.getenv("SMC_ENABLE_4H_LIVE",      "true"),
@@ -195,6 +259,17 @@ def validate_thresholds() -> bool:
             marker = f"  ← [THRESHOLD WARNING] expected {expected_rr[name]:.2f}"
             all_aligned = False
         print(f"    {name:<36} = {val:.2f}{marker}")
+
+    print(f"  {sep}")
+    print("  TP CAPS:")
+    cap_marker = ""
+    if regime_tp_cap_r <= rr_gates["MIN_EXECUTION_EFFECTIVE_RR"]:
+        cap_marker = (
+            "  ← [THRESHOLD WARNING] must be > "
+            f"MIN_EXECUTION_EFFECTIVE_RR ({rr_gates['MIN_EXECUTION_EFFECTIVE_RR']:.2f})"
+        )
+        all_aligned = False
+    print(f"    {'REGIME_TP_CAP_R':<36} = {regime_tp_cap_r:.2f}{cap_marker}")
 
     print(f"  {sep}")
     print("  FEATURE FLAGS:")
@@ -629,6 +704,108 @@ def trigger_recap():
 
 # ── Coin state ─────────────────────────────────────────────────────────────────
 
+def _stable_jitter_seconds(value: str, max_jitter: int) -> float:
+    max_jitter = max(0, int(max_jitter))
+    if max_jitter <= 0:
+        return 0.0
+    return float(sum(ord(ch) for ch in value) % max_jitter)
+
+
+def _log_presignal_reject(
+    coin: str,
+    reason: str,
+    *,
+    timeframe: str = "1h",
+    metadata: str = "",
+) -> None:
+    log_gate_reject(
+        symbol=coin,
+        timeframe=timeframe,
+        reject_reason=reason,
+        metadata=metadata,
+    )
+
+
+def _age_label(age: Any) -> str:
+    try:
+        if age is None:
+            return "unknown"
+        return f"{float(age):.1f}s"
+    except (TypeError, ValueError):
+        return "unknown"
+
+
+def summarize_data_health(states: Dict[str, "CoinState"]) -> Dict[str, Any]:
+    total = len(states)
+    stale_symbols: list[str] = []
+    dead_feeds: list[str] = []
+    ages: list[float] = []
+
+    for coin, state in states.items():
+        status = state.perp_feed.get_market_data_status(
+            max_age_seconds=LIVE_MAX_CANDLE_CACHE_AGE_SECONDS
+        )
+        age = status.get("cache_age")
+        try:
+            if age is not None:
+                ages.append(float(age))
+        except (TypeError, ValueError):
+            pass
+
+        if not status.get("fresh", False):
+            stale_symbols.append(coin)
+        if status.get("poll_thread_alive") is False:
+            dead_feeds.append(coin)
+
+    stale_count = len(stale_symbols)
+    stale_pct = (stale_count / total) if total else 0.0
+    return {
+        "total": total,
+        "stale_count": stale_count,
+        "stale_pct": stale_pct,
+        "stale_symbols": stale_symbols,
+        "dead_feeds": dead_feeds,
+        "max_cache_age": max(ages) if ages else None,
+    }
+
+
+def data_health_breaker_active(summary: Dict[str, Any]) -> bool:
+    total = int(summary.get("total", 0) or 0)
+    if total <= 0:
+        return False
+    stale_count = int(summary.get("stale_count", 0) or 0)
+    stale_pct = float(summary.get("stale_pct", 0.0) or 0.0)
+    block_pct = max(0.0, min(1.0, DATA_HEALTH_STALE_SYMBOL_BLOCK_PCT))
+    return (
+        stale_count >= max(1, DATA_HEALTH_MIN_STALE_SYMBOLS)
+        and stale_pct >= block_pct
+    )
+
+
+def format_data_health(summary: Dict[str, Any], breaker_active: bool) -> str:
+    stale_symbols = summary.get("stale_symbols", []) or []
+    dead_feeds = summary.get("dead_feeds", []) or []
+    total = int(summary.get("total", 0) or 0)
+    stale_count = int(summary.get("stale_count", 0) or 0)
+    stale_pct = float(summary.get("stale_pct", 0.0) or 0.0)
+    return (
+        f"stale_symbols={stale_count}/{total}"
+        f" stale_pct={stale_pct * 100.0:.1f}%"
+        f" max_cache_age={_age_label(summary.get('max_cache_age'))}"
+        f" dead_feeds={','.join(dead_feeds) if dead_feeds else 'none'}"
+        f" breaker_active={str(bool(breaker_active)).lower()}"
+        f" symbols={','.join(stale_symbols[:8]) if stale_symbols else 'none'}"
+    )
+
+
+def signal_generation_pause_reason(health_block: bool) -> str:
+    if PAUSE_NEW_SIGNALS:
+        return "operator_pause"
+    if health_block:
+        return "data_health_circuit_breaker"
+    return ""
+
+
 def _build_signal_engine() -> AdaptiveSignalEngine:
     return AdaptiveSignalEngine(
         score_threshold=ENGINE_SCORE_THRESHOLD,
@@ -668,9 +845,18 @@ class CoinState:
         self._error_count: int = 0
 
     def start_feeds(self):
-        self.perp_feed.start(interval_sec=PERP_FEED_INTERVAL_SECONDS)
+        candle_interval = max(PERP_FEED_INTERVAL_SECONDS, MIN_1H_CANDLE_POLL_SECONDS)
+        jitter_cap = min(candle_interval, 30)
+        candle_jitter = _stable_jitter_seconds(self.coin, jitter_cap)
+        self.perp_feed.start(
+            interval_sec=candle_interval,
+            initial_delay_sec=candle_jitter,
+        )
         self.sent_feed.start(interval_sec=SENTIMENT_FEED_INTERVAL_SECONDS)
-        print(f"[{self.coin}] feeds started")
+        print(
+            f"[{self.coin}] feeds started "
+            f"candle_interval={candle_interval}s candle_jitter={candle_jitter:.1f}s"
+        )
 
     def get_flow_snapshot(self) -> Dict[str, Any]:
         return self.flow_ctx.compute_flow_snapshot() if self.flow_ctx else {}
@@ -724,6 +910,53 @@ def process_coin(
     coin = state.coin
     warmup = WARMUP_BARS.get(coin, DEFAULT_WARMUP)
 
+    backoff_active, backoff_remaining, backoff_reason = api_backoff_status()
+    if backoff_active:
+        metadata = (
+            f"remaining={backoff_remaining:.1f}s;"
+            f"reason={backoff_reason}"
+        )
+        print(
+            f"[{coin}] stale_data_skip reason=api_backoff_active "
+            f"api_backoff_remaining={backoff_remaining:.1f}s"
+        )
+        _log_presignal_reject(
+            coin,
+            "api_backoff_active",
+            metadata=metadata,
+        )
+        return False, True
+
+    market_status = state.perp_feed.get_market_data_status(
+        max_age_seconds=LIVE_MAX_CANDLE_CACHE_AGE_SECONDS
+    )
+    cache_age = market_status.get("cache_age")
+    cache_age_label = "unknown" if cache_age is None else f"{float(cache_age):.1f}s"
+    print(
+        f"[{coin}] candle_status data_source={market_status.get('data_source')} "
+        f"cache_age={cache_age_label} stale_skip={not market_status.get('fresh', False)}"
+    )
+    if not market_status.get("fresh", False):
+        metadata = (
+            f"data_source={market_status.get('data_source')};"
+            f"cache_age={cache_age_label};"
+            f"max_age={LIVE_MAX_CANDLE_CACHE_AGE_SECONDS:.1f}s;"
+            f"fetch_source={market_status.get('fetch_source')};"
+            f"last_error={market_status.get('last_error') or ''}"
+        )
+        print(
+            f"[{coin}] stale_data_skip reason=stale_candle_cache "
+            f"data_source={market_status.get('data_source')} "
+            f"cache_age={cache_age_label} "
+            f"max_age={LIVE_MAX_CANDLE_CACHE_AGE_SECONDS:.1f}s"
+        )
+        _log_presignal_reject(
+            coin,
+            "stale_candle_cache",
+            metadata=metadata,
+        )
+        return False, True
+
     df = state.perp_feed.get_ohlcv_df()
     if df is None or len(df) < warmup:
         fetch_source, fetch_sec = state.perp_feed.get_last_fetch_status()
@@ -737,7 +970,27 @@ def process_coin(
         return False, False
 
     flow_snapshot = state.get_flow_snapshot()
-    sent = state.sent_feed.get_snapshot()
+    sent = state.sent_feed.get_snapshot(
+        max_age_sec=LIVE_MAX_SENTIMENT_CACHE_AGE_SECONDS
+    )
+    if getattr(sent, "stale_neutralized", False):
+        sent_age = getattr(sent, "cache_age_sec", None)
+        sent_age_label = "unknown" if sent_age is None else f"{float(sent_age):.1f}s"
+        metadata = (
+            f"data_source={getattr(sent, 'data_source', 'neutralized')};"
+            f"cache_age={sent_age_label};"
+            f"max_age={LIVE_MAX_SENTIMENT_CACHE_AGE_SECONDS:.1f}s"
+        )
+        print(
+            f"[{coin}] sentiment_stale_neutralized "
+            f"data_source={getattr(sent, 'data_source', 'neutralized')} "
+            f"cache_age={sent_age_label}"
+        )
+        _log_presignal_reject(
+            coin,
+            "sentiment_stale_neutralized",
+            metadata=metadata,
+        )
     funding_rate = float(getattr(sent, "funding_rate", 0.0))
     open_interest = int(getattr(sent, "open_interest", 0) or 0)
     bias = float(getattr(sent, "bias", 0.0))
@@ -928,7 +1181,7 @@ def build_states(session_factory) -> tuple[Dict[str, CoinState], AdaptiveSignalE
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
-def main():
+def run_agent():
     if not validate_env():
         print("[AGENT] Invalid environment. Exiting.")
         return
@@ -956,6 +1209,8 @@ def main():
 
     _last_all_skipped_notify_ts: float = 0.0
     _ALL_SKIPPED_NOTIFY_COOLDOWN_SEC = 600
+    _last_data_health_heartbeat_ts: float = 0.0
+    _last_data_health_block_log_ts: float = 0.0
 
     try:
         while True:
@@ -963,27 +1218,58 @@ def main():
             any_signal = False
             skipped_symbols = 0
 
-            for coin in TRACKED_COINS:
-                try:
-                    traded, skipped = process_coin(states[coin], executor)
-                    if traded:
-                        any_signal = True
-                    if skipped:
-                        skipped_symbols += 1
-                    states[coin].on_success()
-                except Exception as e:
-                    err_msg = str(e)[:180]
-                    count = states[coin]._error_count + 1
-                    skipped_symbols += 1
-                    print(f"[{coin} ERROR #{count}] {err_msg}")
-                    if states[coin].on_error():
-                        notify(
-                            f"❌ *{coin} error* (x{states[coin]._error_count})\n"
-                            f"{utc_now()}\n"
-                            f"`{err_msg}`"
-                        )
+            health_summary = summarize_data_health(states)
+            health_block = data_health_breaker_active(health_summary)
+            _now = time.time()
+            health_log_due = (
+                DATA_HEALTH_HEARTBEAT_SECONDS > 0
+                and _now - _last_data_health_heartbeat_ts >= DATA_HEALTH_HEARTBEAT_SECONDS
+            )
+            block_log_due = (
+                health_block
+                and _now - _last_data_health_block_log_ts >= DATA_HEALTH_BREAKER_LOG_SECONDS
+            )
+            if health_log_due or block_log_due:
+                health_line = format_data_health(health_summary, health_block)
+                print(f"[DATA_HEALTH] {health_line}")
+                _last_data_health_heartbeat_ts = _now
+                if block_log_due:
+                    _last_data_health_block_log_ts = _now
+                    _log_presignal_reject(
+                        "ALL",
+                        "data_health_circuit_breaker_active",
+                        metadata=health_line,
+                    )
 
-            if skipped_symbols == len(TRACKED_COINS):
+            pause_reason = signal_generation_pause_reason(health_block)
+            if pause_reason == "operator_pause":
+                skipped_symbols = len(TRACKED_COINS)
+                print("[AGENT] New signal generation paused by PAUSE_NEW_SIGNALS=true")
+            elif pause_reason == "data_health_circuit_breaker":
+                skipped_symbols = len(TRACKED_COINS)
+                print("[DATA_HEALTH] New signal generation paused by stale-symbol circuit breaker")
+            else:
+                for coin in TRACKED_COINS:
+                    try:
+                        traded, skipped = process_coin(states[coin], executor)
+                        if traded:
+                            any_signal = True
+                        if skipped:
+                            skipped_symbols += 1
+                        states[coin].on_success()
+                    except Exception as e:
+                        err_msg = str(e)[:180]
+                        count = states[coin]._error_count + 1
+                        skipped_symbols += 1
+                        print(f"[{coin} ERROR #{count}] {err_msg}")
+                        if states[coin].on_error():
+                            notify(
+                                f"❌ *{coin} error* (x{states[coin]._error_count})\n"
+                                f"{utc_now()}\n"
+                                f"`{err_msg}`"
+                            )
+
+            if skipped_symbols == len(TRACKED_COINS) and not PAUSE_NEW_SIGNALS:
                 _now = time.time()
                 if _now - _last_all_skipped_notify_ts >= _ALL_SKIPPED_NOTIFY_COOLDOWN_SEC:
                     _last_all_skipped_notify_ts = _now
@@ -1035,6 +1321,14 @@ def main():
             f"`{err_msg}`"
         )
         time.sleep(5)
+
+
+def main():
+    try:
+        with agent_process_lock():
+            run_agent()
+    except AgentLockUnavailable as e:
+        print(f"[AGENT_LOCK] {e}")
 
 
 if __name__ == "__main__":

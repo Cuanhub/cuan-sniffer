@@ -20,6 +20,7 @@ class WalletBalance(Base):
     id = Column(Integer, primary_key=True, index=True)
     address = Column(String, unique=True, index=True)
     sol_balance = Column(Float, default=0.0)
+    last_signature = Column(String, default="")
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -59,6 +60,13 @@ def _migrate_db(conn) -> None:
     conn.execute(text(
         "CREATE INDEX IF NOT EXISTS ix_flow_events_coin ON flow_events (coin)"
     ))
+
+    wallet_result = conn.execute(text("PRAGMA table_info(wallet_balances)"))
+    wallet_existing = {row[1] for row in wallet_result}
+    if "last_signature" not in wallet_existing:
+        conn.execute(text("ALTER TABLE wallet_balances ADD COLUMN last_signature VARCHAR DEFAULT ''"))
+        conn.execute(text("UPDATE wallet_balances SET last_signature = '' WHERE last_signature IS NULL"))
+        print("[DB] Migrated wallet_balances: added 'last_signature' column")
 
 
 # === Initialize database ===

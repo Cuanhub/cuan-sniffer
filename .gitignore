@@ -21,6 +21,7 @@ signals_*.csv
 *.db
 *.csv
 *.png
+*.lock
 
 # OS / editor
 .DS_Store
