@@ -8,6 +8,15 @@ import requests
 import pandas as pd
 import os
 
+from live_data_guard import (
+    LIVE_MAX_CANDLE_CACHE_AGE_SECONDS,
+    api_backoff_status,
+    cache_age_seconds,
+    cache_is_fresh,
+    record_api_failure,
+    record_api_success,
+)
+
 # Hyperliquid info endpoint (public, no auth needed)
 HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info"
 PERP_FETCH_MAX_RETRIES = int(os.getenv("PERP_FETCH_MAX_RETRIES", "1"))
@@ -59,11 +68,13 @@ class PerpDataFeed:
         # local cache for latest snapshot
         self._cached_snapshot: List[Dict] = []
         self._cached_snapshot_ts: float = 0.0
+        self._last_fetch_error: str = ""
 
         # controls how often refresh is allowed to hit network
         self._last_refresh_ts: float = 0.0
         self._last_fetch_source: str = "init"
         self._last_fetch_duration_sec: float = 0.0
+        self._thread: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------
     # Helpers
@@ -166,6 +177,16 @@ class PerpDataFeed:
         deadline = time.monotonic() + budget_sec
         last_error = None
 
+        backoff_active, backoff_remaining, backoff_reason = api_backoff_status()
+        if backoff_active:
+            self._last_fetch_error = f"api_backoff_active:{backoff_reason}"
+            if self.debug:
+                print(
+                    f"[PERP_DATA] api_backoff_active for {self.coin}-PERP ({self.interval})"
+                    f" | remaining={backoff_remaining:.1f}s"
+                )
+            return []
+
         for attempt in range(total_attempts):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -182,6 +203,7 @@ class PerpDataFeed:
                 )
 
                 if resp.status_code == 429:
+                    record_api_failure("perp_data", f"429:{self.coin}:{self.interval}")
                     if attempt >= total_attempts - 1:
                         break
                     sleep_s = min(PERP_FETCH_RETRY_SLEEP_SEC, max(0.0, deadline - time.monotonic()))
@@ -203,10 +225,13 @@ class PerpDataFeed:
                         print(f"[PERP_DATA] Unexpected candles response format for {self.coin}: {data}")
                     return []
 
+                record_api_success()
+                self._last_fetch_error = ""
                 return data
 
             except requests.RequestException as e:
                 last_error = e
+                record_api_failure("perp_data", e)
                 if attempt >= total_attempts - 1:
                     break
                 sleep_s = min(PERP_FETCH_RETRY_SLEEP_SEC, max(0.0, deadline - time.monotonic()))
@@ -222,6 +247,7 @@ class PerpDataFeed:
 
         if self.debug:
             print(f"[PERP_DATA] Error fetching candles for {self.coin}-PERP: {last_error}")
+        self._last_fetch_error = str(last_error or "unknown_fetch_error")[:180]
         return []
 
     # ------------------------------------------------------------------
@@ -246,7 +272,8 @@ class PerpDataFeed:
                 age = now_ts - self._cached_snapshot_ts
                 print(
                     f"[PERP_DATA] Cache hit for {self.coin}-PERP ({self.interval})"
-                    f" | age={age:.1f}s"
+                    f" | data_source=cache"
+                    f" | cache_age={age:.1f}s"
                 )
             return list(self._cached_snapshot)
 
@@ -281,6 +308,7 @@ class PerpDataFeed:
                     age = now_ts - self._cached_snapshot_ts
                     print(
                         f"[PERP_DATA] Fail-soft using cached candles for {self.coin}-PERP ({self.interval})"
+                        f" | data_source=cache"
                         f" | cache_age={age:.1f}s"
                         f" | fetch_time={self._last_fetch_duration_sec:.2f}s"
                     )
@@ -320,6 +348,13 @@ class PerpDataFeed:
         self._cached_snapshot_ts = time.time()
         self._last_fetch_source = "network"
         self._last_fetch_duration_sec = time.monotonic() - fetch_started
+        if self.debug:
+            print(
+                f"[PERP_DATA] Network candles for {self.coin}-PERP ({self.interval})"
+                f" | data_source=fresh"
+                f" | cache_age=0.0s"
+                f" | fetch_time={self._last_fetch_duration_sec:.2f}s"
+            )
 
         return candles
 
@@ -366,7 +401,7 @@ class PerpDataFeed:
     # Background loop
     # ------------------------------------------------------------------
 
-    def run_poll_loop(self, interval_sec: Optional[int] = None):
+    def run_poll_loop(self, interval_sec: Optional[int] = None, initial_delay_sec: float = 0.0):
         """
         Background loop: periodically refreshes candles.
 
@@ -374,12 +409,21 @@ class PerpDataFeed:
         """
         if interval_sec is None:
             interval_sec = self._recommended_poll_interval_sec()
+        interval_sec = max(1, int(interval_sec))
 
         if self.debug:
             print(
                 f"[PERP_DATA] Starting poll loop for {self.coin}-PERP ({self.interval})"
                 f" | every {interval_sec}s"
             )
+
+        if initial_delay_sec > 0:
+            if self.debug:
+                print(
+                    f"[PERP_DATA] Initial jitter for {self.coin}-PERP ({self.interval})"
+                    f" | sleep={float(initial_delay_sec):.1f}s"
+                )
+            time.sleep(float(initial_delay_sec))
 
         while True:
             try:
@@ -389,15 +433,16 @@ class PerpDataFeed:
 
             time.sleep(interval_sec)
 
-    def start(self, interval_sec: Optional[int] = None):
+    def start(self, interval_sec: Optional[int] = None, initial_delay_sec: float = 0.0):
         """
         Starts the background polling thread.
         """
         t = threading.Thread(
             target=self.run_poll_loop,
-            args=(interval_sec,),
+            args=(interval_sec, initial_delay_sec),
             daemon=True,
         )
+        self._thread = t
         t.start()
 
     # ------------------------------------------------------------------
@@ -421,3 +466,36 @@ class PerpDataFeed:
 
     def get_last_fetch_status(self) -> Tuple[str, float]:
         return self._last_fetch_source, float(self._last_fetch_duration_sec)
+
+    def get_cache_age_sec(self) -> Optional[float]:
+        return cache_age_seconds(self._cached_snapshot_ts)
+
+    def is_cache_fresh(self, max_age_seconds: float = LIVE_MAX_CANDLE_CACHE_AGE_SECONDS) -> bool:
+        return bool(self._cached_snapshot) and cache_is_fresh(
+            self._cached_snapshot_ts,
+            max_age_seconds=max_age_seconds,
+        )
+
+    def get_market_data_status(
+        self,
+        max_age_seconds: float = LIVE_MAX_CANDLE_CACHE_AGE_SECONDS,
+    ) -> Dict[str, object]:
+        age = self.get_cache_age_sec()
+        source = self._last_fetch_source
+        fresh = self.is_cache_fresh(max_age_seconds=max_age_seconds)
+        data_source = "fresh" if source == "network" and fresh else "cache"
+        if not self._cached_snapshot:
+            data_source = "none"
+        elif not fresh:
+            data_source = "stale_cache"
+        return {
+            "fresh": fresh,
+            "has_cache": bool(self._cached_snapshot),
+            "cache_age": age,
+            "data_source": data_source,
+            "fetch_source": source,
+            "fetch_duration_sec": float(self._last_fetch_duration_sec),
+            "last_error": self._last_fetch_error,
+            "max_age_seconds": float(max_age_seconds),
+            "poll_thread_alive": bool(self._thread and self._thread.is_alive()),
+        }

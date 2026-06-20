@@ -68,6 +68,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from eth_account import Account
 
 from execution_backend import ExecutionBackend, FillResult
+from live_data_guard import (
+    LIVE_MAX_MIDPRICE_AGE_SECONDS,
+    api_backoff_status,
+    cache_age_seconds,
+    cache_is_fresh,
+    record_api_failure,
+    record_api_success,
+)
 
 from hyperliquid.exchange import Exchange
 from hyperliquid.info import Info
@@ -174,7 +182,7 @@ class LiveExecutionBackend(ExecutionBackend):
 
         ref_price = self.get_mid_price(coin)
         if not ref_price or ref_price <= 0:
-            return self._reject("missing_market_price", price, size_usd, "entry")
+            return self._reject("stale_midprice", price, size_usd, "entry")
 
         sz = self._notional_to_size(coin, size_usd, ref_price)
         if sz <= 0:
@@ -568,18 +576,98 @@ class LiveExecutionBackend(ExecutionBackend):
 
     # ── Price feed ─────────────────────────────────────────────────────────
 
-    def get_mid_price(self, coin: str) -> Optional[float]:
+    def get_cached_mid_price(self, coin: str) -> Optional[float]:
+        return self._mid_cache.get(str(coin).upper())
+
+    def get_mid_cache_age_sec(self) -> Optional[float]:
+        return cache_age_seconds(self._mid_cache_ts)
+
+    def midprice_is_fresh(
+        self,
+        max_age_sec: float = LIVE_MAX_MIDPRICE_AGE_SECONDS,
+    ) -> bool:
+        return bool(self._mid_cache) and cache_is_fresh(
+            self._mid_cache_ts,
+            max_age_seconds=max_age_sec,
+        )
+
+    def get_mid_price(
+        self,
+        coin: str,
+        max_age_sec: float = LIVE_MAX_MIDPRICE_AGE_SECONDS,
+    ) -> Optional[float]:
         now = time.time()
+        coin = str(coin).upper()
+        age_before = self.get_mid_cache_age_sec()
+
+        if self._mid_cache and age_before is not None and age_before <= MID_CACHE_TTL_SEC:
+            px = self._mid_cache.get(coin)
+            if px is not None:
+                if self.debug:
+                    print(
+                        f"[LIVE_BACKEND] midprice data_source=cache coin={coin}"
+                        f" midprice_age={age_before:.2f}s"
+                    )
+                return px
+
+        backoff_active, backoff_remaining, backoff_reason = api_backoff_status()
+        if backoff_active:
+            if self.midprice_is_fresh(max_age_sec=max_age_sec):
+                px = self._mid_cache.get(coin)
+                if px is not None:
+                    if self.debug:
+                        print(
+                            f"[LIVE_BACKEND] midprice data_source=cache coin={coin}"
+                            f" midprice_age={self.get_mid_cache_age_sec() or 0.0:.2f}s"
+                            f" api_backoff_remaining={backoff_remaining:.1f}s"
+                        )
+                    return px
+            print(
+                f"[LIVE_BACKEND] live_midprice_stale_block coin={coin}"
+                f" midprice_age={age_before if age_before is not None else -1:.2f}s"
+                f" max_age={float(max_age_sec):.1f}s"
+                f" api_backoff_remaining={backoff_remaining:.1f}s"
+                f" reason={backoff_reason}"
+            )
+            return None
+
         if now - self._mid_cache_ts > MID_CACHE_TTL_SEC:
             try:
                 mids = self.info.all_mids()
                 if isinstance(mids, dict):
                     self._mid_cache = {k.upper(): float(v) for k, v in mids.items()}
-                    self._mid_cache_ts = now
+                    self._mid_cache_ts = time.time()
+                    record_api_success()
+                    px = self._mid_cache.get(coin)
+                    if px is not None:
+                        if self.debug:
+                            print(
+                                f"[LIVE_BACKEND] midprice data_source=fresh coin={coin}"
+                                f" midprice_age=0.00s"
+                            )
+                        return px
             except Exception as e:
+                record_api_failure("live_midprice", e)
                 if self.debug:
                     print(f"[LIVE_BACKEND] all_mids failed: {e}")
-        return self._mid_cache.get(coin.upper())
+
+        age_after = self.get_mid_cache_age_sec()
+        if self._mid_cache and age_after is not None and age_after <= float(max_age_sec):
+            px = self._mid_cache.get(coin)
+            if px is not None:
+                if self.debug:
+                    print(
+                        f"[LIVE_BACKEND] midprice data_source=cache coin={coin}"
+                        f" midprice_age={age_after:.2f}s"
+                    )
+                return px
+
+        print(
+            f"[LIVE_BACKEND] live_midprice_stale_block coin={coin}"
+            f" midprice_age={age_after if age_after is not None else -1:.2f}s"
+            f" max_age={float(max_age_sec):.1f}s"
+        )
+        return None
 
     # ── Fee / funding (accounting only) ────────────────────────────────────
 
@@ -657,6 +745,7 @@ class LiveExecutionBackend(ExecutionBackend):
         try:
             spot_state = self.info.spot_user_state(addr)
         except Exception as e:
+            record_api_failure("live_margin", e)
             print(f"[LIVE_BACKEND] unified account spot query failed venue={venue} addr={addr} err={e}")
             return None
 
@@ -687,6 +776,7 @@ class LiveExecutionBackend(ExecutionBackend):
             f"account_model=unified equity_source=spot.USDC.total "
             f"used_source=spot.USDC.hold venue={venue} addr={addr}"
         )
+        record_api_success()
         return (equity, used, available)
 
     def _get_margin_summary_standard(self, addr: str, venue: str) -> Optional[Tuple[float, float, float]]:
@@ -697,6 +787,7 @@ class LiveExecutionBackend(ExecutionBackend):
         try:
             state = self.info.user_state(addr)
         except Exception as e:
+            record_api_failure("live_margin", e)
             print(f"[LIVE_BACKEND] get_margin_summary query failed venue={venue} addr={addr} err={e}")
             return None
 
@@ -737,6 +828,7 @@ class LiveExecutionBackend(ExecutionBackend):
             f"equity={equity:.4f} used={used:.4f} available={available:.4f} "
             f"account_model=standard venue={venue} addr={addr}"
         )
+        record_api_success()
         return (equity, used, available)
 
     # ── Venue position query ───────────────────────────────────────────────
@@ -754,6 +846,7 @@ class LiveExecutionBackend(ExecutionBackend):
             if self.account_address and query_address != self.account_address.lower():
                 print(f"[HL_WARNING] Query addr != env account: {query_address} vs {self.account_address}")
             state = self.info.user_state(query_address)
+            record_api_success()
             for item in state.get("assetPositions", []):
                 pos = item.get("position", {})
                 if pos.get("coin", "").upper() != coin.upper():

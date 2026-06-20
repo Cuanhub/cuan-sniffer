@@ -7,6 +7,14 @@ from typing import Optional, Dict, List, Tuple, Any
 
 import requests
 
+from live_data_guard import (
+    LIVE_MAX_SENTIMENT_CACHE_AGE_SECONDS,
+    api_backoff_status,
+    cache_age_seconds,
+    record_api_failure,
+    record_api_success,
+)
+
 # OI history: how many seconds of history to retain and the poll interval.
 # 4H at 45s ≈ 320 entries; keep 350 for safety margin.
 _OI_HISTORY_MAXLEN: int = 350
@@ -31,6 +39,10 @@ class PerpSentimentSnapshot:
     prev_open_interest: float = 0.0   # OI from previous poll cycle (~45s ago, legacy)
     oi_delta_1h_pct: float = 0.0      # % OI change vs ~1H ago (primary signal)
     oi_delta_4h_pct: float = 0.0      # % OI change vs ~4H ago (structural conviction)
+    fetched_at: float = 0.0
+    data_source: str = "init"
+    cache_age_sec: float = 0.0
+    stale_neutralized: bool = False
 
 
 class PerpSentimentFeed:
@@ -67,6 +79,10 @@ class PerpSentimentFeed:
             prev_open_interest=0.0,
             oi_delta_1h_pct=0.0,
             oi_delta_4h_pct=0.0,
+            fetched_at=0.0,
+            data_source="init",
+            cache_age_sec=0.0,
+            stale_neutralized=False,
         )
         self._lock = threading.Lock()
         self._stop_flag = False
@@ -98,9 +114,38 @@ class PerpSentimentFeed:
     def stop(self) -> None:
         self._stop_flag = True
 
-    def get_snapshot(self) -> PerpSentimentSnapshot:
+    def get_snapshot(
+        self,
+        max_age_sec: float = LIVE_MAX_SENTIMENT_CACHE_AGE_SECONDS,
+    ) -> PerpSentimentSnapshot:
         with self._lock:
-            return self._snapshot
+            snap = self._snapshot
+        age = cache_age_seconds(float(getattr(snap, "fetched_at", 0.0) or 0.0))
+        if age is None:
+            age = float("inf")
+        if age <= float(max_age_sec):
+            snap.cache_age_sec = float(age)
+            return snap
+
+        print(
+            f"[PERP_SENTIMENT] sentiment_stale_neutralized {self.coin}"
+            f" | cache_age={age:.1f}s"
+            f" | max_age={float(max_age_sec):.1f}s"
+        )
+        return PerpSentimentSnapshot(
+            coin=self.coin,
+            funding_rate=0.0,
+            open_interest=0.0,
+            bias=0.0,
+            premium=0.0,
+            prev_open_interest=0.0,
+            oi_delta_1h_pct=0.0,
+            oi_delta_4h_pct=0.0,
+            fetched_at=0.0,
+            data_source="neutralized",
+            cache_age_sec=float(age),
+            stale_neutralized=True,
+        )
 
     def refresh_once(self) -> PerpSentimentSnapshot:
         """
@@ -164,8 +209,18 @@ class PerpSentimentFeed:
                 if (now - cached_ts) < cls._cache_ttl_sec:
                     if debug:
                         age = now - cached_ts
-                        print(f"[PERP_SENTIMENT] cache hit | age={age:.1f}s")
+                        print(
+                            f"[PERP_SENTIMENT] cache hit"
+                            f" | data_source=cache"
+                            f" | cache_age={age:.1f}s"
+                        )
                     return cached_data
+
+        backoff_active, backoff_remaining, backoff_reason = api_backoff_status()
+        if backoff_active:
+            raise RuntimeError(
+                f"api_backoff_active remaining={backoff_remaining:.1f}s reason={backoff_reason}"
+            )
 
         payload = {"type": "metaAndAssetCtxs"}
         last_error = None
@@ -181,6 +236,7 @@ class PerpSentimentFeed:
                 )
 
                 if resp.status_code == 429:
+                    record_api_failure("perp_sentiment", "429:metaAndAssetCtxs")
                     sleep_s = min(10.0, 0.8 * (2 ** attempt))
                     if debug:
                         print(
@@ -197,10 +253,12 @@ class PerpSentimentFeed:
                 with cls._cache_lock:
                     cls._shared_ctx_cache = (time.time(), data)
 
+                record_api_success()
                 return data
 
             except requests.RequestException as e:
                 last_error = e
+                record_api_failure("perp_sentiment", e)
                 sleep_s = min(10.0, 0.8 * (2 ** attempt))
                 if debug:
                     print(
@@ -323,6 +381,7 @@ class PerpSentimentFeed:
         bias += 2.0 * premium
         bias = max(-2.0, min(2.0, bias))
 
+        now_ts = time.time()
         return PerpSentimentSnapshot(
             coin=self.coin,
             funding_rate=funding,
@@ -332,4 +391,8 @@ class PerpSentimentFeed:
             prev_open_interest=prev_oi,
             oi_delta_1h_pct=oi_delta_1h,
             oi_delta_4h_pct=oi_delta_4h,
+            fetched_at=now_ts,
+            data_source="fresh",
+            cache_age_sec=0.0,
+            stale_neutralized=False,
         )
