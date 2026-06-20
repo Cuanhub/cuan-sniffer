@@ -32,6 +32,7 @@ from features import add_features
 from smc_structure import build_structure
 from smc_zones import add_smc_zones
 from smc_sweeps import add_sweep_features
+from chart_patterns import add_chart_pattern_features
 from perp_sentiment import PerpSentimentSnapshot
 from smc_live_log import append_smc_live_event
 
@@ -256,6 +257,19 @@ SMC_4H_REQUIRE_OB_OR_SWEEP = (
 )
 SMC_4H_MIN_CONFLUENCE = int(os.getenv("SMC_4H_MIN_CONFLUENCE", "4"))
 
+CHART_PATTERN_SCORING_ENABLED = (
+    os.getenv("CHART_PATTERN_SCORING_ENABLED", "true").lower() == "true"
+)
+CHART_PATTERN_MAX_SCORE = float(os.getenv("CHART_PATTERN_MAX_SCORE", "0.10"))
+
+SIGNAL_GOVERNANCE_ENABLED = (
+    os.getenv("SIGNAL_GOVERNANCE_ENABLED", "true").lower() == "true"
+)
+SIGNAL_GOVERNANCE_MIN_BUCKETS = int(os.getenv("SIGNAL_GOVERNANCE_MIN_BUCKETS", "3"))
+SIGNAL_GOVERNANCE_REQUIRE_CONTEXT = (
+    os.getenv("SIGNAL_GOVERNANCE_REQUIRE_CONTEXT", "true").lower() == "true"
+)
+
 # ── Engine-level RR floor (mirrors executor MIN_STOP_REDESIGN_RR) ─────────────
 # Used to reject/adjust trade levels before the signal even reaches the executor.
 # Must stay in sync with executor MIN_STOP_REDESIGN_RR to avoid silent divergence.
@@ -349,6 +363,7 @@ class AdaptiveSignalEngine:
             df = build_structure(df, lookback=5)
             df = add_smc_zones(df)
             df = add_sweep_features(df)
+            df = add_chart_pattern_features(df)
         except Exception as e:
             if self.debug:
                 print("[FEATURE_FRAME_DEBUG] Pipeline build failed: " + str(e))
@@ -362,6 +377,14 @@ class AdaptiveSignalEngine:
             "ob_bull", "ob_bear",
             "fvg_bull", "fvg_bear",
             "sweep_bull", "sweep_bear",
+            "pattern_head_shoulders", "pattern_inverse_head_shoulders",
+            "pattern_double_top", "pattern_double_bottom",
+            "pattern_ascending_triangle", "pattern_descending_triangle",
+            "pattern_bull_flag", "pattern_bear_flag",
+            "pattern_bull_pennant", "pattern_bear_pennant",
+            "chart_pattern_confirmed",
+            "chart_pattern_volume_confirmed",
+            "chart_pattern_candle_confirmed",
         ]
 
         for col in flag_cols:
@@ -372,11 +395,18 @@ class AdaptiveSignalEngine:
         text_cols_defaults = {
             "trend": "neutral",
             "structure_label": "",
+            "chart_pattern": "",
+            "chart_pattern_family": "",
+            "chart_pattern_side": "",
         }
         for col, default in text_cols_defaults.items():
             if col not in df.columns:
                 df[col] = default
             df[col] = df[col].fillna(default)
+
+        if "chart_pattern_score" not in df.columns:
+            df["chart_pattern_score"] = 0.0
+        df["chart_pattern_score"] = df["chart_pattern_score"].fillna(0.0).astype(float)
 
         required_numeric = [
             "time", "open", "high", "low", "close", "volume",
@@ -1153,7 +1183,186 @@ class AdaptiveSignalEngine:
             "dist_to_bear_fvg": self._as_float(row.get("dist_to_bear_fvg")),
             "eq_high": self._as_bool(row.get("eq_high", 0)),
             "eq_low": self._as_bool(row.get("eq_low", 0)),
+            "chart_pattern": self._as_text(row.get("chart_pattern")),
+            "chart_pattern_family": self._as_text(row.get("chart_pattern_family")),
+            "chart_pattern_side": self._as_text(row.get("chart_pattern_side")).upper(),
+            "chart_pattern_score": self._as_float(row.get("chart_pattern_score")),
+            "chart_pattern_confirmed": self._as_bool(row.get("chart_pattern_confirmed", 0)),
+            "chart_pattern_volume_confirmed": self._as_bool(row.get("chart_pattern_volume_confirmed", 0)),
+            "chart_pattern_candle_confirmed": self._as_bool(row.get("chart_pattern_candle_confirmed", 0)),
         }
+
+    def _score_chart_pattern(
+        self,
+        triggers: Dict[str, Any],
+        side: str,
+        setup_family: str,
+    ) -> Tuple[float, List[str]]:
+        if not CHART_PATTERN_SCORING_ENABLED:
+            return 0.0, []
+
+        pattern = str(triggers.get("chart_pattern") or "").strip().lower()
+        pattern_side = str(triggers.get("chart_pattern_side") or "").strip().upper()
+        pattern_family = str(triggers.get("chart_pattern_family") or "").strip().lower()
+        if not pattern or pattern_side not in {"LONG", "SHORT"}:
+            return 0.0, []
+
+        raw_score = min(
+            CHART_PATTERN_MAX_SCORE,
+            max(0.0, self._as_float(triggers.get("chart_pattern_score", 0.0))),
+        )
+        confirmed = bool(triggers.get("chart_pattern_confirmed", False))
+        volume_ok = bool(triggers.get("chart_pattern_volume_confirmed", False))
+        candle_ok = bool(triggers.get("chart_pattern_candle_confirmed", False))
+        notes: List[str] = []
+
+        if pattern_side != str(side).upper():
+            if confirmed and raw_score > 0:
+                penalty = -min(0.06, raw_score * 0.6)
+                notes.append(f"chart_pattern_conflict_{pattern}_{pattern_side.lower()}")
+                return penalty, notes
+            return 0.0, []
+
+        if not confirmed or raw_score <= 0:
+            notes.append(f"chart_pattern_unconfirmed_{pattern}")
+            return 0.0, notes
+
+        if pattern_family == setup_family:
+            notes.append(f"chart_pattern_{pattern}_confirmed")
+            if volume_ok:
+                notes.append("chart_pattern_volume_confirmed")
+            if candle_ok:
+                notes.append("chart_pattern_candle_confirmed")
+            return raw_score, notes
+
+        # Same-side but different family is still useful context, but weaker.
+        score = min(0.035, raw_score * 0.45)
+        notes.append(f"chart_pattern_{pattern}_side_confirm_family_mismatch")
+        return score, notes
+
+    def _classify_edge_buckets(
+        self,
+        notes: List[str],
+        triggers: Dict[str, Any],
+        side: str,
+        setup_family: str,
+    ) -> Dict[str, Any]:
+        buckets = set()
+        side = str(side or "").upper()
+        setup_family = str(setup_family or "").lower()
+
+        if side == "LONG":
+            has_structure = any(bool(triggers.get(key, False)) for key in (
+                "bos_bull", "choch_bull", "sweep_bull", "ob_bull", "fvg_bull",
+                "in_bull_ob", "in_bull_fvg",
+            ))
+        elif side == "SHORT":
+            has_structure = any(bool(triggers.get(key, False)) for key in (
+                "bos_bear", "choch_bear", "sweep_bear", "ob_bear", "fvg_bear",
+                "in_bear_ob", "in_bear_fvg",
+            ))
+        else:
+            has_structure = False
+
+        if has_structure:
+            buckets.add("structure")
+
+        if (
+            bool(triggers.get("chart_pattern_confirmed", False))
+            and str(triggers.get("chart_pattern_side") or "").upper() == side
+        ):
+            buckets.add("chart_pattern")
+
+        for note in notes:
+            text = str(note or "").lower()
+            if not text:
+                continue
+            if any(token in text for token in (
+                "htf_", "macro_", "market_", "mkt_", "regime", "trend",
+                "dual_htf_macro", "local_bull", "local_bear",
+            )):
+                buckets.add("regime")
+            if any(token in text for token in (
+                "vwap", "daily_zone", "premium", "discount", "near_bull_ob",
+                "near_bear_ob", "pullback",
+            )):
+                buckets.add("price_location")
+            if any(token in text for token in (
+                "whale", "flow_", "net_inflow", "net_outflow",
+            )):
+                buckets.add("orderflow")
+            if any(token in text for token in ("funding", "oi_")):
+                buckets.add("derivatives")
+            if any(token in text for token in ("rsi", "divergence")):
+                buckets.add("momentum")
+            if any(token in text for token in (
+                "vol_", "volume", "body", "quality", "late_entry", "session",
+                "dead_zone", "low_vol",
+            )):
+                buckets.add("execution_quality")
+            if text.startswith("chart_pattern_") and "conflict" not in text and "unconfirmed" not in text:
+                buckets.add("chart_pattern")
+
+        context_buckets = buckets.intersection({
+            "regime", "price_location", "orderflow", "derivatives", "momentum", "chart_pattern",
+        })
+        independent_buckets = buckets.difference({"execution_quality"})
+
+        return {
+            "edge_buckets": sorted(buckets),
+            "edge_bucket_count": len(buckets),
+            "independent_bucket_count": len(independent_buckets),
+            "context_bucket_count": len(context_buckets),
+            "has_structure": has_structure,
+            "has_context": len(context_buckets) > 0,
+            "setup_family": setup_family,
+        }
+
+    def _govern_signal_thesis(
+        self,
+        *,
+        score: float,
+        notes: List[str],
+        triggers: Dict[str, Any],
+        side: str,
+        setup_family: str,
+    ) -> Tuple[bool, str, Dict[str, Any], List[str]]:
+        summary = self._classify_edge_buckets(notes, triggers, side, setup_family)
+        governed_notes = list(notes)
+        governed_notes.append(
+            "edge_buckets_" + ",".join(summary["edge_buckets"])
+            if summary["edge_buckets"]
+            else "edge_buckets_none"
+        )
+
+        if not SIGNAL_GOVERNANCE_ENABLED:
+            summary["governance_reason"] = "disabled"
+            return True, "", summary, governed_notes
+
+        if not summary["has_structure"]:
+            reason = "signal_governance_block:missing_primary_structure"
+            summary["governance_reason"] = reason
+            governed_notes.append(reason)
+            return False, reason, summary, governed_notes
+
+        if summary["independent_bucket_count"] < SIGNAL_GOVERNANCE_MIN_BUCKETS:
+            reason = (
+                "signal_governance_block:thin_independent_thesis:"
+                f"{summary['independent_bucket_count']}<{SIGNAL_GOVERNANCE_MIN_BUCKETS}"
+            )
+            summary["governance_reason"] = reason
+            governed_notes.append(reason)
+            return False, reason, summary, governed_notes
+
+        if SIGNAL_GOVERNANCE_REQUIRE_CONTEXT and not summary["has_context"]:
+            reason = "signal_governance_block:no_context_bucket"
+            summary["governance_reason"] = reason
+            governed_notes.append(reason)
+            return False, reason, summary, governed_notes
+
+        summary["governance_reason"] = "pass"
+        governed_notes.append("signal_governance_pass")
+        return True, "", summary, governed_notes
 
     def _log_smc_candidate(
         self,
@@ -1176,9 +1385,11 @@ class AdaptiveSignalEngine:
         macro_regime: str = "",
         market_regime: str = "",
         session: str = "",
+        governance: Optional[Dict[str, Any]] = None,
     ) -> None:
         try:
             stop_meta = stop_meta or {}
+            governance = governance or {}
             atr_val = self._as_float(row.get("atr_14", 0.0))
             append_smc_live_event(
                 event_type="engine_evaluation",
@@ -1202,6 +1413,9 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime,
                 market_regime=market_regime,
                 session=session,
+                edge_buckets=",".join(governance.get("edge_buckets", []) or []),
+                edge_bucket_count=governance.get("edge_bucket_count", ""),
+                governance_reason=governance.get("governance_reason", ""),
                 order_submitted=False,
                 **{key: triggers.get(key, False) for key in (
                     "bos_bull", "bos_bear", "choch_bull", "choch_bear",
@@ -1213,6 +1427,9 @@ class AdaptiveSignalEngine:
                     "bull_fvg_low", "bull_fvg_high", "bear_fvg_low", "bear_fvg_high",
                     "sweep_bull", "sweep_bear", "eq_high", "eq_low",
                     "structure_label",
+                    "chart_pattern", "chart_pattern_family", "chart_pattern_side",
+                    "chart_pattern_score", "chart_pattern_confirmed",
+                    "chart_pattern_volume_confirmed", "chart_pattern_candle_confirmed",
                 )},
             )
         except Exception as e:
@@ -2535,6 +2752,7 @@ class AdaptiveSignalEngine:
         session_label, notes_kz = self._compute_killzone(ts)
         vol_state, notes_vol, vol_ratio = self._compute_vol_state(row)
         triggers = self._extract_triggers(row)
+        governance_summary: Dict[str, Any] = {}
         market_regime, market_meta, market_notes = self._classify_market_regime(
             df=df,
             row=row,
@@ -2587,6 +2805,7 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime,
                 market_regime=market_regime,
                 session=session_label,
+                governance=governance_summary,
             )
             if self.debug:
                 print("[SIGNAL_DEBUG] Quality blocked: " + ", ".join(quality_notes))
@@ -2651,6 +2870,7 @@ class AdaptiveSignalEngine:
                     macro_regime=macro_regime,
                     market_regime=market_regime,
                     session=session_label,
+                    governance=governance_summary,
                 )
                 if self.debug:
                     print("[SIGNAL_DEBUG] No valid setup family.")
@@ -2700,6 +2920,17 @@ class AdaptiveSignalEngine:
             chosen_score += div_score
             chosen_notes.extend(div_notes)
 
+        pattern_score, pattern_notes = self._score_chart_pattern(
+            triggers, chosen_side, setup_family
+        )
+        chosen_score += pattern_score
+        chosen_notes.extend(pattern_notes)
+        if pattern_score != 0.0 and self.debug:
+            print(
+                f"[SIGNAL_DEBUG] chart_pattern_score {pattern_score:+.3f}"
+                f" -> score={chosen_score:.3f} notes={pattern_notes}"
+            )
+
         chosen_score += session_score_adj
         if session_score_adj != 0.0 and self.debug:
             print(f"[SIGNAL_DEBUG] session_adj={session_score_adj:+.2f} -> score={chosen_score:.3f}")
@@ -2720,6 +2951,44 @@ class AdaptiveSignalEngine:
             chosen_notes.append("london_open_continuation_penalty")
             if self.debug:
                 print(f"[SIGNAL_DEBUG] london_open_continuation_penalty -0.05 -> score={chosen_score:.3f}")
+
+        governance_ok, governance_reason, governance_summary, chosen_notes = self._govern_signal_thesis(
+            score=chosen_score,
+            notes=chosen_notes,
+            triggers=triggers,
+            side=chosen_side,
+            setup_family=setup_family,
+        )
+        if not governance_ok:
+            self._log_smc_candidate(
+                coin=coin,
+                timeframe="1h",
+                row=row,
+                triggers=triggers,
+                side=chosen_side,
+                score=chosen_score,
+                accepted=False,
+                reject_reason=governance_reason,
+                entry=price,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+                governance=governance_summary,
+            )
+            if self.debug:
+                print(f"[SIGNAL_DEBUG] governance blocked: {governance_reason}")
+            log_gate_reject(
+                symbol=coin, timeframe="1h", side=chosen_side,
+                reject_reason=governance_reason,
+                raw_score=chosen_score,
+                price=price, atr=float(row.get("atr_14", 0.0)),
+                market_regime=market_regime, htf_regime=htf_regime,
+                macro_regime=macro_regime, session=session_label,
+                setup_family=setup_family,
+                metadata="edge_buckets=" + ",".join(governance_summary.get("edge_buckets", []) or []),
+            )
+            return None
 
         effective_threshold = self._effective_score_threshold(market_regime)
 
@@ -2759,6 +3028,7 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime,
                 market_regime=market_regime,
                 session=session_label,
+                governance=governance_summary,
             )
             if self.debug:
                 print("[SIGNAL_DEBUG] score=" + str(round(chosen_score, 3)) +
@@ -2795,6 +3065,7 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime,
                 market_regime=market_regime,
                 session=session_label,
+                governance=governance_summary,
             )
             if self.debug:
                 print("[SIGNAL_DEBUG] Could not build valid trade levels.")
@@ -2833,6 +3104,7 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime,
                 market_regime=market_regime,
                 session=session_label,
+                governance=governance_summary,
             )
             if self.debug:
                 print("[SIGNAL_DEBUG] RR too low: " + str(round(rr, 2)))
@@ -2954,6 +3226,10 @@ class AdaptiveSignalEngine:
             "market_regime": market_regime,
             "continuation_breakout_failures": breakout_failure_count,
             "continuation_breakout_failure_penalized": bool(breakout_failure_note),
+            "edge_buckets": ",".join(governance_summary.get("edge_buckets", []) or []),
+            "edge_bucket_count": governance_summary.get("edge_bucket_count", 0),
+            "independent_bucket_count": governance_summary.get("independent_bucket_count", 0),
+            "governance_reason": governance_summary.get("governance_reason", ""),
             **triggers,
             **market_meta,
             **divergence_meta,
@@ -2985,6 +3261,7 @@ class AdaptiveSignalEngine:
             macro_regime=macro_regime,
             market_regime=market_regime,
             session=session_label,
+            governance=governance_summary,
         )
 
         return Signal(
@@ -3210,6 +3487,16 @@ class AdaptiveSignalEngine:
             candidate_reasons.extend(oi_n)
             candidate_reasons.extend(market_notes)
             candidate_reasons.extend(session_notes)
+
+            pattern_s, pattern_n = self._score_chart_pattern(
+                triggers, candidate_side, swing_family
+            )
+            candidate_score += pattern_s
+            candidate_reasons.extend(pattern_n)
+            if pattern_s > 0:
+                confluence_count += 1
+                candidate_reasons.append("chart_pattern_confluence")
+
             candidate_reasons.append(f"swing_confluence_count_{confluence_count}")
             return candidate_score, candidate_reasons, confluence_count, swing_family
 
@@ -3288,6 +3575,44 @@ class AdaptiveSignalEngine:
         if swing_tf == "4h":
             threshold = max(threshold, SMC_4H_MIN_CONFIDENCE)
 
+        governance_ok, governance_reason, governance_summary, reasons = self._govern_signal_thesis(
+            score=score,
+            notes=reasons,
+            triggers=triggers,
+            side=side,
+            setup_family=swing_family,
+        )
+        if not governance_ok:
+            self._log_smc_candidate(
+                coin=coin,
+                timeframe=swing_tf,
+                row=row,
+                triggers=triggers,
+                side=side,
+                score=score,
+                accepted=False,
+                reject_reason=governance_reason,
+                entry=price,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+                governance=governance_summary,
+            )
+            if self.debug:
+                print(f"[SWING_DEBUG] governance blocked: {governance_reason}")
+            log_gate_reject(
+                symbol=coin, timeframe=swing_tf, side=side,
+                reject_reason=governance_reason,
+                raw_score=score, threshold=threshold,
+                price=price, atr=float(row.get("atr_14", 0.0)),
+                market_regime=market_regime, htf_regime=htf_regime,
+                macro_regime=macro_regime, session=session_label,
+                setup_family=swing_family,
+                metadata="edge_buckets=" + ",".join(governance_summary.get("edge_buckets", []) or []),
+            )
+            return None
+
         # Log all swing candidates before the score gate.
         log_score_candidate(
             symbol=coin, timeframe=swing_tf, side=side,
@@ -3311,6 +3636,7 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime,
                 market_regime=market_regime,
                 session=session_label,
+                governance=governance_summary,
             )
             if self.debug:
                 print("[SWING_DEBUG] " + swing_tf + " score " + str(round(score, 3)) + " below threshold " + str(threshold))
@@ -3350,6 +3676,7 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime,
                 market_regime=market_regime,
                 session=session_label,
+                governance=governance_summary,
             )
             log_gate_reject(
                 symbol=coin, timeframe=swing_tf, side=side,
@@ -3393,6 +3720,7 @@ class AdaptiveSignalEngine:
                     macro_regime=macro_regime,
                     market_regime=market_regime,
                     session=session_label,
+                    governance=governance_summary,
                 )
                 log_gate_reject(
                     symbol=coin, timeframe=swing_tf, side=side,
@@ -3423,6 +3751,7 @@ class AdaptiveSignalEngine:
                     macro_regime=macro_regime,
                     market_regime=market_regime,
                     session=session_label,
+                    governance=governance_summary,
                 )
                 log_gate_reject(
                     symbol=coin, timeframe=swing_tf, side=side,
@@ -3487,6 +3816,10 @@ class AdaptiveSignalEngine:
             "ob_level": stop_meta.get("ob_level", 0.0),
             "stop_dist_atr": stop_meta.get("stop_dist_atr", 0.0),
             "ob_reject_reason": stop_meta.get("ob_reject_reason", ""),
+            "edge_buckets": ",".join(governance_summary.get("edge_buckets", []) or []),
+            "edge_bucket_count": governance_summary.get("edge_bucket_count", 0),
+            "independent_bucket_count": governance_summary.get("independent_bucket_count", 0),
+            "governance_reason": governance_summary.get("governance_reason", ""),
             **triggers,
             **market_meta,
         }
@@ -3510,6 +3843,7 @@ class AdaptiveSignalEngine:
             macro_regime=macro_regime,
             market_regime=market_regime,
             session=session_label,
+            governance=governance_summary,
         )
 
         self.last_swing_ts[swing_key] = ts
