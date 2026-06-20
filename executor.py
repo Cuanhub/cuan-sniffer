@@ -40,6 +40,9 @@ from strategy_filter import StrategyFilter
 from bootstrap import bootstrap_state, replay_strategy_filter
 from execution_backend import ExecutionBackend
 from execution_backend_factory import build_execution_backend
+from live_data_guard import (
+    LIVE_MAX_MARGIN_CACHE_AGE_SECONDS as DEFAULT_LIVE_MAX_MARGIN_CACHE_AGE_SECONDS,
+)
 
 # ── Cooldowns ───────────────────────────────────────────────────────────
 SIGNAL_COOLDOWN_SEC = int(os.getenv("SIGNAL_COOLDOWN_SEC", "300"))
@@ -96,6 +99,9 @@ SIGNAL_STALE_ATR_MULT = float(
 # Useful for strong-trend signals where price runs away then pulls back.
 # Default 0.0 = disabled (fully backward compatible).
 SIGNAL_MOMENTUM_REENTRY_ATR = float(os.getenv("SIGNAL_MOMENTUM_REENTRY_ATR", "0.0"))
+LIVE_MAX_MARGIN_CACHE_AGE_SECONDS = float(
+    os.getenv("LIVE_MAX_MARGIN_CACHE_AGE_SECONDS", str(DEFAULT_LIVE_MAX_MARGIN_CACHE_AGE_SECONDS))
+)
 # ── Executor gate telemetry ───────────────────────────────────────────────────
 EXECUTOR_REJECTS_PATH = os.getenv("EXECUTOR_REJECTS_PATH", "executor_rejects.csv")
 _EXECUTOR_REJECT_LOCK = threading.Lock()
@@ -199,6 +205,7 @@ HIGH_CONF_STOP_REDESIGN_FAMILIES = {
     for s in os.getenv("HIGH_CONF_STOP_REDESIGN_FAMILIES", "reversal,swing").split(",")
     if s.strip()
 }
+STOP_REDESIGN_MAX_WIDEN_MULT = float(os.getenv("STOP_REDESIGN_MAX_WIDEN_MULT", "1.50"))
 
 # ── Continuation cap ──────────────────────────────────────────────────
 CONTINUATION_MAX_SIZE_MULT = float(os.getenv("CONTINUATION_MAX_SIZE_MULT", "1.50"))
@@ -253,9 +260,8 @@ WEAK_CONTINUATION_MIN_SCORE = float(os.getenv("WEAK_CONTINUATION_MIN_SCORE", "0.
 # Data: low-score reversals in chop are noise trades with negative expectancy.
 REVERSAL_CHOP_MIN_SCORE = float(os.getenv("REVERSAL_CHOP_MIN_SCORE", "0.78"))
 # TP cap for weak/chop regimes: cap final TP at this many R from entry.
-# Trades whose capped TP falls below MIN_EXECUTION_EFFECTIVE_RR are rejected
-# by the existing RR guard — no additional block needed here.
-REGIME_TP_CAP_R = float(os.getenv("REGIME_TP_CAP_R", "1.5"))
+# Must stay above MIN_EXECUTION_EFFECTIVE_RR so a capped TP remains executable.
+REGIME_TP_CAP_R = float(os.getenv("REGIME_TP_CAP_R", "1.75"))
 
 # ── Market regime gating/sizing ───────────────────────────────────────
 BLOCK_CONTINUATION_IN_CHOP = (
@@ -494,6 +500,8 @@ class Executor:
         self._missed_log_memory: Dict[Tuple[str, ...], float] = {}
         self._venue_margin_cache: Optional[Tuple[float, float, float]] = None
         self._venue_margin_cache_ts: float = 0.0
+        self._last_margin_block_reason: str = ""
+        self._last_margin_cache_age_sec: Optional[float] = None
         self._balance_ready: bool = False
         self._venue_equity_hwm: float = 0.0
         self._last_margin_query_meta: Dict[str, Any] = {}
@@ -1219,7 +1227,7 @@ class Executor:
 
             self._refresh_runtime_balance_from_venue(source=f"pre_entry:{coin}")
             if self._live_mode and self.venue_sync_unhealthy:
-                reason = "venue_sync_unhealthy:missing_or_zero_equity"
+                reason = self._last_margin_block_reason or "venue_sync_unhealthy:missing_or_zero_equity"
                 print(f"[EXECUTOR][WARNING] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
                 log_executor_reject(
@@ -1371,10 +1379,11 @@ class Executor:
                 reason = self._apply_reject_throttle(signal, signal_side, entry_reject)
                 print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                 self._log_missed(signal, sig_id, reason)
+                telemetry_reason = reason if reason == "stale_midprice" else f"entry_validate:{reason}"
                 log_executor_reject(
                     symbol=coin, side=signal_side,
                     confidence=_telemetry_conf, rr=_telemetry_rr,
-                    reject_reason=f"entry_validate:{reason}",
+                    reject_reason=telemetry_reason,
                     session=session,
                     setup_family=setup_family, market_regime=market_regime,
                     timeframe=_telemetry_tf,
@@ -1573,11 +1582,42 @@ class Executor:
             if (final_stop - entry) < min_stop_dist:
                 final_stop = entry + min_stop_dist
 
+        original_stop_dist = abs(entry - structural_stop)
         final_stop_dist = abs(entry - final_stop)
         if final_stop_dist <= 0:
             return "invalid_final_stop_distance"
 
+        widen_mult = (
+            final_stop_dist / original_stop_dist
+            if original_stop_dist > 0 else 0.0
+        )
+        if STOP_REDESIGN_MAX_WIDEN_MULT > 0 and widen_mult > STOP_REDESIGN_MAX_WIDEN_MULT:
+            print(
+                f"[STOP_REDESIGN] {coin} {side} stop_redesign_too_wide"
+                f" | widen_mult={widen_mult:.2f}"
+                f" | max_widen_mult={STOP_REDESIGN_MAX_WIDEN_MULT:.2f}"
+                f" | original_sd={original_stop_dist:.8f}"
+                f" | final_sd={final_stop_dist:.8f}"
+            )
+            log_executor_reject(
+                symbol=coin, side=side,
+                confidence=float(getattr(signal, "confidence", 0.0) or 0.0),
+                rr=0.0,
+                reject_reason=(
+                    f"stop_redesign_too_wide"
+                    f" (widen={widen_mult:.2f}x > max={STOP_REDESIGN_MAX_WIDEN_MULT:.2f}x)"
+                ),
+                setup_family=self._signal_setup_family(signal),
+                market_regime=self._signal_market_regime(signal),
+                timeframe=str((getattr(signal, "meta", None) or {}).get("timeframe", "1h")),
+            )
+            return (
+                f"stop_redesign_too_wide"
+                f" (widen={widen_mult:.2f}x > max={STOP_REDESIGN_MAX_WIDEN_MULT:.2f}x)"
+            )
+
         tp_dist = abs(tp - entry)
+        original_rr = tp_dist / original_stop_dist if original_stop_dist > 0 else 0.0
         final_rr = tp_dist / final_stop_dist if final_stop_dist > 0 else 0.0
         min_rr = float(MIN_STOP_REDESIGN_RR)
         setup_family = self._signal_setup_family(signal)
@@ -1595,9 +1635,34 @@ class Executor:
         )
         min_rr_effective = max(0.0, min_rr - min_rr_tolerance)
         if final_rr < min_rr_effective:
+            print(
+                f"[STOP_REDESIGN] {coin} {side} stop_redesign_rr_destroyed"
+                f" | original_rr={original_rr:.3f}"
+                f" | final_rr={final_rr:.3f}"
+                f" | min_rr={min_rr_effective:.3f}"
+                f" | widen_mult={widen_mult:.2f}"
+                f" | original_sd={original_stop_dist:.8f}"
+                f" | final_sd={final_stop_dist:.8f}"
+            )
+            log_executor_reject(
+                symbol=coin, side=side,
+                confidence=sig_conf,
+                rr=final_rr, required_rr=min_rr_effective,
+                reject_reason=(
+                    f"stop_redesign_rr_destroyed"
+                    f" (original_rr={original_rr:.2f}"
+                    f" final_rr={final_rr:.2f}"
+                    f" widen={widen_mult:.2f}x)"
+                ),
+                setup_family=setup_family,
+                market_regime=market_regime,
+                timeframe=str(meta.get("timeframe", "1h")),
+            )
             return (
-                f"final_rr_below_min "
-                f"(final_rr={final_rr:.2f} < min_rr={min_rr_effective:.2f})"
+                f"stop_redesign_rr_destroyed"
+                f" (original_rr={original_rr:.2f}"
+                f" final_rr={final_rr:.2f} < min_rr={min_rr_effective:.2f}"
+                f" widen={widen_mult:.2f}x)"
             )
 
         engine_stop_method = str(meta.get("stop_method", "atr") or "atr")
@@ -1605,6 +1670,7 @@ class Executor:
         signal.stop_price = float(final_stop)
 
         meta["original_stop"] = round(structural_stop, 8)
+        meta["original_rr"] = round(original_rr, 4)
         meta["final_entry"] = round(entry, 8)
         meta["final_stop"] = round(final_stop, 8)
         meta["final_tp"] = round(tp, 8)
@@ -1614,10 +1680,12 @@ class Executor:
             if stop_was_redesigned else engine_stop_method
         )
         meta["stop_was_redesigned"] = stop_was_redesigned
+        meta["stop_widen_mult"] = round(widen_mult, 4)
         meta["stop_structural"] = round(structural_stop, 8)
         meta["stop_atr_floor"] = round(atr_floor_stop, 8)
         meta["stop_buffered"] = round(buffered_stop, 8)
         meta["stop_final"] = round(final_stop, 8)
+        meta["rr_original"] = round(original_rr, 4)
         meta["rr_final"] = round(final_rr, 4)
         meta["stop_floor_mult"] = round(floor_mult, 4)
         meta["stop_buffer_mult"] = round(buffer_mult, 4)
@@ -1638,7 +1706,9 @@ class Executor:
             f"atr_floor_stop={atr_floor_stop:.6f} "
             f"buffered_stop={buffered_stop:.6f} "
             f"final_stop={final_stop:.6f} "
+            f"original_rr={original_rr:.2f} "
             f"final_rr={final_rr:.2f} "
+            f"widen={widen_mult:.2f}x "
             f"min_rr={min_rr_effective:.2f}"
         )
 
@@ -1707,11 +1777,11 @@ class Executor:
         current_price = self.backend.get_mid_price(coin)
         if current_price is None or float(current_price) <= 0:
             print(
-                f"[RR_GUARD] {coin} {side} reject=missing_market_price_for_rr_guard "
+                f"[RR_GUARD] {coin} {side} reject=live_midprice_stale_block "
                 f"score={float(meta.get('total_score', getattr(signal, 'confidence', 0.0)) or 0.0):.3f} "
                 f"entry={signal_price:.6f} tp={tp_price:.6f} sl={stop_price:.6f}"
             )
-            return "missing_market_price_for_rr_guard"
+            return "stale_midprice"
         current_price = float(current_price)
         score = float(meta.get("total_score", getattr(signal, "confidence", 0.0)) or 0.0)
 
@@ -1998,7 +2068,8 @@ class Executor:
             price_bucket = str(int(round(entry_price / atr)))
         else:
             price_bucket = str(int(round(entry_price * 1000.0)))
-        live_mid = self.backend.get_mid_price(coin)
+        cached_mid_fn = getattr(self.backend, "get_cached_mid_price", None)
+        live_mid = cached_mid_fn(coin) if callable(cached_mid_fn) else None
         if live_mid is not None and float(live_mid) > 0:
             if atr > 0 and entry_price > 0:
                 live_gap_bucket = str(int(round((float(live_mid) - entry_price) / atr)))
@@ -2533,7 +2604,8 @@ class Executor:
         signal_price = float(signal.entry_price)
         stop_dist = abs(signal_price - float(signal.stop_price))
 
-        current_price = self.backend.get_mid_price(signal.coin)
+        cached_mid_fn = getattr(self.backend, "get_cached_mid_price", None)
+        current_price = cached_mid_fn(signal.coin) if callable(cached_mid_fn) else None
         price_move_r = 0.0
         if current_price is not None and stop_dist > 0:
             if self._side_str(signal.side) == "LONG":
@@ -3276,9 +3348,14 @@ class Executor:
             if self._live_mode:
                 self.venue_sync_unhealthy = True
                 self.risk.balance = 0.0
+                reason = self._last_margin_block_reason or "missing_venue_margin_snapshot"
+                age = self._last_margin_cache_age_sec
+                age_label = "unknown" if age is None else f"{age:.1f}s"
                 print(
-                    f"[EXECUTOR][WARNING] LIVE venue sync unhealthy: "
-                    f"venue margin unavailable source={source or 'runtime'} "
+                    f"[EXECUTOR][WARNING] live_margin_stale_block "
+                    f"reason={reason} source={source or 'runtime'} "
+                    f"margin_cache_age={age_label} "
+                    f"max_age={LIVE_MAX_MARGIN_CACHE_AGE_SECONDS:.1f}s "
                     "-> runtime_balance forced to 0.0"
                 )
                 return None
@@ -3317,11 +3394,23 @@ class Executor:
     def _venue_margin_snapshot_with_warning(self, reason: str = "") -> Optional[Tuple[float, float, float]]:
         snapshot = getattr(self, "_venue_margin_cache", None)
         if snapshot is None:
+            self._last_margin_cache_age_sec = None
+            self._last_margin_block_reason = "stale_margin_cache"
             return None
         age_sec = max(0.0, time.time() - float(getattr(self, "_venue_margin_cache_ts", 0.0) or 0.0))
+        self._last_margin_cache_age_sec = age_sec
+        if self._live_mode and age_sec > LIVE_MAX_MARGIN_CACHE_AGE_SECONDS:
+            self._last_margin_block_reason = "stale_margin_cache"
+            print(
+                f"[EXECUTOR] live_margin_stale_block reason={reason or 'unknown'} "
+                f"margin_cache_age={age_sec:.1f}s "
+                f"max_age={LIVE_MAX_MARGIN_CACHE_AGE_SECONDS:.1f}s"
+            )
+            return None
+        self._last_margin_block_reason = ""
         print(
             f"[EXECUTOR] venue margin fallback (cached) reason={reason or 'unknown'} "
-            f"age={age_sec:.1f}s"
+            f"data_source=cache margin_cache_age={age_sec:.1f}s"
         )
         return snapshot
 
@@ -3352,13 +3441,16 @@ class Executor:
 
         self._venue_margin_cache = result
         self._venue_margin_cache_ts = time.time()
+        self._last_margin_cache_age_sec = 0.0
+        self._last_margin_block_reason = ""
+        print("[EXECUTOR] margin data_source=fresh margin_cache_age=0.0s")
         return result
 
     def _apply_available_margin_sizing(self, decision, coin: str) -> Optional[str]:
         venue_margin = self._get_venue_available_margin()
         if venue_margin is None:
             if self._live_mode:
-                return "insufficient_available_margin"
+                return self._last_margin_block_reason or "insufficient_available_margin"
             return None
 
         venue_equity, used_margin, available_balance = venue_margin

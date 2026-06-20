@@ -38,6 +38,7 @@ def _is_threshold_key(k: str) -> bool:
         "REGIME_SCORE_THRESHOLD_CHOP",
         "MIN_STOP_REDESIGN_RR",
         "MIN_EXECUTION_EFFECTIVE_RR",
+        "REGIME_TP_CAP_R",
         "STOP_REDESIGN_RR_TOLERANCE",
         "SMC_ENABLE_4H_LIVE",
         "HARD_BLOCK_CONTINUATION",
@@ -168,6 +169,10 @@ class TestRRGates(unittest.TestCase):
     def test_executor_min_execution_effective_rr(self):
         self.assertAlmostEqual(self.executor.MIN_EXECUTION_EFFECTIVE_RR, 1.55, places=4)
 
+    def test_regime_tp_cap_default_exceeds_execution_rr_floor(self):
+        self.assertAlmostEqual(self.executor.REGIME_TP_CAP_R, 1.75, places=4)
+        self.assertGreater(self.executor.REGIME_TP_CAP_R, self.executor.MIN_EXECUTION_EFFECTIVE_RR)
+
     def test_rr_gates_env_override(self):
         env = _clean_env(MIN_STOP_REDESIGN_RR="1.70", MIN_EXECUTION_EFFECTIVE_RR="1.65")
         engine = _reload_module("signal_engine", env)
@@ -175,6 +180,10 @@ class TestRRGates(unittest.TestCase):
         self.assertAlmostEqual(engine.ENGINE_MIN_RR_FLOOR, 1.70, places=4)
         self.assertAlmostEqual(executor.MIN_STOP_REDESIGN_RR, 1.70, places=4)
         self.assertAlmostEqual(executor.MIN_EXECUTION_EFFECTIVE_RR, 1.65, places=4)
+
+    def test_regime_tp_cap_env_override(self):
+        executor = _reload_module("executor", _clean_env(REGIME_TP_CAP_R="1.90"))
+        self.assertAlmostEqual(executor.REGIME_TP_CAP_R, 1.90, places=4)
 
 
 # ── Feature flags ─────────────────────────────────────────────────────────────
@@ -248,6 +257,16 @@ class TestValidateThresholds(unittest.TestCase):
         _, output = self._run_validate()
         self.assertIn("THRESHOLD SUMMARY", output)
         self.assertIn("UNIVERSAL_MIN_CONFIDENCE", output)
+        self.assertIn("REGIME_TP_CAP_R", output)
+
+    def test_regime_tp_cap_must_exceed_execution_rr_floor(self):
+        ok, output = self._run_validate({
+            "REGIME_TP_CAP_R": "1.50",
+            "MIN_EXECUTION_EFFECTIVE_RR": "1.55",
+        })
+        self.assertFalse(ok)
+        self.assertIn("REGIME_TP_CAP_R", output)
+        self.assertIn("must be >", output)
 
 
 # ── Consistency: engine RR floor == executor redesign RR ──────────────────────
@@ -270,6 +289,11 @@ class TestCrossLayerConsistency(unittest.TestCase):
         """MIN_EXECUTION_EFFECTIVE_RR must be <= MIN_STOP_REDESIGN_RR (tolerance layer)."""
         executor = _reload_module("executor", _clean_env())
         self.assertLessEqual(executor.MIN_EXECUTION_EFFECTIVE_RR, executor.MIN_STOP_REDESIGN_RR)
+
+    def test_regime_tp_cap_above_execution_rr_floor(self):
+        """Capped weak/chop TP must remain executable after the RR guard."""
+        executor = _reload_module("executor", _clean_env())
+        self.assertGreater(executor.REGIME_TP_CAP_R, executor.MIN_EXECUTION_EFFECTIVE_RR)
 
     def test_universal_confidence_consistent_across_modules(self):
         env = _clean_env(UNIVERSAL_MIN_CONFIDENCE="0.91")
