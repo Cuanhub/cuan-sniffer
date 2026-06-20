@@ -44,6 +44,18 @@ from live_data_guard import (
     LIVE_MAX_MARGIN_CACHE_AGE_SECONDS as DEFAULT_LIVE_MAX_MARGIN_CACHE_AGE_SECONDS,
 )
 
+# ── Shadow mode ────────────────────────────────────────────────────────
+SHADOW_CONFIDENCE_THRESHOLD = float(os.getenv("SHADOW_CONFIDENCE_THRESHOLD", "0"))
+SHADOW_LOG_PATH = os.getenv("SHADOW_LOG_PATH", "shadow_trades.csv")
+_SHADOW_LOG_LOCK = threading.Lock()
+_SHADOW_LOG_FIELDS = [
+    "timestamp", "symbol", "side", "score", "confidence",
+    "entry_price", "stop_price", "tp_price", "rr_planned",
+    "session", "setup_family", "market_regime", "htf_regime", "macro_regime",
+    "timeframe", "triggers", "stop_method",
+    "reject_reason", "would_trade",
+]
+
 # ── Cooldowns ───────────────────────────────────────────────────────────
 SIGNAL_COOLDOWN_SEC = int(os.getenv("SIGNAL_COOLDOWN_SEC", "300"))
 COIN_REENTRY_COOLDOWN_SEC = int(os.getenv("COIN_REENTRY_COOLDOWN_SEC", "900"))
@@ -116,6 +128,60 @@ def _exec_ensure_csv(path: str, fields: list) -> None:
     if not os.path.exists(path):
         with open(path, "w", newline="") as fh:
             csv.DictWriter(fh, fieldnames=fields).writeheader()
+
+
+def _log_shadow_trade(signal, reject_reason: str = "", would_trade: bool = False) -> None:
+    if SHADOW_CONFIDENCE_THRESHOLD <= 0:
+        return
+    try:
+        meta = getattr(signal, "meta", None) or {}
+        score = float(meta.get("total_score", getattr(signal, "confidence", 0.0)) or 0.0)
+        conf = float(getattr(signal, "confidence", 0.0) or 0.0)
+        if score < SHADOW_CONFIDENCE_THRESHOLD:
+            return
+        if conf >= float(os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90")):
+            return
+
+        entry = float(getattr(signal, "entry_price", 0) or 0)
+        stop = float(getattr(signal, "stop_price", 0) or 0)
+        tp = float(getattr(signal, "tp_price", 0) or 0)
+        sd = abs(entry - stop)
+        rr = abs(tp - entry) / sd if sd > 0 else 0
+
+        triggers = []
+        for t in ("bos_bull", "bos_bear", "choch_bull", "choch_bear",
+                  "ob_bull", "ob_bear", "fvg_bull", "fvg_bear",
+                  "sweep_bull", "sweep_bear"):
+            if meta.get(t):
+                triggers.append(t)
+
+        row = {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "symbol": str(getattr(signal, "coin", "")).upper(),
+            "side": str(getattr(signal, "side", "")).upper(),
+            "score": round(score, 4),
+            "confidence": round(conf, 4),
+            "entry_price": round(entry, 8),
+            "stop_price": round(stop, 8),
+            "tp_price": round(tp, 8),
+            "rr_planned": round(rr, 4),
+            "session": str(meta.get("session", "")),
+            "setup_family": str(meta.get("setup_family", meta.get("regime_local", ""))),
+            "market_regime": str(meta.get("market_regime", "")),
+            "htf_regime": str(meta.get("regime_htf_1h", "")),
+            "macro_regime": str(meta.get("regime_macro_4h", "")),
+            "timeframe": str(meta.get("timeframe", "")),
+            "triggers": ",".join(triggers),
+            "stop_method": str(meta.get("stop_method", "")),
+            "reject_reason": str(reject_reason)[:200],
+            "would_trade": "true" if would_trade else "false",
+        }
+        with _SHADOW_LOG_LOCK:
+            _exec_ensure_csv(SHADOW_LOG_PATH, _SHADOW_LOG_FIELDS)
+            with open(SHADOW_LOG_PATH, "a", newline="") as fh:
+                csv.DictWriter(fh, fieldnames=_SHADOW_LOG_FIELDS).writerow(row)
+    except Exception:
+        pass
 
 
 def log_executor_reject(
@@ -799,6 +865,15 @@ class Executor:
         return "\n".join(lines)
 
     def on_signal(self, signal, sig_id: int = 0) -> ExecutorResult:
+        result = self._on_signal_inner(signal, sig_id)
+        _log_shadow_trade(
+            signal,
+            reject_reason=result.reason if not result.traded else "",
+            would_trade=result.traded,
+        )
+        return result
+
+    def _on_signal_inner(self, signal, sig_id: int = 0) -> ExecutorResult:
         signal_side = self._side_str(signal.side)
         meta = signal.meta or {}
         session = str(meta.get("session", "")).strip().lower()
