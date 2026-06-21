@@ -1145,6 +1145,7 @@ class AdaptiveSignalEngine:
             edge_buckets = governance.get("edge_buckets", meta.get("edge_buckets", ""))
 
             from score_v2 import compute_shadow_score_v2
+            from score_v3 import compute_shadow_score_v3
             v2_ctx = dict(meta)
             v2_ctx.update({
                 "symbol": coin,
@@ -1164,6 +1165,7 @@ class AdaptiveSignalEngine:
             })
             v2_ctx.update(triggers or {})
             v2 = compute_shadow_score_v2(v2_ctx)
+            v3 = compute_shadow_score_v3(v2_ctx)
 
             candidate = build_shadow_candidate(
                 symbol=coin,
@@ -1180,6 +1182,10 @@ class AdaptiveSignalEngine:
                 score_v2_version=v2.get("score_v2_version", ""),
                 score_v2_tags=v2.get("score_v2_tags", []),
                 score_v2_reason=v2.get("score_v2_reason", ""),
+                score_v3=v3.get("score_v3", 0.0),
+                score_v3_version=v3.get("score_v3_version", ""),
+                score_v3_tags=v3.get("score_v3_tags", []),
+                score_v3_reason=v3.get("score_v3_reason", ""),
                 engine_decision="accepted" if accepted else "rejected",
                 engine_reject_reason=reject_reason,
                 setup_family=family,
