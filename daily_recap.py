@@ -1,12 +1,15 @@
 # daily_recap.py
 
 import argparse
-import os
 import subprocess
 import sys
+from pathlib import Path
 from datetime import datetime, timezone
 
 from notifier import send_telegram_message
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+ANALYZE_WINRATE_SCRIPT = PROJECT_ROOT / "tools" / "research" / "analyze_winrate.py"
 
 
 def utc_now_str() -> str:
@@ -14,12 +17,12 @@ def utc_now_str() -> str:
 
 
 def run_analyzer(python_bin: str, extra_args: list[str]) -> tuple[int, str, str]:
-    cmd = [python_bin, "analyze_winrate.py", *extra_args]
+    cmd = [python_bin, str(ANALYZE_WINRATE_SCRIPT), *extra_args]
     proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
-        cwd=os.getcwd(),
+        cwd=str(PROJECT_ROOT),
     )
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 

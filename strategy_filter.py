@@ -314,7 +314,7 @@ class StrategyFilter:
     def coin_wr_stats(self) -> Dict[str, Dict]:
         """
         Return WR, trade count, and floor delta for all coins with recorded outcomes.
-        Used by param_suggester.py and boot status logging.
+        Used by tools/research/param_suggester.py and boot status logging.
         """
         out: Dict[str, Dict] = {}
         for coin, results in self._coin_results.items():

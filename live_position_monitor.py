@@ -10,7 +10,6 @@ from position import Position, PositionState, CloseReason
 from trade_log import upsert_trade_row
 
 TRADES_FILE = os.getenv("TRADES_FILE", "trades.csv")
-PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() == "true"
 TAKER_FEE_BPS = float(os.getenv("TAKER_FEE_BPS", "4.5"))
 MAX_FULL_LOSS_R = float(os.getenv("MAX_FULL_LOSS_R", "-1.5"))
 LIVE_MONITOR_MIN_AGE_SEC = float(os.getenv("LIVE_MONITOR_MIN_AGE_SEC", "20"))
@@ -729,7 +728,7 @@ class LivePositionMonitor:
 
     def _position_to_csv_row(self, pos: Position) -> dict:
         row = pos.to_dict()
-        row["paper_mode"] = "true" if PAPER_MODE else "false"
+        row["paper_mode"] = "false"
         row["reconciled_from_venue"] = "true" if getattr(pos, "reconciled_from_venue", False) else "false"
         row["allow_reconcile_close"] = "true" if getattr(pos, "allow_reconcile_close", False) else "false"
         row.setdefault("close_reason", pos.close_reason.value if pos.close_reason else "")

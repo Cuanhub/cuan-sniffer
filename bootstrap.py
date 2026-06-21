@@ -12,7 +12,7 @@ Reads the trade log and rebuilds:
 
 ─── v2 changes ────────────────────────────────────────────────────
 LIVE MODE FIXES:
-  • paper_mode filter: only restores positions matching current mode.
+  • paper_mode filter: skips legacy paper rows during live restoration.
     Prevents paper ghost positions from blocking live slots.
   • Venue reconciliation: in live mode, verifies each restored position
     actually exists on venue before including it. Prevents phantom
@@ -128,9 +128,9 @@ def bootstrap_state(
 
     Args:
         starting_balance: Initial account balance.
-        paper_mode: If provided, only restore positions matching this mode.
-                    True = only paper positions, False = only live positions,
-                    None = restore all (backward-compatible default).
+        paper_mode: Historical CSV filter. Pass False in live runtime to skip
+                    old paper rows. True is retained only for backward-compatible
+                    offline inspection of legacy data.
         venue_checker: Optional callable(coin, side) -> bool.
                        If provided, only restore positions that the venue
                        confirms are still open. Used in live mode to prevent
@@ -207,18 +207,18 @@ def bootstrap_state(
                 closed_today += 1
 
         elif state in ("open", "partial"):
-            # ── Paper mode filter ────────────────────────────────────
+            # ── Historical paper-row filter ──────────────────────────
             if paper_mode is not None:
                 row_paper = _safe_bool(row.get("paper_mode", "true"))
                 if paper_mode and not row_paper:
-                    # We're in paper mode but this is a live position — skip
+                    # Legacy inspection requested paper rows only.
                     continue
                 if not paper_mode and row_paper:
-                    # We're in live mode but this is a paper position — skip
+                    # Live runtime skips old paper/simulation rows.
                     pid = row.get("position_id", "?")
                     print(
-                        f"[BOOTSTRAP] Skipping paper position {pid} "
-                        f"(live mode active)"
+                        f"[BOOTSTRAP] Skipping legacy paper position {pid} "
+                        "(live runtime active)"
                     )
                     continue
 

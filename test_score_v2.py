@@ -285,16 +285,27 @@ class TestRecipeMonitor(unittest.TestCase):
 class TestAnalysisScript(unittest.TestCase):
 
     def test_handles_missing_files(self):
-        """analyze_shadow_score_v2.py should not crash on missing files."""
+        """tools/research/analyze_shadow_score_v2.py should not crash on missing files."""
         import subprocess
+        script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "tools",
+            "research",
+            "analyze_shadow_score_v2.py",
+        )
         result = subprocess.run(
-            [sys.executable, "analyze_shadow_score_v2.py"],
+            [sys.executable, script],
             capture_output=True, text=True, timeout=10,
             cwd=os.path.dirname(os.path.abspath(__file__)) or ".",
-            env={**os.environ, "SHADOW_SCORES_PATH": "/tmp/nonexistent_shadow.csv"},
+            env={
+                **os.environ,
+                "SHADOW_RESEARCH_CANDIDATES_PATH": "/tmp/nonexistent_shadow_candidates.csv",
+                "SHADOW_RESEARCH_EXECUTIONS_PATH": "/tmp/nonexistent_shadow_executions.csv",
+                "SHADOW_RESEARCH_OUTCOMES_PATH": "/tmp/nonexistent_shadow_outcomes.csv",
+            },
         )
         self.assertEqual(result.returncode, 0, f"Script crashed: {result.stderr}")
-        self.assertIn("shadow_scores.csv", result.stdout)
+        self.assertIn("shadow_research_candidates.csv", result.stdout)
 
 
 if __name__ == "__main__":

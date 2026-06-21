@@ -146,7 +146,7 @@ def init_trade_log():
     print(f"[TRADE_LOG] Initialized {TRADES_FILE}")
 
 
-def append_trade(position: Position, paper_mode: bool = True):
+def append_trade(position: Position, paper_mode: bool = False):
     paper_mode_str = str(paper_mode).lower()
 
     row = {
@@ -234,9 +234,12 @@ def append_trade(position: Position, paper_mode: bool = True):
         signal_id=position.signal_id,
         position_id=position.position_id,
         coin=position.coin,
+        symbol=position.coin,
         timeframe=position.timeframe,
         side=position.side,
         score=position.total_score,
+        raw_score=position.total_score,
+        total_score=position.total_score,
         confidence=position.confidence,
         accepted=True,
         reject_reason="",
@@ -244,6 +247,7 @@ def append_trade(position: Position, paper_mode: bool = True):
         stop=position.stop_price,
         tp=position.tp_price,
         rr=round(position.rr_planned, 4),
+        rr_planned=round(position.rr_planned, 4),
         stop_method="",
         final_entry=position.entry_price,
         final_stop=position.stop_price,
@@ -255,6 +259,8 @@ def append_trade(position: Position, paper_mode: bool = True):
         ob_level=0.0,
         price=position.current_price,
         atr=position.atr,
+        stop_dist=abs(position.entry_price - position.stop_price),
+        tp_dist=abs(position.tp_price - position.entry_price),
         stop_dist_atr=(
             abs(position.entry_price - position.stop_price) / position.atr
             if position.atr else 0.0
@@ -263,9 +269,13 @@ def append_trade(position: Position, paper_mode: bool = True):
         macro_regime="",
         market_regime=position.regime,
         session=position.session,
+        setup_family=position.setup_family,
+        regime=position.regime,
+        regime_htf_1h=position.htf_regime,
         order_submitted=True,
         fill_price=round(position.pending_exit_fill_price or position.entry_price, 8),
         slippage_bps=round(position.pending_exit_slippage_bps, 4),
+        fill_slippage_bps=round(position.pending_exit_slippage_bps, 4),
         partial_hit=position.partial_closed,
         close_reason=position.close_reason.value if position.close_reason else "",
         realized_r=round(position.realized_r, 4),

@@ -338,7 +338,7 @@ def test_swing_resample_excludes_forming():
 def test_backtest_uses_open_time():
     print("\n=== 7. backtest candle parsers — open time (t) used not close time (T) ===")
 
-    # Simulate what analyze_winrate.py:fetch_candles does
+    # Simulate what tools/research/analyze_winrate.py:fetch_candles does
     base = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
     fake_candle = {
         "t": int(base.timestamp() * 1000),

@@ -7,7 +7,7 @@ Notification system:
   - Daily recap support retained
 
 Live-only cleanup:
-  - Removed PAPER_MODE branching
+  - Live backend only
   - Removed any dependency on executor.paper
 """
 
@@ -39,6 +39,9 @@ from live_data_guard import (
     LIVE_MAX_SENTIMENT_CACHE_AGE_SECONDS,
     api_backoff_status,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+ANALYZE_WINRATE_SCRIPT = PROJECT_ROOT / "tools" / "research" / "analyze_winrate.py"
 
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
@@ -649,14 +652,14 @@ def _run_recap_worker():
     try:
         print("[RECAP] Running automatic daily recap...")
         write_last_recap_time(datetime.now(timezone.utc))
-        analyzer_args = ["analyze_winrate.py", "--chart", RECAP_CHART]
+        analyzer_args = [str(ANALYZE_WINRATE_SCRIPT), "--chart", RECAP_CHART]
         if RECAP_NO_FETCH:
             analyzer_args.append("--no-fetch")
         proc = subprocess.run(
             [sys.executable, *analyzer_args],
             capture_output=True,
             text=True,
-            cwd=os.getcwd(),
+            cwd=str(PROJECT_ROOT),
             timeout=RECAP_TIMEOUT_SECONDS,
         )
         if proc.returncode != 0:

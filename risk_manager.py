@@ -22,8 +22,6 @@ import os
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
-PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() == "true"
-
 RISK_PCT_PER_TRADE = float(os.getenv("RISK_PCT_PER_TRADE", "1.00"))
 
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "4"))
@@ -283,11 +281,10 @@ class RiskManager:
         if size_usd <= 0 or risk_usd <= 0:
             return RiskDecision(False, "could not compute valid position size", track=track)
 
-        mode = "PAPER" if PAPER_MODE else "LIVE"
         return RiskDecision(
             approved=True,
             reason=(
-                f"approved [{mode}] "
+                "approved [LIVE] "
                 f"track={track} "
                 f"conf={confidence:.2f} "
                 f"score={total_score:.2f} "

@@ -17,21 +17,31 @@ _HEADER_INITIALIZED = False
 
 HEADER = [
     "timestamp_utc",
+    "timestamp",
     "event_type",
     "signal_id",
     "position_id",
     "coin",
+    "symbol",
     "timeframe",
     "side",
     "score",
+    "raw_score",
+    "total_score",
+    "threshold",
+    "effective_threshold",
     "confidence",
     "accepted",
     "reject_reason",
     "reason_family",
+    "reason_text",
+    "metadata",
+    "executor_result",
     "entry",
     "stop",
     "tp",
     "rr",
+    "rr_planned",
     "stop_method",
     "final_entry",
     "final_stop",
@@ -43,6 +53,8 @@ HEADER = [
     "ob_level",
     "price",
     "atr",
+    "stop_dist",
+    "tp_dist",
     "stop_dist_atr",
     "bos_bull",
     "bos_bear",
@@ -82,13 +94,27 @@ HEADER = [
     "edge_buckets",
     "edge_bucket_count",
     "governance_reason",
+    "setup_family",
+    "regime",
+    "regime_local",
+    "regime_htf_1h",
+    "regime_macro_4h",
     "htf_regime",
     "macro_regime",
     "market_regime",
     "session",
+    "vol_state",
+    "vol_ratio",
+    "whale_pressure",
+    "flow_momentum",
+    "funding_rate",
+    "open_interest",
+    "long_short_bias",
     "order_submitted",
     "fill_price",
     "slippage_bps",
+    "fill_slippage_bps",
+    "fill_ratio",
     "partial_hit",
     "close_reason",
     "realized_r",
@@ -102,6 +128,20 @@ def _normalize(value: Any) -> Any:
     if value is None:
         return ""
     return value
+
+
+def _is_blank(value: Any) -> bool:
+    return value is None or value == ""
+
+
+def _copy_first_present(row: dict, target: str, *sources: str) -> None:
+    if not _is_blank(row.get(target)):
+        return
+    for source in sources:
+        value = row.get(source)
+        if not _is_blank(value):
+            row[target] = value
+            return
 
 
 def normalize_reject_reason_family(reason: str) -> str:
@@ -190,14 +230,27 @@ def init_smc_live_log() -> None:
 
 def append_smc_live_event(**fields: Any) -> None:
     try:
+        if not _HEADER_INITIALIZED:
+            init_smc_live_log()
         path = Path(LOG_PATH)
         needs_header = not path.exists() or path.stat().st_size == 0
         reject_reason = str(fields.get("reject_reason", "") or "")
         fields.setdefault("reason_family", normalize_reject_reason_family(reject_reason))
-        row = {
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            **fields,
-        }
+        now = datetime.now(timezone.utc)
+        row = dict(fields)
+        row.setdefault("timestamp_utc", now.isoformat(timespec="seconds"))
+        row.setdefault("timestamp", now.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        _copy_first_present(row, "coin", "symbol")
+        _copy_first_present(row, "symbol", "coin")
+        _copy_first_present(row, "raw_score", "score")
+        _copy_first_present(row, "total_score", "score", "raw_score")
+        _copy_first_present(row, "rr_planned", "rr")
+        _copy_first_present(row, "regime_htf_1h", "htf_regime")
+        _copy_first_present(row, "regime_macro_4h", "macro_regime")
+        _copy_first_present(row, "regime", "market_regime")
+        _copy_first_present(row, "regime_local", "setup_family")
+        _copy_first_present(row, "fill_slippage_bps", "slippage_bps")
+        _copy_first_present(row, "slippage_bps", "fill_slippage_bps")
 
         with path.open("a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=HEADER, extrasaction="ignore")

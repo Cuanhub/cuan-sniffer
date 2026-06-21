@@ -1,8 +1,8 @@
 """
 Live execution backend for Hyperliquid.
 
-Drop-in replacement for PaperExecutionBackend.
-Same interface: execute_entry / execute_exit / get_mid_price / shutdown.
+Implements the ExecutionBackend interface:
+execute_entry / execute_exit / get_mid_price / shutdown.
 
 Patched improvements:
 - Reason-aware exit aggressiveness
