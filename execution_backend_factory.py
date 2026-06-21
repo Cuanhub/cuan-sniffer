@@ -1,39 +1,21 @@
-"""
-Backend factory.
+"""Live backend factory.
 
-Switches between PaperExecutionBackend and LiveExecutionBackend from env.
-Keeps executor.py clean — no backend-specific imports needed there.
-
-Usage in executor.py:
-    Replace:
-        from paper_execution_backend import PaperExecutionBackend
-    With:
-        from execution_backend_factory import build_execution_backend
-
-    Replace:
-        self.backend = backend or PaperExecutionBackend()
-    With:
-        self.backend = backend or build_execution_backend(debug=True)
+Paper execution is intentionally unsupported. This factory always builds the
+live Hyperliquid backend after validating live credentials.
 """
 
 import os
 
-from paper_execution_backend import PaperExecutionBackend
-
 
 def build_execution_backend(debug: bool = True):
-    paper_mode = os.getenv("PAPER_MODE", "true").lower() == "true"
+    if os.getenv("PAPER_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise EnvironmentError(
+            "[FACTORY] PAPER_MODE is no longer supported. "
+            "Remove PAPER_MODE or set it false and use the live backend."
+        )
 
-    if paper_mode:
-        if debug:
-            print("[FACTORY] PAPER_MODE=true — using PaperExecutionBackend")
-        return PaperExecutionBackend(debug=debug)
-
-    # Only import LiveExecutionBackend when actually going live.
-    # This avoids SDK import errors if hyperliquid SDK is not installed
-    # in paper-only environments.
     if debug:
-        print("[FACTORY] PAPER_MODE=false — using LiveExecutionBackend")
+        print("[FACTORY] Live execution enabled — using LiveExecutionBackend")
 
     _validate_live_env()
 
@@ -58,13 +40,13 @@ def _validate_live_env():
     if missing:
         raise EnvironmentError(
             f"[FACTORY] Cannot start live backend — missing env vars: {', '.join(missing)}. "
-            f"Set PAPER_MODE=true to run in paper mode."
+            "Live execution is the only supported mode."
         )
 
     # Warn but don't block if still pointing at testnet
     if os.getenv("HL_TESTNET", "true").lower() == "true":
         print(
-            "[FACTORY] WARNING: PAPER_MODE=false but HL_TESTNET=true. "
-            "You are trading on TESTNET with live backend. "
+            "[FACTORY] WARNING: HL_TESTNET=true. "
+            "You are using the live backend against TESTNET. "
             "Set HL_TESTNET=false when ready for mainnet."
         )
