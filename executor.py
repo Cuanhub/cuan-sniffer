@@ -163,41 +163,36 @@ from executor_modules.stop_redesign import (
 # ── Continuation cap ──────────────────────────────────────────────────
 CONTINUATION_MAX_SIZE_MULT = float(os.getenv("CONTINUATION_MAX_SIZE_MULT", "1.50"))
 
-# ── Profitability gates ────────────────────────────────────────────────
-# Coins blocked until per-coin edge is re-validated. Checked before risk.check_signal().
-HARD_BLOCKED_COINS: set = {
-    c.strip().upper()
-    for c in os.getenv("HARD_BLOCKED_COINS", "").split(",")
-    if c.strip()
-}
-# Continuation hard block removed post-candle-fix (2026-06-16). Pre-fix -19.77R was
-# under contaminated HTF regime data. Continuation still must pass UNIVERSAL_MIN_CONFIDENCE,
-# score pre-filter, RR gate, WEAK_CONTINUATION_MIN_SCORE, and chop/regime protections.
-HARD_BLOCK_CONTINUATION = (
-    os.getenv("HARD_BLOCK_CONTINUATION", "false").lower() == "true"
-)
-HARD_BLOCK_CHOP = os.getenv("HARD_BLOCK_CHOP", "true").lower() == "true"
-# Sprint 8: backtest Jun 10-15 (n=54 setups) showed chop-blocked reversal signals had
-# 42% WR and +0.52 ExpR — real edge. Exception bypasses the blanket chop block for
-# high-confidence reversal signals when HTF is bullish. All downstream gates still apply.
-CHOP_REVERSAL_EXCEPTION = os.getenv("CHOP_REVERSAL_EXCEPTION", "false").lower() == "true"
-# All confidence gates below default to UNIVERSAL_MIN_CONFIDENCE so the system has
-# one source of truth. Override individually in .env only with explicit justification.
-CHOP_REVERSAL_MIN_CONFIDENCE = float(
-    os.getenv("CHOP_REVERSAL_MIN_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
-)
-HARD_BLOCK_UNKNOWN_SESSION = (
-    os.getenv("HARD_BLOCK_UNKNOWN_SESSION", "true").lower() == "true"
+# ── Profitability gates (extracted to executor_modules/session_filters.py) ────
+from executor_modules.session_filters import (
+    HARD_BLOCKED_COINS,
+    HARD_BLOCK_CONTINUATION,
+    HARD_BLOCK_CHOP,
+    CHOP_REVERSAL_EXCEPTION,
+    CHOP_REVERSAL_MIN_CONFIDENCE,
+    HARD_BLOCK_UNKNOWN_SESSION,
+    HARD_BLOCKED_TIMEFRAMES,
+    BLOCK_CONTINUATION_IN_CHOP,
+    BLOCK_REVERSAL_AGAINST_DUAL_TREND,
+    get_hard_blocked_sessions,
+    is_trend_aligned,
+    can_override_soft_block,
+    evaluate_session_block,
+    evaluate_regime_block,
+    GLOBAL_BLOCKED_SESSIONS,
+    MAJORS_BLOCKED_SESSIONS,
+    SOL_BETA_BLOCKED_SESSIONS,
+    ALT_BETA_BLOCKED_SESSIONS,
+    OTHER_BLOCKED_SESSIONS,
+    SOFT_BLOCKED_SESSIONS,
+    SESSION_OVERRIDE_MIN_SCORE,
+    DEAD_ZONE_SOFT_OVERRIDE_ENABLED,
+    DEAD_ZONE_OVERRIDE_MIN_SCORE,
+    SWING_SESSION_OVERRIDE,
 )
 SWING_MIN_CONFIDENCE = float(
     os.getenv("SWING_MIN_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
 )
-# 4H re-enabled post-candle-fix. Default empty (no timeframes blocked at code level).
-HARD_BLOCKED_TIMEFRAMES: set = {
-    tf.strip().lower()
-    for tf in os.getenv("HARD_BLOCKED_TIMEFRAMES", "").split(",")
-    if tf.strip()
-}
 # Weak-trend confidence gate — unified to UNIVERSAL_MIN_CONFIDENCE.
 # Pre-fix data: weak_trend at any confidence < 0.90 was net negative. Gate is now active
 # by default (was 0.0 = disabled in code default; .env now sets 0.90 explicitly).
@@ -217,20 +212,8 @@ REVERSAL_CHOP_MIN_SCORE = float(os.getenv("REVERSAL_CHOP_MIN_SCORE", "0.78"))
 REGIME_TP_CAP_R = float(os.getenv("REGIME_TP_CAP_R", "1.75"))
 
 # ── Market regime gating/sizing ───────────────────────────────────────
-BLOCK_CONTINUATION_IN_CHOP = (
-    os.getenv("BLOCK_CONTINUATION_IN_CHOP", "true").lower() == "true"
-)
-# Block reversal entries when BOTH HTF and macro are opposed to the signal direction.
-# Reversal longs in htf_down+macro_down and reversal shorts in htf_up+macro_up have
-# negative expectancy in trending markets — structure is stacked against them.
-BLOCK_REVERSAL_AGAINST_DUAL_TREND = (
-    os.getenv("BLOCK_REVERSAL_AGAINST_DUAL_TREND", "true").lower() == "true"
-)
 WEAK_TREND_SIZE_MULT = float(os.getenv("WEAK_TREND_SIZE_MULT", "0.70"))
 FULL_TP_MODE = os.getenv("FULL_TP_MODE", "true").lower() == "true"
-# Partial-TP runner model: close a fraction at +PARTIAL_TP_R, move stop to BE, run to TP.
-# Only active when FULL_TP_MODE=false. Setting ENABLE_PARTIAL_TP=true automatically
-# implies FULL_TP_MODE=false for the partial trigger path.
 ENABLE_PARTIAL_TP = os.getenv("ENABLE_PARTIAL_TP", "false").lower() == "true"
 PARTIAL_TP_R = float(os.getenv("PARTIAL_TP_R", "1.0"))
 PARTIAL_CLOSE_FRACTION = float(os.getenv("PARTIAL_CLOSE_FRACTION", "0.4"))
@@ -245,72 +228,20 @@ SCORE_SIZE_HIGH_MULT = float(os.getenv("SCORE_SIZE_HIGH_MULT", "1.50"))
 CONT_STRONG_TREND_BONUS_MULT = float(os.getenv("CONT_STRONG_TREND_BONUS_MULT", "1.15"))
 SCORE_SIZE_OVERLAY_MAX_MULT = float(os.getenv("SCORE_SIZE_OVERLAY_MAX_MULT", "1.50"))
 
-# ── Portfolio replacement (conservative, full-book only) ────────────
-ENABLE_POSITION_REPLACEMENT = (
-    os.getenv("ENABLE_POSITION_REPLACEMENT", "true").lower() == "true"
-)
-POSITION_REPLACEMENT_MIN_SCORE_DELTA = float(
-    os.getenv("POSITION_REPLACEMENT_MIN_SCORE_DELTA", "0.16")
-)
-MIN_HOLD_TIME_BEFORE_REPLACEMENT_SEC = int(
-    os.getenv("MIN_HOLD_TIME_BEFORE_REPLACEMENT_SEC", "120")
-)
-POSITION_REPLACEMENT_PROTECT_PARTIALED = (
-    os.getenv("POSITION_REPLACEMENT_PROTECT_PARTIALED", "true").lower() == "true"
-)
-POSITION_REPLACEMENT_PROTECT_NEAR_TP_R = float(
-    os.getenv("POSITION_REPLACEMENT_PROTECT_NEAR_TP_R", "1.2")
-)
-POSITION_REPLACEMENT_PROTECT_IN_PROFIT_R = float(
-    os.getenv("POSITION_REPLACEMENT_PROTECT_IN_PROFIT_R", "0.5")
-)
-POSITION_REPLACEMENT_PREFERRED_BONUS = float(
-    os.getenv("POSITION_REPLACEMENT_PREFERRED_BONUS", "0.05")
-)
-
-# ── Session blocking ──────────────────────────────────────────────────
-def _parse_session_set(env_name: str, default: str) -> set:
-    raw = os.getenv(env_name, default)
-    if raw is None:
-        return set()
-    raw = raw.strip()
-    if not raw:
-        return set()
-    lowered = raw.lower()
-    if lowered in {"none", "null", "false", "off", "no"}:
-        return set()
-    return {s.strip().lower() for s in raw.split(",") if s.strip()}
-
-
-MAJORS_BLOCKED_SESSIONS = _parse_session_set("MAJORS_BLOCKED_SESSIONS", "dead_zone")
-SOL_BETA_BLOCKED_SESSIONS = _parse_session_set("SOL_BETA_BLOCKED_SESSIONS", "dead_zone")
-ALT_BETA_BLOCKED_SESSIONS = _parse_session_set("ALT_BETA_BLOCKED_SESSIONS", "dead_zone")
-OTHER_BLOCKED_SESSIONS = _parse_session_set("OTHER_BLOCKED_SESSIONS", "dead_zone")
-GLOBAL_BLOCKED_SESSIONS = _parse_session_set("BLOCKED_SESSIONS", "")
-
-SOFT_BLOCKED_SESSIONS = _parse_session_set("SOFT_BLOCKED_SESSIONS", "ny_pm")
-SESSION_OVERRIDE_MIN_SCORE = float(os.getenv("SESSION_OVERRIDE_MIN_SCORE", "0.80"))
-SESSION_OVERRIDE_FAMILIES = {
-    s.strip().lower()
-    for s in os.getenv("SESSION_OVERRIDE_FAMILIES", "continuation").split(",")
-    if s.strip()
-}
-# When true, swing-timeframe signals (timeframe in {1h, 4h} or setup_family==swing)
-# bypass the session soft block entirely without needing to meet SESSION_OVERRIDE_MIN_SCORE.
-# Hard blocks (BLOCKED_SESSIONS / per-bucket) are still enforced.
-SWING_SESSION_OVERRIDE = os.getenv("SWING_SESSION_OVERRIDE", "false").lower() == "true"
-
-DEAD_ZONE_SOFT_OVERRIDE_ENABLED = (
-    os.getenv("DEAD_ZONE_SOFT_OVERRIDE_ENABLED", "true").lower() == "true"
-)
-DEAD_ZONE_OVERRIDE_MIN_SCORE = float(os.getenv("DEAD_ZONE_OVERRIDE_MIN_SCORE", "0.84"))
-DEAD_ZONE_OVERRIDE_FAMILIES = {
-    s.strip().lower()
-    for s in os.getenv("DEAD_ZONE_OVERRIDE_FAMILIES", "continuation").split(",")
-    if s.strip()
-}
-DEAD_ZONE_OVERRIDE_REQUIRE_TREND_ALIGN = (
-    os.getenv("DEAD_ZONE_OVERRIDE_REQUIRE_TREND_ALIGN", "true").lower() == "true"
+# ── Portfolio replacement (extracted to executor_modules/position_replacement.py) ──
+from executor_modules.position_replacement import (
+    ENABLE_POSITION_REPLACEMENT,
+    POSITION_REPLACEMENT_MIN_SCORE_DELTA,
+    MIN_HOLD_TIME_BEFORE_REPLACEMENT_SEC,
+    POSITION_REPLACEMENT_PROTECT_PARTIALED,
+    POSITION_REPLACEMENT_PROTECT_NEAR_TP_R,
+    POSITION_REPLACEMENT_PROTECT_IN_PROFIT_R,
+    POSITION_REPLACEMENT_PREFERRED_BONUS,
+    is_capacity_reject_reason,
+    signal_replacement_quality,
+    position_replacement_quality,
+    is_position_protected,
+    incoming_beats_weakest,
 )
 
 # ── Factor buckets ────────────────────────────────────────────────────
@@ -632,57 +563,25 @@ class Executor:
         return checker
 
     def _get_hard_blocked_sessions(self, bucket: str) -> set:
-        if GLOBAL_BLOCKED_SESSIONS:
-            return GLOBAL_BLOCKED_SESSIONS
-        if bucket == "majors":
-            return MAJORS_BLOCKED_SESSIONS
-        if bucket == "sol_beta":
-            return SOL_BETA_BLOCKED_SESSIONS
-        if bucket == "alt_beta":
-            return ALT_BETA_BLOCKED_SESSIONS
-        return OTHER_BLOCKED_SESSIONS
+        return get_hard_blocked_sessions(bucket)
 
     def _can_override_soft_block(self, signal, session: str) -> bool:
-        # Swing-timeframe signals bypass soft block unconditionally when enabled.
-        # Hard session blocks (BLOCKED_SESSIONS / per-bucket) are NOT bypassed here.
-        if SWING_SESSION_OVERRIDE and self._signal_timeframe_class(signal) == "swing":
-            return True
-
-        if session == "dead_zone" and DEAD_ZONE_SOFT_OVERRIDE_ENABLED:
-            min_score = DEAD_ZONE_OVERRIDE_MIN_SCORE
-            families = DEAD_ZONE_OVERRIDE_FAMILIES
-            require_trend = DEAD_ZONE_OVERRIDE_REQUIRE_TREND_ALIGN
-        elif session in SOFT_BLOCKED_SESSIONS:
-            min_score = SESSION_OVERRIDE_MIN_SCORE
-            families = SESSION_OVERRIDE_FAMILIES
-            require_trend = True
-        else:
-            return False
-
         meta = signal.meta or {}
-        score = float(meta.get("total_score", getattr(signal, "confidence", 0.0)) or 0.0)
-        if score < min_score:
-            return False
-
-        setup_family = str(
-            meta.get("setup_family", meta.get("regime_local", ""))
-        ).strip().lower()
-        if setup_family not in families:
-            return False
-
-        if require_trend and not self._is_trend_aligned(signal):
-            return False
-
-        return True
+        return can_override_soft_block(
+            session=session,
+            score=float(meta.get("total_score", getattr(signal, "confidence", 0.0)) or 0.0),
+            setup_family=str(meta.get("setup_family", meta.get("regime_local", ""))).strip().lower(),
+            side=self._side_str(signal.side),
+            regime=str(getattr(signal, "regime", "")),
+            is_swing_timeframe=(self._signal_timeframe_class(signal) == "swing"),
+        )
 
     @staticmethod
     def _is_trend_aligned(signal) -> bool:
-        side = Executor._side_str(signal.side)
-        regime = str(getattr(signal, "regime", "")).lower()
-
-        if side == "LONG":
-            return "htf_up" in regime and "macro_up" in regime
-        return "htf_down" in regime and "macro_down" in regime
+        return is_trend_aligned(
+            Executor._side_str(signal.side),
+            str(getattr(signal, "regime", "")),
+        )
 
     def _score_size_overlay(
         self,
@@ -2075,54 +1974,24 @@ class Executor:
         return max(0.0, target_r - current_r)
 
     def _signal_replacement_quality(self, signal) -> float:
-        score = self._signal_total_score(signal)
-        setup_family = self._signal_setup_family(signal)
-        market_regime = self._signal_market_regime(signal)
-        if (
-            setup_family == "continuation"
-            and market_regime == "strong_trend"
-            and self._is_trend_aligned(signal)
-        ):
-            score += POSITION_REPLACEMENT_PREFERRED_BONUS
-        elif setup_family == "continuation" and market_regime == "weak_trend":
-            score -= 0.03
-        elif setup_family == "reversal":
-            score -= 0.03
-
-        if market_regime == "chop":
-            score -= 0.10
-        return score
+        return signal_replacement_quality(
+            total_score=self._signal_total_score(signal),
+            setup_family=self._signal_setup_family(signal),
+            market_regime=self._signal_market_regime(signal),
+            trend_aligned=self._is_trend_aligned(signal),
+        )
 
     def _position_replacement_quality(self, pos: Position) -> float:
-        score = float(getattr(pos, "total_score", 0.0) or getattr(pos, "confidence", 0.0) or 0.0)
-        setup_family = str(getattr(pos, "setup_family", "")).strip().lower()
-        market_regime = self._position_market_regime(pos)
-
-        if (
-            setup_family == "continuation"
-            and market_regime == "strong_trend"
-            and self._is_position_trend_aligned(pos)
-        ):
-            score += POSITION_REPLACEMENT_PREFERRED_BONUS
-        elif setup_family == "continuation" and market_regime == "weak_trend":
-            score -= 0.05
-        elif setup_family == "reversal":
-            score -= 0.03
-        elif setup_family not in {"continuation", "reversal", "swing"}:
-            score -= 0.04
-
-        if market_regime == "chop":
-            score -= 0.12
-        return score
+        return position_replacement_quality(
+            total_score=float(getattr(pos, "total_score", 0.0) or getattr(pos, "confidence", 0.0) or 0.0),
+            setup_family=str(getattr(pos, "setup_family", "")).strip().lower(),
+            market_regime=self._position_market_regime(pos),
+            trend_aligned=self._is_position_trend_aligned(pos),
+        )
 
     @staticmethod
     def _is_capacity_reject_reason(reason: str) -> bool:
-        text = str(reason or "").strip().lower()
-        return (
-            text.startswith("max positions (")
-            or text.startswith("intraday max positions (")
-            or text.startswith("swing max positions (")
-        )
+        return is_capacity_reject_reason(reason)
 
     def _find_replaceable_position_for_signal(
         self,
