@@ -20,9 +20,9 @@ Method
 
 Usage
 -----
-  python3 backtest_missed.py
-  python3 backtest_missed.py --eval-hours 4
-  python3 backtest_missed.py --from-date 2026-06-13
+  python3 tools/research/backtest_missed.py
+  python3 tools/research/backtest_missed.py --eval-hours 4
+  python3 tools/research/backtest_missed.py --from-date 2026-06-13
 """
 
 import csv

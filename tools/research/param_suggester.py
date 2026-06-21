@@ -7,13 +7,13 @@ positive directional edge. Writes suggested_params.json for human review.
 
 IMPORTANT: price_move_r is an at-logging-time directional proxy. It measures
 how far price moved toward TP (positive) or SL (negative) at the moment the
-rejection was logged — not a full TP/SL simulation. Use backtest_missed.py
+rejection was logged — not a full TP/SL simulation. Use tools/research/backtest_missed.py
 for full simulation before applying any suggestion to .env.
 
 Usage:
-    python3 param_suggester.py                   # last 7 days
-    python3 param_suggester.py --days 14         # last 14 days
-    python3 param_suggester.py --days 3 --verbose
+    python3 tools/research/param_suggester.py                   # last 7 days
+    python3 tools/research/param_suggester.py --days 14         # last 14 days
+    python3 tools/research/param_suggester.py --days 3 --verbose
 """
 
 import os
@@ -190,7 +190,7 @@ def analyze_chop_reversal_gate(df: pd.DataFrame) -> Dict[str, Any]:
                 "current": CHOP_REVERSAL_MIN_CONF,
                 "suggested": new_floor,
                 "evidence": evidence or band_stats,
-                "warning": "Chop reversals are high-noise. Validate with backtest_missed.py first.",
+                "warning": "Chop reversals are high-noise. Validate with tools/research/backtest_missed.py first.",
             }
 
     return {
@@ -247,7 +247,7 @@ def analyze_continuation_gate(df: pd.DataFrame) -> Dict[str, Any]:
             "current": "true",
             "suggested": "false (with score gate — use WEAK_CONTINUATION_MIN_SCORE)",
             "evidence": all_stats,
-            "warning": "Continuation was −19.91R lifetime. Run backtest_missed.py before changing.",
+            "warning": "Continuation was −19.91R lifetime. Run tools/research/backtest_missed.py before changing.",
         }
 
     return {
@@ -359,7 +359,7 @@ def _print_report(data: Dict, verbose: bool):
     print(f"\nFull output: {data.get('output_path', OUTPUT_PATH)}")
     print(
         "\nNOTE: price_move_r is a directional proxy at logging time — not a full "
-        "TP/SL simulation.\nRun backtest_missed.py before applying any suggestion."
+        "TP/SL simulation.\nRun tools/research/backtest_missed.py before applying any suggestion."
     )
 
 
@@ -416,7 +416,7 @@ def run(days: int = ANALYSIS_DAYS, output: str = OUTPUT_PATH, verbose: bool = Fa
         "output_path": output,
         "disclaimer": (
             "price_move_r is an at-logging-time directional proxy — positive means price "
-            "moved toward TP when the rejection was recorded. Run backtest_missed.py for "
+            "moved toward TP when the rejection was recorded. Run tools/research/backtest_missed.py for "
             "full TP/SL simulation before applying any suggestion to .env."
         ),
         "gate_thresholds_used": {

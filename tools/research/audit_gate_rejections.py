@@ -8,10 +8,10 @@ Reads gate_rejects.csv and executor_rejects.csv and produces:
   - Architecture duplicate filter detection
 
 Usage:
-    python audit_gate_rejections.py
-    python audit_gate_rejections.py --hours 24
-    python audit_gate_rejections.py --gate-only
-    python audit_gate_rejections.py --executor-only
+    python tools/research/audit_gate_rejections.py
+    python tools/research/audit_gate_rejections.py --hours 24
+    python tools/research/audit_gate_rejections.py --gate-only
+    python tools/research/audit_gate_rejections.py --executor-only
 """
 
 import argparse
