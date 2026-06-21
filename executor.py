@@ -9,7 +9,7 @@ Design:
 
 Notes:
 - No PaperTrader
-- No PAPER_MODE branching
+- Live backend only
 - Explicit per-cycle live exit loop
 - All live closes require wallet confirmation
 """
@@ -43,18 +43,7 @@ from execution_backend_factory import build_execution_backend
 from live_data_guard import (
     LIVE_MAX_MARGIN_CACHE_AGE_SECONDS as DEFAULT_LIVE_MAX_MARGIN_CACHE_AGE_SECONDS,
 )
-
-# ── Shadow mode ────────────────────────────────────────────────────────
-SHADOW_CONFIDENCE_THRESHOLD = float(os.getenv("SHADOW_CONFIDENCE_THRESHOLD", "0"))
-SHADOW_LOG_PATH = os.getenv("SHADOW_LOG_PATH", "shadow_trades.csv")
-_SHADOW_LOG_LOCK = threading.Lock()
-_SHADOW_LOG_FIELDS = [
-    "timestamp", "symbol", "side", "score", "confidence",
-    "entry_price", "stop_price", "tp_price", "rr_planned",
-    "session", "setup_family", "market_regime", "htf_regime", "macro_regime",
-    "timeframe", "triggers", "stop_method",
-    "reject_reason", "would_trade",
-]
+from shadow_research import append_shadow_execution
 
 # ── Cooldowns ───────────────────────────────────────────────────────────
 SIGNAL_COOLDOWN_SEC = int(os.getenv("SIGNAL_COOLDOWN_SEC", "300"))
@@ -114,111 +103,15 @@ SIGNAL_MOMENTUM_REENTRY_ATR = float(os.getenv("SIGNAL_MOMENTUM_REENTRY_ATR", "0.
 LIVE_MAX_MARGIN_CACHE_AGE_SECONDS = float(
     os.getenv("LIVE_MAX_MARGIN_CACHE_AGE_SECONDS", str(DEFAULT_LIVE_MAX_MARGIN_CACHE_AGE_SECONDS))
 )
-# ── Executor gate telemetry ───────────────────────────────────────────────────
-EXECUTOR_REJECTS_PATH = os.getenv("EXECUTOR_REJECTS_PATH", "executor_rejects.csv")
-_EXECUTOR_REJECT_LOCK = threading.Lock()
-_EXECUTOR_REJECT_FIELDS = [
-    "timestamp", "symbol", "side", "confidence", "required_confidence",
-    "rr", "required_rr", "reject_reason", "session", "setup_family",
-    "market_regime", "timeframe",
-]
-
-
-def _exec_ensure_csv(path: str, fields: list) -> None:
-    if not os.path.exists(path):
-        with open(path, "w", newline="") as fh:
-            csv.DictWriter(fh, fieldnames=fields).writeheader()
-
-
-def _log_shadow_trade(signal, reject_reason: str = "", would_trade: bool = False) -> None:
-    if SHADOW_CONFIDENCE_THRESHOLD <= 0:
-        return
-    try:
-        meta = getattr(signal, "meta", None) or {}
-        score = float(meta.get("total_score", getattr(signal, "confidence", 0.0)) or 0.0)
-        conf = float(getattr(signal, "confidence", 0.0) or 0.0)
-        if score < SHADOW_CONFIDENCE_THRESHOLD:
-            return
-        if conf >= float(os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90")):
-            return
-
-        entry = float(getattr(signal, "entry_price", 0) or 0)
-        stop = float(getattr(signal, "stop_price", 0) or 0)
-        tp = float(getattr(signal, "tp_price", 0) or 0)
-        sd = abs(entry - stop)
-        rr = abs(tp - entry) / sd if sd > 0 else 0
-
-        triggers = []
-        for t in ("bos_bull", "bos_bear", "choch_bull", "choch_bear",
-                  "ob_bull", "ob_bear", "fvg_bull", "fvg_bear",
-                  "sweep_bull", "sweep_bear"):
-            if meta.get(t):
-                triggers.append(t)
-
-        row = {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "symbol": str(getattr(signal, "coin", "")).upper(),
-            "side": str(getattr(signal, "side", "")).upper(),
-            "score": round(score, 4),
-            "confidence": round(conf, 4),
-            "entry_price": round(entry, 8),
-            "stop_price": round(stop, 8),
-            "tp_price": round(tp, 8),
-            "rr_planned": round(rr, 4),
-            "session": str(meta.get("session", "")),
-            "setup_family": str(meta.get("setup_family", meta.get("regime_local", ""))),
-            "market_regime": str(meta.get("market_regime", "")),
-            "htf_regime": str(meta.get("regime_htf_1h", "")),
-            "macro_regime": str(meta.get("regime_macro_4h", "")),
-            "timeframe": str(meta.get("timeframe", "")),
-            "triggers": ",".join(triggers),
-            "stop_method": str(meta.get("stop_method", "")),
-            "reject_reason": str(reject_reason)[:200],
-            "would_trade": "true" if would_trade else "false",
-        }
-        with _SHADOW_LOG_LOCK:
-            _exec_ensure_csv(SHADOW_LOG_PATH, _SHADOW_LOG_FIELDS)
-            with open(SHADOW_LOG_PATH, "a", newline="") as fh:
-                csv.DictWriter(fh, fieldnames=_SHADOW_LOG_FIELDS).writerow(row)
-    except Exception:
-        pass
-
-
-def log_executor_reject(
-    *,
-    symbol: str,
-    side: str = "",
-    confidence: float = 0.0,
-    required_confidence: float = 0.0,
-    rr: float = 0.0,
-    required_rr: float = 0.0,
-    reject_reason: str,
-    session: str = "",
-    setup_family: str = "",
-    market_regime: str = "",
-    timeframe: str = "1h",
-) -> None:
-    try:
-        row = {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "symbol": symbol,
-            "side": side,
-            "confidence": round(float(confidence), 4),
-            "required_confidence": round(float(required_confidence), 4),
-            "rr": round(float(rr), 4),
-            "required_rr": round(float(required_rr), 4),
-            "reject_reason": reject_reason,
-            "session": session,
-            "setup_family": setup_family,
-            "market_regime": market_regime,
-            "timeframe": timeframe,
-        }
-        with _EXECUTOR_REJECT_LOCK:
-            _exec_ensure_csv(EXECUTOR_REJECTS_PATH, _EXECUTOR_REJECT_FIELDS)
-            with open(EXECUTOR_REJECTS_PATH, "a", newline="") as fh:
-                csv.DictWriter(fh, fieldnames=_EXECUTOR_REJECT_FIELDS).writerow(row)
-    except Exception:
-        pass
+# ── Executor gate telemetry (extracted to executor_modules/telemetry.py) ──────
+from executor_modules.telemetry import (
+    EXECUTOR_REJECTS_PATH,
+    _EXECUTOR_REJECT_FIELDS,
+    _exec_ensure_csv,
+    log_executor_reject,
+    _stage_missed_context,
+    _take_missed_context,
+)
 
 
 # ── Unified Threshold Framework ───────────────────────────────────────────────
@@ -253,25 +146,19 @@ AUTO_REPLACE_MISSING_PROTECTION_ON_BOOT = (
     os.getenv("AUTO_REPLACE_MISSING_PROTECTION_ON_BOOT", "true").lower() == "true"
 )
 
-# ── Stop construction (entry-time, structure + volatility) ─────────────
-STOP_ATR_FLOOR_MULT_INTRADAY = float(os.getenv("STOP_ATR_FLOOR_MULT_INTRADAY", "1.10"))
-STOP_ATR_FLOOR_MULT_SWING = float(os.getenv("STOP_ATR_FLOOR_MULT_SWING", "1.40"))
-STOP_BUFFER_ATR_MULT = float(os.getenv("STOP_BUFFER_ATR_MULT", "0.10"))
-MIN_STOP_ATR_REJECT = float(os.getenv("MIN_STOP_ATR_REJECT", "0.80"))
-MIN_STOP_REDESIGN_RR = float(os.getenv("MIN_STOP_REDESIGN_RR", "1.60"))
-STOP_REDESIGN_RR_TOLERANCE = float(os.getenv("STOP_REDESIGN_RR_TOLERANCE", "0.05"))
-HIGH_CONF_STOP_REDESIGN_MIN_CONFIDENCE = float(
-    os.getenv("HIGH_CONF_STOP_REDESIGN_MIN_CONFIDENCE", "0.93")
+# ── Stop construction (extracted to executor_modules/stop_redesign.py) ─────────
+from executor_modules.stop_redesign import (
+    STOP_ATR_FLOOR_MULT_INTRADAY,
+    STOP_ATR_FLOOR_MULT_SWING,
+    STOP_BUFFER_ATR_MULT,
+    MIN_STOP_ATR_REJECT,
+    MIN_STOP_REDESIGN_RR,
+    STOP_REDESIGN_RR_TOLERANCE,
+    HIGH_CONF_STOP_REDESIGN_MIN_CONFIDENCE,
+    HIGH_CONF_STOP_REDESIGN_RR_TOLERANCE,
+    HIGH_CONF_STOP_REDESIGN_FAMILIES,
+    STOP_REDESIGN_MAX_WIDEN_MULT,
 )
-HIGH_CONF_STOP_REDESIGN_RR_TOLERANCE = float(
-    os.getenv("HIGH_CONF_STOP_REDESIGN_RR_TOLERANCE", "0.08")
-)
-HIGH_CONF_STOP_REDESIGN_FAMILIES = {
-    s.strip().lower()
-    for s in os.getenv("HIGH_CONF_STOP_REDESIGN_FAMILIES", "reversal,swing").split(",")
-    if s.strip()
-}
-STOP_REDESIGN_MAX_WIDEN_MULT = float(os.getenv("STOP_REDESIGN_MAX_WIDEN_MULT", "1.50"))
 
 # ── Continuation cap ──────────────────────────────────────────────────
 CONTINUATION_MAX_SIZE_MULT = float(os.getenv("CONTINUATION_MAX_SIZE_MULT", "1.50"))
@@ -529,7 +416,7 @@ class Executor:
         backend: Optional[ExecutionBackend] = None,
         signal_engine=None,
     ):
-        self._live_mode = os.getenv("PAPER_MODE", "true").lower() != "true"
+        self._live_mode = True
         self.venue_sync_unhealthy: bool = False
         self.notify = notify_fn or print
         self.backend = backend or build_execution_backend(debug=True)
@@ -866,11 +753,7 @@ class Executor:
 
     def on_signal(self, signal, sig_id: int = 0) -> ExecutorResult:
         result = self._on_signal_inner(signal, sig_id)
-        _log_shadow_trade(
-            signal,
-            reject_reason=result.reason if not result.traded else "",
-            would_trade=result.traded,
-        )
+        append_shadow_execution(signal, result)
         return result
 
     def _on_signal_inner(self, signal, sig_id: int = 0) -> ExecutorResult:
@@ -1591,6 +1474,8 @@ class Executor:
             self._clear_coin_pending_open(coin)
 
     def _apply_entry_stop_redesign(self, signal, track: str) -> Optional[str]:
+        from executor_modules.stop_redesign import apply_entry_stop_redesign
+
         meta = signal.meta if isinstance(signal.meta, dict) else {}
         coin = str(signal.coin).upper()
         side = self._side_str(signal.side)
@@ -1600,193 +1485,25 @@ class Executor:
         tp = float(getattr(signal, "tp_price", 0.0) or 0.0)
         atr = float(meta.get("atr", 0.0) or 0.0)
 
-        if entry <= 0 or structural_stop <= 0 or tp <= 0:
-            return "invalid_signal_levels"
-        if atr <= 0:
-            return "invalid_atr_for_stop_redesign"
-
-        if side == "LONG":
-            if structural_stop >= entry:
-                return (
-                    f"invalid_structural_stop_long "
-                    f"(stop={structural_stop:.6f} >= entry={entry:.6f})"
-                )
-            if tp <= entry:
-                return (
-                    f"invalid_tp_long "
-                    f"(tp={tp:.6f} <= entry={entry:.6f})"
-                )
-        elif side == "SHORT":
-            if structural_stop <= entry:
-                return (
-                    f"invalid_structural_stop_short "
-                    f"(stop={structural_stop:.6f} <= entry={entry:.6f})"
-                )
-            if tp >= entry:
-                return (
-                    f"invalid_tp_short "
-                    f"(tp={tp:.6f} >= entry={entry:.6f})"
-                )
-        else:
-            return f"invalid_side:{side}"
-
-        floor_mult = (
-            STOP_ATR_FLOOR_MULT_SWING if track == "swing"
-            else STOP_ATR_FLOOR_MULT_INTRADAY
+        reject, final_stop, updated_meta = apply_entry_stop_redesign(
+            coin=coin,
+            side=side,
+            entry=entry,
+            structural_stop=structural_stop,
+            tp=tp,
+            atr=atr,
+            track=track,
+            confidence=float(getattr(signal, "confidence", 0.0) or 0.0),
+            setup_family=self._signal_setup_family(signal),
+            market_regime=self._signal_market_regime(signal),
+            timeframe=str(meta.get("timeframe", "1h")),
+            meta=meta,
         )
-        floor_mult = max(0.0, float(floor_mult))
-        buffer_mult = max(0.0, float(STOP_BUFFER_ATR_MULT))
-        min_stop_atr = max(0.0, float(MIN_STOP_ATR_REJECT))
+        if reject:
+            return reject
 
-        atr_floor_dist = floor_mult * atr
-        min_stop_dist = min_stop_atr * atr
-        buffer_dist = buffer_mult * atr
-
-        if side == "LONG":
-            atr_floor_stop = entry - atr_floor_dist
-            floor_applied_stop = min(structural_stop, atr_floor_stop)
-            buffered_stop = floor_applied_stop - buffer_dist
-            final_stop = buffered_stop
-            if (entry - final_stop) < min_stop_dist:
-                final_stop = entry - min_stop_dist
-        else:
-            atr_floor_stop = entry + atr_floor_dist
-            floor_applied_stop = max(structural_stop, atr_floor_stop)
-            buffered_stop = floor_applied_stop + buffer_dist
-            final_stop = buffered_stop
-            if (final_stop - entry) < min_stop_dist:
-                final_stop = entry + min_stop_dist
-
-        original_stop_dist = abs(entry - structural_stop)
-        final_stop_dist = abs(entry - final_stop)
-        if final_stop_dist <= 0:
-            return "invalid_final_stop_distance"
-
-        widen_mult = (
-            final_stop_dist / original_stop_dist
-            if original_stop_dist > 0 else 0.0
-        )
-        if STOP_REDESIGN_MAX_WIDEN_MULT > 0 and widen_mult > STOP_REDESIGN_MAX_WIDEN_MULT:
-            print(
-                f"[STOP_REDESIGN] {coin} {side} stop_redesign_too_wide"
-                f" | widen_mult={widen_mult:.2f}"
-                f" | max_widen_mult={STOP_REDESIGN_MAX_WIDEN_MULT:.2f}"
-                f" | original_sd={original_stop_dist:.8f}"
-                f" | final_sd={final_stop_dist:.8f}"
-            )
-            log_executor_reject(
-                symbol=coin, side=side,
-                confidence=float(getattr(signal, "confidence", 0.0) or 0.0),
-                rr=0.0,
-                reject_reason=(
-                    f"stop_redesign_too_wide"
-                    f" (widen={widen_mult:.2f}x > max={STOP_REDESIGN_MAX_WIDEN_MULT:.2f}x)"
-                ),
-                setup_family=self._signal_setup_family(signal),
-                market_regime=self._signal_market_regime(signal),
-                timeframe=str((getattr(signal, "meta", None) or {}).get("timeframe", "1h")),
-            )
-            return (
-                f"stop_redesign_too_wide"
-                f" (widen={widen_mult:.2f}x > max={STOP_REDESIGN_MAX_WIDEN_MULT:.2f}x)"
-            )
-
-        tp_dist = abs(tp - entry)
-        original_rr = tp_dist / original_stop_dist if original_stop_dist > 0 else 0.0
-        final_rr = tp_dist / final_stop_dist if final_stop_dist > 0 else 0.0
-        min_rr = float(MIN_STOP_REDESIGN_RR)
-        setup_family = self._signal_setup_family(signal)
-        market_regime = self._signal_market_regime(signal)
-        sig_conf = float(getattr(signal, "confidence", 0.0) or 0.0)
-        high_conf_rr_tolerance = (
-            sig_conf >= HIGH_CONF_STOP_REDESIGN_MIN_CONFIDENCE
-            and market_regime != "chop"
-            and setup_family in HIGH_CONF_STOP_REDESIGN_FAMILIES
-        )
-        min_rr_tolerance = (
-            HIGH_CONF_STOP_REDESIGN_RR_TOLERANCE
-            if high_conf_rr_tolerance
-            else STOP_REDESIGN_RR_TOLERANCE
-        )
-        min_rr_effective = max(0.0, min_rr - min_rr_tolerance)
-        if final_rr < min_rr_effective:
-            print(
-                f"[STOP_REDESIGN] {coin} {side} stop_redesign_rr_destroyed"
-                f" | original_rr={original_rr:.3f}"
-                f" | final_rr={final_rr:.3f}"
-                f" | min_rr={min_rr_effective:.3f}"
-                f" | widen_mult={widen_mult:.2f}"
-                f" | original_sd={original_stop_dist:.8f}"
-                f" | final_sd={final_stop_dist:.8f}"
-            )
-            log_executor_reject(
-                symbol=coin, side=side,
-                confidence=sig_conf,
-                rr=final_rr, required_rr=min_rr_effective,
-                reject_reason=(
-                    f"stop_redesign_rr_destroyed"
-                    f" (original_rr={original_rr:.2f}"
-                    f" final_rr={final_rr:.2f}"
-                    f" widen={widen_mult:.2f}x)"
-                ),
-                setup_family=setup_family,
-                market_regime=market_regime,
-                timeframe=str(meta.get("timeframe", "1h")),
-            )
-            return (
-                f"stop_redesign_rr_destroyed"
-                f" (original_rr={original_rr:.2f}"
-                f" final_rr={final_rr:.2f} < min_rr={min_rr_effective:.2f}"
-                f" widen={widen_mult:.2f}x)"
-            )
-
-        engine_stop_method = str(meta.get("stop_method", "atr") or "atr")
-        stop_was_redesigned = abs(float(final_stop) - float(structural_stop)) > 1e-12
-        signal.stop_price = float(final_stop)
-
-        meta["original_stop"] = round(structural_stop, 8)
-        meta["original_rr"] = round(original_rr, 4)
-        meta["final_entry"] = round(entry, 8)
-        meta["final_stop"] = round(final_stop, 8)
-        meta["final_tp"] = round(tp, 8)
-        meta["final_rr"] = round(final_rr, 4)
-        meta["final_stop_method"] = (
-            f"{engine_stop_method}+executor_redesign"
-            if stop_was_redesigned else engine_stop_method
-        )
-        meta["stop_was_redesigned"] = stop_was_redesigned
-        meta["stop_widen_mult"] = round(widen_mult, 4)
-        meta["stop_structural"] = round(structural_stop, 8)
-        meta["stop_atr_floor"] = round(atr_floor_stop, 8)
-        meta["stop_buffered"] = round(buffered_stop, 8)
-        meta["stop_final"] = round(final_stop, 8)
-        meta["rr_original"] = round(original_rr, 4)
-        meta["rr_final"] = round(final_rr, 4)
-        meta["stop_floor_mult"] = round(floor_mult, 4)
-        meta["stop_buffer_mult"] = round(buffer_mult, 4)
-        meta["stop_min_atr_reject"] = round(min_stop_atr, 4)
-        meta["stop_rr_min"] = round(min_rr, 4)
-        meta["stop_rr_tolerance"] = round(min_rr_tolerance, 4)
-        meta["stop_rr_min_effective"] = round(min_rr_effective, 4)
-        meta["stop_rr_tolerance_reason"] = (
-            "high_conf_non_chop"
-            if high_conf_rr_tolerance else "base"
-        )
-        meta["stop_track"] = track
-        signal.meta = meta
-
-        print(
-            f"[STOP_REDESIGN] {coin} {side} track={track} "
-            f"structural_stop={structural_stop:.6f} "
-            f"atr_floor_stop={atr_floor_stop:.6f} "
-            f"buffered_stop={buffered_stop:.6f} "
-            f"final_stop={final_stop:.6f} "
-            f"original_rr={original_rr:.2f} "
-            f"final_rr={final_rr:.2f} "
-            f"widen={widen_mult:.2f}x "
-            f"min_rr={min_rr_effective:.2f}"
-        )
-
+        signal.stop_price = final_stop
+        signal.meta = updated_meta
         return None
 
     def _validate_entry(self, signal, session: str = "") -> Optional[str]:
@@ -2705,6 +2422,7 @@ class Executor:
             "current_price": round(current_price, 8) if current_price else "",
             "price_move_r": round(price_move_r, 3),
         }
+        _stage_missed_context(row)
 
         try:
             with open(MISSED_LOG_FILE, "a", newline="") as f:

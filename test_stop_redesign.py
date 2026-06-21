@@ -22,7 +22,6 @@ from unittest.mock import MagicMock
 
 def _clean_env(**overrides) -> dict:
     base = {
-        "PAPER_MODE": "false",
         "STARTING_BALANCE": "10000",
         "STOP_ATR_FLOOR_MULT_INTRADAY": "1.10",
         "STOP_ATR_FLOOR_MULT_SWING": "1.40",
@@ -45,7 +44,7 @@ def _clean_env(**overrides) -> dict:
 def _reload_executor(env: dict):
     for key in list(os.environ.keys()):
         if key.startswith(("STOP_", "MIN_STOP", "MIN_EXECUTION", "HIGH_CONF_STOP",
-                           "REGIME_TP", "PAPER_MODE", "STARTING_BALANCE",
+                           "REGIME_TP", "STARTING_BALANCE",
                            "UNIVERSAL_MIN")):
             os.environ.pop(key, None)
     os.environ.update(env)
@@ -56,7 +55,9 @@ def _reload_executor(env: dict):
                     "execution_backend", "execution_backend_factory",
                     "live_execution_backend", "live_position_monitor",
                     "order_tracker", "protection_manager", "position",
-                    "trade_log", "live_data_guard"):
+                    "trade_log", "live_data_guard",
+                    "executor_modules", "executor_modules.telemetry",
+                    "executor_modules.stop_redesign"):
             sys.modules.pop(dep, None)
     return importlib.import_module("executor")
 

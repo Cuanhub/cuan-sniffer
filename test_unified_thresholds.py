@@ -52,6 +52,9 @@ def _reload_module(name: str, env: dict):
     with patch.dict(os.environ, env, clear=True):
         if name in sys.modules:
             del sys.modules[name]
+        for dep in list(sys.modules):
+            if dep.startswith("executor_modules"):
+                del sys.modules[dep]
         mod = importlib.import_module(name)
     return mod
 
