@@ -13,7 +13,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Start in paper mode (`PAPER_MODE=true`) until you have verified threshold alignment in the startup output.
+Use `HL_TESTNET=true` for exchange testnet validation. Paper execution is not supported.
 
 ---
 
@@ -145,12 +145,11 @@ The following non-env-driven numeric values exist in the codebase. They are inte
 | signal_engine.py | ~2669 | `min(0.95, ...)` | Confidence clamp ceiling |
 | executor.py | 3405 | `1.75` in `expected_remaining * 1.75` | Position-size tolerance multiplier, NOT RR |
 | executor.py | 53 | `"dead_zone": 0.60` | Session weight dict — not a quality gate |
-| paper_execution_backend.py | 35 | `MIN_FILL_RATIO=0.60` | Fill simulation param — not a confidence gate |
 | risk_manager.py | 58–64 | CONFIDENCE_SIZING_TIERS | Position sizing multipliers — intentionally broad |
-| analyze_smc_live.py | 784–792 | `0.60, 0.70, 0.80, 0.90` | Analysis bucket boundaries — read-only reporting |
-| backtest_missed.py | 428–432 | `0.85, 0.80, 0.70, 0.90` | Analysis bucket boundaries — read-only reporting |
-| analyze_winrate.py | 569–570 | `0.70, 0.80, 0.90` | Chart bucket bins — read-only reporting |
-| param_suggester.py | 44 | `WEAK_TREND_MIN_CONFIDENCE="0.80"` | Analysis tool default — not live code path |
+| tools/research/analyze_smc_live.py | 784–792 | `0.60, 0.70, 0.80, 0.90` | Analysis bucket boundaries — read-only reporting |
+| tools/research/backtest_missed.py | 428–432 | `0.85, 0.80, 0.70, 0.90` | Analysis bucket boundaries — read-only reporting |
+| tools/research/analyze_winrate.py | 569–570 | `0.70, 0.80, 0.90` | Chart bucket bins — read-only reporting |
+| tools/research/param_suggester.py | 44 | `WEAK_TREND_MIN_CONFIDENCE="0.80"` | Analysis tool default — not live code path |
 
 ---
 
@@ -201,8 +200,8 @@ cat strategy_filter_state.json
 ### Run analysis on live trade log
 
 ```bash
-python analyze_winrate.py
-python analyze_smc_live.py
+python tools/research/analyze_winrate.py
+python tools/research/analyze_smc_live.py
 ```
 
 ---

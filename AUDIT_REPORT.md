@@ -139,8 +139,8 @@ Conclusion from available data: taken trades are not demonstrably higher quality
 
 Existing analyzers:
 
-- `analyze_winrate.py` evaluates `signals.csv` against Hyperliquid 1m candles and supports slippage, walk-forward split, and autocorrelation. Weaknesses: depends on missing packages here; uses `T` timestamp; does not model exit fees, stop exit slippage, funding, partial TP, BE, trailing, native-order latency, executor gate ordering, or duplicate suppression exactly.
-- `backtest_missed.py` evaluates missed signals against 5m candles. Weaknesses: no fees/slippage/funding; no partial/runner/BE; no execution delay; only 5m bar path with stop priority; dedup key is price-based; `--interval 1h` breaks because it assumes minute suffix at `backtest_missed.py:334`.
+- `tools/research/analyze_winrate.py` evaluates `signals.csv` against Hyperliquid 1m candles and supports slippage, walk-forward split, and autocorrelation. Weaknesses: depends on missing packages here; uses `T` timestamp; does not model exit fees, stop exit slippage, funding, partial TP, BE, trailing, native-order latency, executor gate ordering, or duplicate suppression exactly.
+- `tools/research/backtest_missed.py` evaluates missed signals against 5m candles. Weaknesses: no fees/slippage/funding; no partial/runner/BE; no execution delay; only 5m bar path with stop priority; dedup key is price-based; `--interval 1h` breaks because it assumes minute suffix at `tools/research/backtest_missed.py:334`.
 
 Exact walk-forward implementation needed:
 
@@ -197,7 +197,7 @@ Medium:
 2. `market_regime` gate in executor can conflate market, HTF, and macro chop through `_signal_market_regime`; this may over-block setups.
 3. `signals_evaluated.csv` has stale rows with previous `StrategyFilter.is_allowed()` argument errors, proving past schema/code drift.
 4. `PerpDataFeed` can fail-soft to stale cached candles after network failure. Add max stale age and log `snapshot_age_sec` into every signal.
-5. `backtest_missed.py` assumes interval suffix `m`.
+5. `tools/research/backtest_missed.py` assumes interval suffix `m`.
 
 Low:
 

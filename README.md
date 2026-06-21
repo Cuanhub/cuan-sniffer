@@ -456,6 +456,19 @@ gate_rejects.csv
 score_distribution.csv
 ```
 
+## Shadow Research Ledger
+
+```text
+shadow_research_candidates.csv
+shadow_research_executions.csv
+shadow_research_outcomes.csv
+```
+
+The shadow research ledger is append-only and joinable by `shadow_id`:
+candidates preserve engine-time thesis and planned geometry, executions preserve
+executor decisions and final geometry, and outcomes label forward candle MFE,
+MAE, close R, TP touch, and stop touch across configured horizons.
+
 ## Execution Telemetry
 
 ```text
@@ -479,16 +492,16 @@ The system includes rejection-path telemetry and audit tooling.
 Run:
 
 ```bash
-python audit_gate_rejections.py
+python tools/research/audit_gate_rejections.py
 ```
 
 Available modes:
 
 ```bash
-python audit_gate_rejections.py
-python audit_gate_rejections.py --hours 24
-python audit_gate_rejections.py --gate-only
-python audit_gate_rejections.py --executor-only
+python tools/research/audit_gate_rejections.py
+python tools/research/audit_gate_rejections.py --hours 24
+python tools/research/audit_gate_rejections.py --gate-only
+python tools/research/audit_gate_rejections.py --executor-only
 ```
 
 The objective is to identify:
@@ -549,23 +562,12 @@ How closely fills match modeled assumptions.
 
 ---
 
-# 🧪 Operating Modes
+# 🧪 Operating Mode
 
 ## LIVE MODE
 
-Primary operating mode.
-
-Real capital.
-
-Real fills.
-
-Real risk.
-
-## PAPER MODE
-
-Available for development and infrastructure testing.
-
-Production research prioritizes live observations whenever practical.
+The system only supports live-backend execution. Use `HL_TESTNET=true` for
+exchange testnet validation; paper execution is not supported.
 
 ---
 
