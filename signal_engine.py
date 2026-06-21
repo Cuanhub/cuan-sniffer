@@ -2869,10 +2869,10 @@ class AdaptiveSignalEngine:
             **divergence_meta,
         }
 
-        # Shadow score v2 — research only, never used for live gating
-        from signal_engine_modules.score_adapter import compute_score_v2_for_signal
-        _v2_fields = compute_score_v2_for_signal(meta, coin, chosen_side, debug=self.debug)
-        meta.update(_v2_fields)
+        # Shadow scores v2+v3 — research only, never used for live gating
+        from signal_engine_modules.score_adapter import compute_all_shadow_scores
+        _shadow_fields = compute_all_shadow_scores(meta, coin, chosen_side, debug=self.debug)
+        meta.update(_shadow_fields)
 
         if self.debug:
             _v2_display = meta.get("score_v2", "n/a")
