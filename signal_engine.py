@@ -35,25 +35,21 @@ from smc_sweeps import add_sweep_features
 from chart_patterns import add_chart_pattern_features
 from perp_sentiment import PerpSentimentSnapshot
 from smc_live_log import append_smc_live_event
+from shadow_research import (
+    append_shadow_candidate,
+    build_shadow_candidate,
+    extract_bar_time,
+    update_shadow_outcomes_from_df,
+)
 
 # ── Gate telemetry ────────────────────────────────────────────────────────────
 # All logging functions are try/except-wrapped — they must never crash the engine.
 
 GATE_REJECTS_PATH = os.getenv("GATE_REJECTS_PATH", "gate_rejects.csv")
 SCORE_DIST_PATH = os.getenv("SCORE_DIST_PATH", "score_distribution.csv")
-SHADOW_SCORES_PATH = os.getenv("SHADOW_SCORES_PATH", "shadow_scores.csv")
 
 _GATE_REJECT_LOCK = threading.Lock()
 _SCORE_DIST_LOCK = threading.Lock()
-_SHADOW_SCORES_LOCK = threading.Lock()
-
-_SHADOW_SCORES_FIELDS = [
-    "timestamp", "symbol", "side", "timeframe", "setup_family", "session",
-    "market_regime", "htf_regime", "macro_regime",
-    "score_v1", "confidence_v1", "score_v2", "rr",
-    "would_live_execute", "live_reject_reason",
-    "score_v2_version", "score_v2_tags", "score_v2_reason",
-]
 
 _GATE_REJECT_FIELDS = [
     "timestamp", "symbol", "timeframe", "side", "reject_reason",
@@ -116,6 +112,30 @@ def log_gate_reject(
             _telemetry_ensure_csv(GATE_REJECTS_PATH, _GATE_REJECT_FIELDS)
             with open(GATE_REJECTS_PATH, "a", newline="") as fh:
                 csv.DictWriter(fh, fieldnames=_GATE_REJECT_FIELDS).writerow(row)
+        append_smc_live_event(
+            event_type="gate_reject",
+            coin=symbol,
+            symbol=symbol,
+            timeframe=timeframe,
+            side=side,
+            score=round(float(raw_score), 4),
+            raw_score=round(float(raw_score), 4),
+            threshold=round(float(threshold), 4),
+            effective_threshold=round(float(threshold), 4),
+            confidence=round(float(confidence), 4),
+            accepted=False,
+            reject_reason=reject_reason,
+            rr=round(float(rr), 4),
+            rr_planned=round(float(rr), 4),
+            setup_family=setup_family,
+            market_regime=market_regime,
+            htf_regime=htf_regime,
+            macro_regime=macro_regime,
+            session=session,
+            atr=round(float(atr), 8),
+            price=round(float(price), 6),
+            metadata=metadata,
+        )
     except Exception:
         pass
 
@@ -153,68 +173,27 @@ def log_score_candidate(
             _telemetry_ensure_csv(SCORE_DIST_PATH, _SCORE_DIST_FIELDS)
             with open(SCORE_DIST_PATH, "a", newline="") as fh:
                 csv.DictWriter(fh, fieldnames=_SCORE_DIST_FIELDS).writerow(row)
-    except Exception:
-        pass
-
-
-def _log_shadow_score(
-    *,
-    coin: str,
-    side: str,
-    timeframe: str = "1h",
-    setup_family: str = "",
-    session: str = "",
-    market_regime: str = "",
-    htf_regime: str = "",
-    macro_regime: str = "",
-    score_v1: float = 0.0,
-    confidence_v1: float = 0.0,
-    rr: float = 0.0,
-    meta: dict = None,
-    accepted: bool = False,
-    reject_reason: str = "",
-) -> None:
-    try:
-        meta = meta or {}
-        score_v2 = float(meta.get("score_v2", 0.0) or 0.0)
-        if score_v2 <= 0:
-            from score_v2 import compute_shadow_score_v2
-            _ctx = dict(meta)
-            _ctx.update({"symbol": coin, "side": side, "coin": coin})
-            _v2 = compute_shadow_score_v2(_ctx)
-            score_v2 = _v2["score_v2"]
-            v2_version = _v2["score_v2_version"]
-            v2_tags = ",".join(_v2["score_v2_tags"])
-            v2_reason = _v2["score_v2_reason"]
-        else:
-            v2_version = str(meta.get("score_v2_version", ""))
-            v2_tags = str(meta.get("score_v2_tags", ""))
-            v2_reason = str(meta.get("score_v2_reason", ""))
-
-        row = {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "symbol": coin,
-            "side": side,
-            "timeframe": timeframe,
-            "setup_family": setup_family,
-            "session": session,
-            "market_regime": market_regime,
-            "htf_regime": htf_regime,
-            "macro_regime": macro_regime,
-            "score_v1": round(float(score_v1), 4),
-            "confidence_v1": round(float(confidence_v1), 4),
-            "score_v2": round(float(score_v2), 4),
-            "rr": round(float(rr), 4),
-            "would_live_execute": "true" if accepted else "false",
-            "live_reject_reason": str(reject_reason)[:200],
-            "score_v2_version": v2_version,
-            "score_v2_tags": v2_tags,
-            "score_v2_reason": v2_reason,
-        }
-        with _SHADOW_SCORES_LOCK:
-            _telemetry_ensure_csv(SHADOW_SCORES_PATH, _SHADOW_SCORES_FIELDS)
-            with open(SHADOW_SCORES_PATH, "a", newline="") as fh:
-                csv.DictWriter(fh, fieldnames=_SHADOW_SCORES_FIELDS).writerow(row)
+        append_smc_live_event(
+            event_type="score_candidate",
+            coin=symbol,
+            symbol=symbol,
+            timeframe=timeframe,
+            side=side,
+            score=round(float(score), 4),
+            raw_score=round(float(score), 4),
+            total_score=round(float(score), 4),
+            threshold=round(float(threshold), 4),
+            effective_threshold=round(float(threshold), 4),
+            confidence=confidence,
+            accepted="",
+            reject_reason="",
+            rr=round(float(rr), 4),
+            rr_planned=round(float(rr), 4),
+            setup_family=setup_family,
+            market_regime=market_regime,
+            htf_regime=htf_regime,
+            macro_regime=macro_regime,
+        )
     except Exception:
         pass
 
@@ -691,283 +670,16 @@ class AdaptiveSignalEngine:
     # ------------------------------------------------------------------
 
     def _compute_htf_regime(self, df_ohlcv: pd.DataFrame) -> Tuple[str, List[str]]:
-        """
-        Receives full df_ohlcv (1H bars with 1H feed).
-        Regime uses resampled 4H bars — HTF context for 1H signal generation.
-        With 400×1H bars we get ~98 closed bars of 4H, giving clean EMA10/30 trend.
-
-        Candle policy (two layers):
-          1. Drop the last 1H row before resampling — always the forming candle.
-          2. Drop the last 4H bar after resampling — the currently forming 4H period
-             which may contain fewer than 4 closed 1H bars.
-        """
-        notes: List[str] = []
-
-        if df_ohlcv is None or df_ohlcv.empty:
-            return "unknown", ["htf_no_data"]
-
-        df_raw = df_ohlcv.copy()
-
-        # Layer 1: remove the forming 1H candle (always the last row).
-        if len(df_raw) > 1:
-            df_raw = df_raw.iloc[:-1]
-
-        if "time" in df_raw.columns:
-            df_raw["time"] = pd.to_datetime(df_raw["time"])
-            df_raw = df_raw.set_index("time")
-        elif not isinstance(df_raw.index, pd.DatetimeIndex):
-            return "unknown", ["htf_no_time_index"]
-
-        try:
-            df_4h = (
-                df_raw.resample("4h")
-                .agg({
-                    "open": "first",
-                    "high": "max",
-                    "low": "min",
-                    "close": "last",
-                    "volume": "sum",
-                })
-                .dropna()
-            )
-        except Exception as e:
-            if self.debug:
-                print("[HTF_REGIME_DEBUG] Resample 4h failed: " + str(e))
-            return "unknown", ["htf_resample_error"]
-
-        # Layer 2: remove the last 4H bar — the currently forming 4H period.
-        if len(df_4h) > 1:
-            df_4h = df_4h.iloc[:-1]
-
-        if len(df_4h) < 10:
-            return "unknown", ["htf_insufficient_bars"]
-
-        df_4h["ema_fast"] = df_4h["close"].ewm(span=10, adjust=False).mean()
-        df_4h["ema_slow"] = df_4h["close"].ewm(span=30, adjust=False).mean()
-
-        last = df_4h.iloc[-1]
-        prev = df_4h.iloc[-3] if len(df_4h) >= 3 else df_4h.iloc[0]
-
-        ema_fast = float(last["ema_fast"])
-        ema_slow = float(last["ema_slow"])
-        ema_fast_prev = float(prev["ema_fast"])
-        ema_slow_prev = float(prev["ema_slow"])
-
-        fast_slope = ema_fast - ema_fast_prev
-        slow_slope = ema_slow - ema_slow_prev
-
-        if ema_fast > ema_slow and fast_slope > 0 and slow_slope >= 0:
-            regime = "up"
-            notes.append("htf_ema_trend_up")
-        elif ema_fast < ema_slow and fast_slope < 0 and slow_slope <= 0:
-            regime = "down"
-            notes.append("htf_ema_trend_down")
-        else:
-            regime = "chop"
-            notes.append("htf_ema_chop")
-
-        if self.debug:
-            print(
-                "[HTF_REGIME_DEBUG] 4h regime=" + regime +
-                " ema_fast=" + str(round(ema_fast, 2)) +
-                " ema_slow=" + str(round(ema_slow, 2))
-            )
-
-        return regime, notes
+        from signal_engine_modules.regimes import compute_htf_regime
+        return compute_htf_regime(df_ohlcv, debug=self.debug)
 
     def _compute_macro_regime_4h(self, df_ohlcv: pd.DataFrame) -> Tuple[str, List[str]]:
-        """
-        Receives full df_ohlcv (1H bars with 1H feed).
-        Regime uses resampled 1D bars — daily macro trend context.
-        With 400×1H bars we get ~15 closed daily bars; EMA5/10 is appropriate.
-        Shorter EMA spans than htf (4H) since daily bars are fewer.
-
-        Candle policy (two layers):
-          1. Drop the last 1H row before resampling — always the forming candle.
-          2. Drop the last 1D bar after resampling — the current incomplete day.
-        """
-        notes: List[str] = []
-
-        if df_ohlcv is None or df_ohlcv.empty:
-            return "unknown", ["macro_no_data"]
-
-        df_raw = df_ohlcv.copy()
-
-        # Layer 1: remove the forming 1H candle (always the last row).
-        if len(df_raw) > 1:
-            df_raw = df_raw.iloc[:-1]
-
-        if "time" in df_raw.columns:
-            df_raw["time"] = pd.to_datetime(df_raw["time"])
-            df_raw = df_raw.set_index("time")
-        elif not isinstance(df_raw.index, pd.DatetimeIndex):
-            return "unknown", ["macro_no_time_index"]
-
-        try:
-            df_1d = (
-                df_raw.resample("1D")
-                .agg({
-                    "open": "first",
-                    "high": "max",
-                    "low": "min",
-                    "close": "last",
-                    "volume": "sum",
-                })
-                .dropna()
-            )
-        except Exception as e:
-            if self.debug:
-                print("[MACRO_REGIME_DEBUG] Resample 1D failed: " + str(e))
-            return "unknown", ["macro_resample_error"]
-
-        # Layer 2: remove the last 1D bar — the currently forming (incomplete) day.
-        if len(df_1d) > 1:
-            df_1d = df_1d.iloc[:-1]
-
-        if len(df_1d) < 8:
-            return "unknown", ["macro_insufficient_bars"]
-
-        df_1d["ema_fast"] = df_1d["close"].ewm(span=5, adjust=False).mean()
-        df_1d["ema_slow"] = df_1d["close"].ewm(span=10, adjust=False).mean()
-
-        last = df_1d.iloc[-1]
-        prev = df_1d.iloc[-2] if len(df_1d) >= 2 else df_1d.iloc[0]
-
-        ema_fast = float(last["ema_fast"])
-        ema_slow = float(last["ema_slow"])
-        ema_fast_prev = float(prev["ema_fast"])
-        ema_slow_prev = float(prev["ema_slow"])
-
-        fast_slope = ema_fast - ema_fast_prev
-        slow_slope = ema_slow - ema_slow_prev
-
-        if ema_fast > ema_slow and fast_slope > 0 and slow_slope >= 0:
-            regime = "up"
-            notes.append("macro_ema_trend_up")
-        elif ema_fast < ema_slow and fast_slope < 0 and slow_slope <= 0:
-            regime = "down"
-            notes.append("macro_ema_trend_down")
-        else:
-            regime = "chop"
-            notes.append("macro_ema_chop")
-
-        if self.debug:
-            print(
-                "[MACRO_REGIME_DEBUG] 1D regime=" + regime +
-                " ema_fast=" + str(round(ema_fast, 2)) +
-                " ema_slow=" + str(round(ema_slow, 2))
-            )
-
-        return regime, notes
+        from signal_engine_modules.regimes import compute_macro_regime
+        return compute_macro_regime(df_ohlcv, debug=self.debug)
 
     def _compute_daily_zone(self, df_ohlcv: pd.DataFrame) -> Dict[str, Any]:
-        """
-        Classify current price within the daily premium/discount range.
-
-        Mirrors LuxAlgo SMC: finds the 20-bar daily swing high/low, marks the
-        50% level as equilibrium.  Price above DAILY_ZONE_PREMIUM_THRESHOLD of
-        the range = premium (SHORT bias).  Price below DAILY_ZONE_DISCOUNT_THRESHOLD
-        = discount (LONG bias).  Signals taken against the zone are penalised.
-
-        With 400×1H bars the feed provides ~15 closed daily bars — sufficient to
-        define the meaningful swing range and trend direction.
-
-        Returns a dict with keys: zone, zone_pct, trend, swing_high, swing_low.
-        Returns {"zone": "unknown"} on insufficient data.
-
-        Candle policy (two layers):
-          1. Drop the last 1H row before resampling — always the forming candle.
-          2. Drop the last 1D bar after resampling — the current incomplete day.
-             Including today's intraday high/low in the swing range introduces
-             look-ahead bias into premium/discount zone classification.
-        """
-        empty: Dict[str, Any] = {"zone": "unknown", "zone_pct": 0.5, "trend": "unknown"}
-
-        if df_ohlcv is None or df_ohlcv.empty:
-            return empty
-
-        df_raw = df_ohlcv.copy()
-
-        # Layer 1: remove the forming 1H candle (always the last row).
-        if len(df_raw) > 1:
-            df_raw = df_raw.iloc[:-1]
-
-        if "time" in df_raw.columns:
-            df_raw["time"] = pd.to_datetime(df_raw["time"])
-            df_raw = df_raw.set_index("time")
-        elif not isinstance(df_raw.index, pd.DatetimeIndex):
-            return empty
-
-        try:
-            df_1d = (
-                df_raw.resample("1D")
-                .agg({
-                    "open": "first",
-                    "high": "max",
-                    "low": "min",
-                    "close": "last",
-                    "volume": "sum",
-                })
-                .dropna()
-            )
-        except Exception:
-            return empty
-
-        # Layer 2: remove the last 1D bar — the currently forming (incomplete) day.
-        if len(df_1d) > 1:
-            df_1d = df_1d.iloc[:-1]
-
-        if len(df_1d) < 5:
-            return empty
-
-        # Swing range: last 20 daily bars (or all available)
-        lookback = min(20, len(df_1d))
-        recent = df_1d.tail(lookback)
-        swing_high = float(recent["high"].max())
-        swing_low = float(recent["low"].min())
-        range_width = swing_high - swing_low
-        if range_width <= 0:
-            return empty
-
-        current_close = float(df_1d["close"].iloc[-1])
-        zone_pct = (current_close - swing_low) / range_width
-
-        if zone_pct > DAILY_ZONE_PREMIUM_THRESHOLD:
-            zone = "premium"
-        elif zone_pct < DAILY_ZONE_DISCOUNT_THRESHOLD:
-            zone = "discount"
-        else:
-            zone = "equilibrium"
-
-        # Daily trend: EMA5 vs EMA10 — short spans for ~16 available daily bars
-        df_1d["ema_fast"] = df_1d["close"].ewm(span=5, adjust=False).mean()
-        df_1d["ema_slow"] = df_1d["close"].ewm(span=10, adjust=False).mean()
-        d_last = df_1d.iloc[-1]
-        d_prev = df_1d.iloc[-2] if len(df_1d) >= 2 else df_1d.iloc[0]
-        d_fast = float(d_last["ema_fast"])
-        d_slow = float(d_last["ema_slow"])
-        d_fast_slope = d_fast - float(d_prev["ema_fast"])
-        if d_fast > d_slow and d_fast_slope > 0:
-            daily_trend = "up"
-        elif d_fast < d_slow and d_fast_slope < 0:
-            daily_trend = "down"
-        else:
-            daily_trend = "chop"
-
-        if self.debug:
-            print(
-                f"[DAILY_ZONE] zone={zone} pct={zone_pct:.2f}"
-                f" swing_hi={swing_high:.4f} swing_lo={swing_low:.4f}"
-                f" daily_trend={daily_trend}"
-            )
-
-        return {
-            "zone": zone,
-            "zone_pct": round(zone_pct, 3),
-            "trend": daily_trend,
-            "swing_high": swing_high,
-            "swing_low": swing_low,
-        }
+        from signal_engine_modules.daily_zone import compute_daily_zone
+        return compute_daily_zone(df_ohlcv, debug=self.debug)
 
     def _score_daily_zone(
         self,
@@ -1466,9 +1178,12 @@ class AdaptiveSignalEngine:
             append_smc_live_event(
                 event_type="engine_evaluation",
                 coin=coin,
+                symbol=coin,
                 timeframe=timeframe,
                 side=side,
                 score=round(float(score or 0.0), 4),
+                raw_score=round(float(score or 0.0), 4),
+                total_score=round(float(score or 0.0), 4),
                 confidence=round(float(confidence or 0.0), 4),
                 accepted=accepted,
                 reject_reason=reject_reason,
@@ -1485,9 +1200,11 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime,
                 market_regime=market_regime,
                 session=session,
+                setup_family=governance.get("setup_family", ""),
                 edge_buckets=",".join(governance.get("edge_buckets", []) or []),
                 edge_bucket_count=governance.get("edge_bucket_count", ""),
                 governance_reason=governance.get("governance_reason", ""),
+                metadata="edge_buckets=" + ",".join(governance.get("edge_buckets", []) or []),
                 order_submitted=False,
                 **{key: triggers.get(key, False) for key in (
                     "bos_bull", "bos_bear", "choch_bull", "choch_bear",
@@ -1507,6 +1224,139 @@ class AdaptiveSignalEngine:
         except Exception as e:
             if self.debug:
                 print(f"[SMC_LIVE_LOG] engine event skipped: {e}")
+
+    def _update_shadow_research_outcomes(
+        self,
+        *,
+        coin: str,
+        timeframe: str,
+        df: pd.DataFrame,
+    ) -> None:
+        try:
+            count = update_shadow_outcomes_from_df(
+                symbol=coin,
+                timeframe=timeframe,
+                df=df,
+            )
+            if self.debug and count:
+                print(f"[SHADOW_RESEARCH] labeled {count} {coin} {timeframe} outcomes")
+        except Exception as e:
+            if self.debug:
+                print(f"[SHADOW_RESEARCH] outcome update skipped: {e}")
+
+    def _log_shadow_research_candidate(
+        self,
+        *,
+        coin: str,
+        timeframe: str,
+        row: pd.Series,
+        triggers: Dict[str, Any],
+        side: str = "",
+        score: float = 0.0,
+        confidence: float = 0.0,
+        accepted: bool = False,
+        reject_reason: str = "",
+        entry: float = 0.0,
+        stop: Optional[float] = None,
+        tp: Optional[float] = None,
+        rr: float = 0.0,
+        stop_meta: Optional[Dict[str, Any]] = None,
+        htf_regime: str = "",
+        macro_regime: str = "",
+        market_regime: str = "",
+        session: str = "",
+        setup_family: str = "",
+        swing_family: str = "",
+        governance: Optional[Dict[str, Any]] = None,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        try:
+            stop_meta = stop_meta or {}
+            governance = governance or {}
+            meta = dict(meta or {})
+            family = str(
+                setup_family
+                or meta.get("setup_family")
+                or meta.get("regime_local")
+                or ""
+            )
+            stop_method = str(stop_meta.get("stop_method") or meta.get("stop_method", ""))
+            entry_value = float(entry or self._as_float(row.get("close", 0.0)))
+            confidence_value = float(
+                confidence
+                if confidence
+                else round(min(0.95, max(0.50, float(score or 0.0))), 3)
+            )
+            edge_buckets = governance.get("edge_buckets", meta.get("edge_buckets", ""))
+
+            from score_v2 import compute_shadow_score_v2
+            v2_ctx = dict(meta)
+            v2_ctx.update({
+                "symbol": coin,
+                "coin": coin,
+                "side": side,
+                "setup_family": family,
+                "session": session,
+                "market_regime": market_regime,
+                "htf_regime": htf_regime,
+                "regime_htf_1h": htf_regime,
+                "macro_regime": macro_regime,
+                "regime_macro_4h": macro_regime,
+                "score": score,
+                "total_score": score,
+                "timeframe": timeframe,
+                "stop_method": stop_method,
+            })
+            v2_ctx.update(triggers or {})
+            v2 = compute_shadow_score_v2(v2_ctx)
+
+            candidate = build_shadow_candidate(
+                symbol=coin,
+                timeframe=timeframe,
+                side=side,
+                bar_time=meta.get("bar_time", "") or extract_bar_time(row),
+                entry_price=entry_value,
+                stop_price=stop or 0.0,
+                tp_price=tp or 0.0,
+                rr_planned=rr,
+                score_v1=score,
+                confidence_v1=confidence_value,
+                score_v2=v2.get("score_v2", 0.0),
+                score_v2_version=v2.get("score_v2_version", ""),
+                score_v2_tags=v2.get("score_v2_tags", []),
+                score_v2_reason=v2.get("score_v2_reason", ""),
+                engine_decision="accepted" if accepted else "rejected",
+                engine_reject_reason=reject_reason,
+                setup_family=family,
+                swing_family=swing_family or meta.get("swing_family", ""),
+                session=session,
+                market_regime=market_regime,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                edge_buckets=edge_buckets,
+                edge_bucket_count=governance.get(
+                    "edge_bucket_count", meta.get("edge_bucket_count", "")
+                ),
+                independent_bucket_count=governance.get(
+                    "independent_bucket_count",
+                    meta.get("independent_bucket_count", ""),
+                ),
+                governance_reason=governance.get(
+                    "governance_reason", meta.get("governance_reason", "")
+                ),
+                triggers=triggers,
+                stop_method=stop_method,
+                atr=meta.get("atr", self._as_float(row.get("atr_14", 0.0))),
+                price=self._as_float(row.get("close", entry_value)),
+                vol_state=meta.get("vol_state", ""),
+                vol_ratio=meta.get("vol_ratio", 0.0),
+            )
+            append_shadow_candidate(candidate)
+            return candidate
+        except Exception as e:
+            if self.debug:
+                print(f"[SHADOW_RESEARCH] candidate skipped: {e}")
+            return {}
 
     # ------------------------------------------------------------------
     # RSI divergence helpers
@@ -2817,6 +2667,7 @@ class AdaptiveSignalEngine:
         row = df.iloc[-1]
         price = float(row.get("close", 0.0))
         ts = row.get("time", None)
+        self._update_shadow_research_outcomes(coin=coin, timeframe="1h", df=df)
 
         htf_regime, notes_htf = self._compute_htf_regime(df_ohlcv)
         macro_regime, notes_macro = self._compute_macro_regime_4h(df_ohlcv)
@@ -3060,6 +2911,20 @@ class AdaptiveSignalEngine:
                 setup_family=setup_family,
                 metadata="edge_buckets=" + ",".join(governance_summary.get("edge_buckets", []) or []),
             )
+            self._log_shadow_research_candidate(
+                coin=coin, timeframe="1h", row=row, triggers=triggers,
+                side=chosen_side, score=chosen_score,
+                confidence=round(min(0.95, max(0.50, chosen_score)), 3),
+                accepted=False,
+                reject_reason=governance_reason,
+                entry=price,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+                setup_family=setup_family,
+                governance=governance_summary,
+            )
             return None
 
         effective_threshold = self._effective_score_threshold(market_regime)
@@ -3084,22 +2949,6 @@ class AdaptiveSignalEngine:
             setup_family=setup_family,
             market_regime=market_regime, htf_regime=htf_regime, macro_regime=macro_regime,
         )
-
-        # Shadow score v2 for ALL scored candidates (accepted + rejected)
-        try:
-            from score_v2 import compute_shadow_score_v2 as _csv2
-            _pre_ctx = {
-                "symbol": coin, "coin": coin, "side": chosen_side,
-                "setup_family": setup_family, "session": session_label,
-                "market_regime": market_regime, "htf_regime": htf_regime,
-                "macro_regime": macro_regime, "score": chosen_score,
-                "total_score": chosen_score, "timeframe": "1h",
-                "stop_method": stop_meta.get("stop_method", "atr") if stop_meta else "atr",
-                **triggers,
-            }
-            _pre_v2 = _csv2(_pre_ctx)
-        except Exception:
-            _pre_v2 = {"score_v2": 0.0, "score_v2_version": "", "score_v2_tags": [], "score_v2_reason": ""}
 
         if abs(chosen_score) < effective_threshold:
             self._log_smc_candidate(
@@ -3130,17 +2979,19 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime, session=session_label,
                 setup_family=setup_family,
             )
-            _log_shadow_score(
-                coin=coin, side=chosen_side, timeframe="1h",
-                setup_family=setup_family, session=session_label,
-                market_regime=market_regime, htf_regime=htf_regime,
-                macro_regime=macro_regime, score_v1=chosen_score,
-                confidence_v1=round(min(0.95, max(0.50, chosen_score)), 3),
-                rr=0.0, accepted=False,
+            self._log_shadow_research_candidate(
+                coin=coin, timeframe="1h", row=row, triggers=triggers,
+                side=chosen_side, score=chosen_score,
+                confidence=round(min(0.95, max(0.50, chosen_score)), 3),
+                accepted=False,
                 reject_reason=f"score_below_threshold:{chosen_score:.3f}<{effective_threshold:.3f}",
-                meta={"score_v2": _pre_v2["score_v2"], "score_v2_version": _pre_v2["score_v2_version"],
-                       "score_v2_tags": ",".join(_pre_v2.get("score_v2_tags", [])),
-                       "score_v2_reason": _pre_v2["score_v2_reason"]},
+                entry=price,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+                setup_family=setup_family,
+                governance=governance_summary,
             )
             return None
 
@@ -3179,6 +3030,23 @@ class AdaptiveSignalEngine:
                 setup_family=setup_family,
                 metadata=stop_meta.get("ob_reject_reason", ""),
             )
+            self._log_shadow_research_candidate(
+                coin=coin, timeframe="1h", row=row, triggers=triggers,
+                side=chosen_side, score=chosen_score,
+                confidence=round(min(0.95, max(0.50, chosen_score)), 3),
+                accepted=False,
+                reject_reason="invalid_trade_levels",
+                entry=price,
+                stop=stop,
+                tp=tp,
+                stop_meta=stop_meta,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+                setup_family=setup_family,
+                governance=governance_summary,
+            )
             return None
 
         rr = abs((tp - price) / (price - stop)) if price != stop else 0.0
@@ -3216,6 +3084,24 @@ class AdaptiveSignalEngine:
                 market_regime=market_regime, htf_regime=htf_regime,
                 macro_regime=macro_regime, session=session_label,
                 setup_family=setup_family,
+            )
+            self._log_shadow_research_candidate(
+                coin=coin, timeframe="1h", row=row, triggers=triggers,
+                side=chosen_side, score=chosen_score,
+                confidence=round(min(0.95, max(0.50, chosen_score)), 3),
+                accepted=False,
+                reject_reason=f"rr_too_low:{rr:.3f}<{rr_floor_effective:.3f}",
+                entry=price,
+                stop=stop,
+                tp=tp,
+                rr=rr,
+                stop_meta=stop_meta,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+                setup_family=setup_family,
+                governance=governance_summary,
             )
             return None
 
@@ -3299,11 +3185,30 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime, session=session_label,
                 setup_family=setup_family,
             )
+            self._log_shadow_research_candidate(
+                coin=coin, timeframe="1h", row=row, triggers=triggers,
+                side=chosen_side, score=chosen_score,
+                confidence=confidence,
+                accepted=False,
+                reject_reason="dedup_active_for_repeat",
+                entry=price,
+                stop=stop,
+                tp=tp,
+                rr=rr,
+                stop_meta=stop_meta,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+                setup_family=setup_family,
+                governance=governance_summary,
+            )
             return None
 
         meta = {
             "timeframe": "1h",
             "coin": coin,
+            "bar_time": extract_bar_time(row),
             "total_score": round(chosen_score, 3),
             "regime_local": setup_family,
             "regime_htf_1h": htf_regime,
@@ -3380,14 +3285,28 @@ class AdaptiveSignalEngine:
             governance=governance_summary,
         )
 
-        _log_shadow_score(
-            coin=coin, side=chosen_side, timeframe="1h",
-            setup_family=setup_family, session=session_label,
-            market_regime=market_regime, htf_regime=htf_regime,
-            macro_regime=macro_regime, score_v1=chosen_score,
-            confidence_v1=confidence, rr=rr, meta=meta,
-            accepted=True, reject_reason="",
+        _research_candidate = self._log_shadow_research_candidate(
+            coin=coin, timeframe="1h", row=row, triggers=triggers,
+            side=chosen_side, score=chosen_score,
+            confidence=confidence,
+            accepted=True,
+            reject_reason="",
+            entry=price,
+            stop=stop,
+            tp=tp,
+            rr=rr,
+            stop_meta=stop_meta,
+            htf_regime=htf_regime,
+            macro_regime=macro_regime,
+            market_regime=market_regime,
+            session=session_label,
+            setup_family=setup_family,
+            governance=governance_summary,
+            meta=meta,
         )
+        if _research_candidate:
+            meta["shadow_id"] = _research_candidate.get("shadow_id", "")
+            meta["shadow_setup_key"] = _research_candidate.get("setup_key", "")
 
         return Signal(
             coin=coin,
@@ -3462,6 +3381,7 @@ class AdaptiveSignalEngine:
         row = df_feat.iloc[-1]
         ts = pd.to_datetime(row.get("time"))
         price = float(row.get("close", 0.0))
+        self._update_shadow_research_outcomes(coin=coin, timeframe=swing_tf, df=df_feat)
 
         swing_key = (str(coin).upper().strip(), swing_tf)
         last_ts = self.last_swing_ts.get(swing_key)
@@ -3694,6 +3614,20 @@ class AdaptiveSignalEngine:
                 setup_family="swing",
                 metadata=f"confluence={confluence_count}|required={min_confluence}",
             )
+            self._log_shadow_research_candidate(
+                coin=coin, timeframe=swing_tf, row=row, triggers=triggers,
+                side=side, score=score,
+                confidence=round(min(0.95, max(0.50, score)), 3),
+                accepted=False,
+                reject_reason=f"insufficient_swing_confluence:{confluence_count}<{min_confluence}",
+                entry=price,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+                setup_family=swing_family,
+                swing_family=swing_family,
+            )
             return None
 
         threshold = self.swing_thresholds.get(swing_tf, 0.6)
@@ -3736,6 +3670,21 @@ class AdaptiveSignalEngine:
                 setup_family=swing_family,
                 metadata="edge_buckets=" + ",".join(governance_summary.get("edge_buckets", []) or []),
             )
+            self._log_shadow_research_candidate(
+                coin=coin, timeframe=swing_tf, row=row, triggers=triggers,
+                side=side, score=score,
+                confidence=round(min(0.95, max(0.50, score)), 3),
+                accepted=False,
+                reject_reason=governance_reason,
+                entry=price,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+                setup_family=swing_family,
+                swing_family=swing_family,
+                governance=governance_summary,
+            )
             return None
 
         # Log all swing candidates before the score gate.
@@ -3773,6 +3722,21 @@ class AdaptiveSignalEngine:
                 market_regime=market_regime, htf_regime=htf_regime,
                 macro_regime=macro_regime, session=session_label,
                 setup_family=swing_family,
+            )
+            self._log_shadow_research_candidate(
+                coin=coin, timeframe=swing_tf, row=row, triggers=triggers,
+                side=side, score=score,
+                confidence=round(min(0.95, max(0.50, score)), 3),
+                accepted=False,
+                reject_reason=f"score_below_threshold:{score:.3f}<{threshold:.3f}",
+                entry=price,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+                setup_family=swing_family,
+                swing_family=swing_family,
+                governance=governance_summary,
             )
             return None
 
@@ -3812,6 +3776,24 @@ class AdaptiveSignalEngine:
                 macro_regime=macro_regime, session=session_label,
                 setup_family=swing_family,
                 metadata=stop_meta.get("ob_reject_reason", ""),
+            )
+            self._log_shadow_research_candidate(
+                coin=coin, timeframe=swing_tf, row=row, triggers=triggers,
+                side=side, score=score,
+                confidence=round(min(0.95, max(0.50, score)), 3),
+                accepted=False,
+                reject_reason="invalid_trade_levels",
+                entry=price,
+                stop=stop,
+                tp=tp,
+                stop_meta=stop_meta,
+                htf_regime=htf_regime,
+                macro_regime=macro_regime,
+                market_regime=market_regime,
+                session=session_label,
+                setup_family=swing_family,
+                swing_family=swing_family,
+                governance=governance_summary,
             )
             return None
         rr = abs((tp - price) / (price - stop)) if price != stop else 0.0
@@ -3856,6 +3838,17 @@ class AdaptiveSignalEngine:
                     macro_regime=macro_regime, session=session_label,
                     setup_family=swing_family,
                 )
+                self._log_shadow_research_candidate(
+                    coin=coin, timeframe=swing_tf, row=row, triggers=triggers,
+                    side=side, score=score, confidence=round(min(0.95, max(0.50, score)), 3),
+                    accepted=False,
+                    reject_reason="4h_missing_required_ob_fvg_or_sweep",
+                    entry=price, stop=stop, tp=tp, rr=rr, stop_meta=stop_meta,
+                    htf_regime=htf_regime, macro_regime=macro_regime,
+                    market_regime=market_regime, session=session_label,
+                    setup_family=swing_family, swing_family=swing_family,
+                    governance=governance_summary,
+                )
                 return None
             if not aligned:
                 self._log_smc_candidate(
@@ -3888,6 +3881,17 @@ class AdaptiveSignalEngine:
                     setup_family=swing_family,
                     metadata=f"htf={htf_regime}|macro={macro_regime}",
                 )
+                self._log_shadow_research_candidate(
+                    coin=coin, timeframe=swing_tf, row=row, triggers=triggers,
+                    side=side, score=score, confidence=round(min(0.95, max(0.50, score)), 3),
+                    accepted=False,
+                    reject_reason="4h_missing_dual_htf_macro_alignment",
+                    entry=price, stop=stop, tp=tp, rr=rr, stop_meta=stop_meta,
+                    htf_regime=htf_regime, macro_regime=macro_regime,
+                    market_regime=market_regime, session=session_label,
+                    setup_family=swing_family, swing_family=swing_family,
+                    governance=governance_summary,
+                )
                 return None
             if rr < SMC_4H_MIN_RR:
                 self._log_smc_candidate(
@@ -3918,6 +3922,17 @@ class AdaptiveSignalEngine:
                     macro_regime=macro_regime, session=session_label,
                     setup_family=swing_family,
                 )
+                self._log_shadow_research_candidate(
+                    coin=coin, timeframe=swing_tf, row=row, triggers=triggers,
+                    side=side, score=score, confidence=round(min(0.95, max(0.50, score)), 3),
+                    accepted=False,
+                    reject_reason=f"4h_rr_below_min:{rr:.3f}<{SMC_4H_MIN_RR:.3f}",
+                    entry=price, stop=stop, tp=tp, rr=rr, stop_meta=stop_meta,
+                    htf_regime=htf_regime, macro_regime=macro_regime,
+                    market_regime=market_regime, session=session_label,
+                    setup_family=swing_family, swing_family=swing_family,
+                    governance=governance_summary,
+                )
                 return None
 
         confidence = round(min(0.95, max(0.55, score)), 3)
@@ -3928,7 +3943,8 @@ class AdaptiveSignalEngine:
             + "|mkt_" + market_regime
         )
         meta = {
-            "timeframe": swing_tf, "coin": coin, "total_score": round(score, 3),
+            "timeframe": swing_tf, "coin": coin, "bar_time": extract_bar_time(row),
+            "total_score": round(score, 3),
             "regime_local": "swing", "setup_family": "swing", "swing_family": swing_family,
             "regime_htf_1h": htf_regime, "regime_macro_4h": macro_regime,
             "close": price, "atr": atr_val, "stop_dist": stop_dist, "tp_dist": tp_dist,
@@ -3970,6 +3986,30 @@ class AdaptiveSignalEngine:
             session=session_label,
             governance=governance_summary,
         )
+
+        _research_candidate = self._log_shadow_research_candidate(
+            coin=coin, timeframe=swing_tf, row=row, triggers=triggers,
+            side=side, score=score,
+            confidence=confidence,
+            accepted=True,
+            reject_reason="",
+            entry=price,
+            stop=stop,
+            tp=tp,
+            rr=rr,
+            stop_meta=stop_meta,
+            htf_regime=htf_regime,
+            macro_regime=macro_regime,
+            market_regime=market_regime,
+            session=session_label,
+            setup_family=swing_family,
+            swing_family=swing_family,
+            governance=governance_summary,
+            meta=meta,
+        )
+        if _research_candidate:
+            meta["shadow_id"] = _research_candidate.get("shadow_id", "")
+            meta["shadow_setup_key"] = _research_candidate.get("setup_key", "")
 
         self.last_swing_ts[swing_key] = ts
 
