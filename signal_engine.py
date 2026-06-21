@@ -1353,262 +1353,42 @@ class AdaptiveSignalEngine:
     # ------------------------------------------------------------------
 
     def _score_volume_context(self, row: pd.Series) -> Tuple[float, List[str]]:
-        score = 0.0
-        notes: List[str] = []
-        vol_spike = bool(row.get("vol_spike", 0))
-        vol_collapse = bool(row.get("vol_collapse", 0))
-        if vol_spike:
-            score += 0.08
-            notes.append("vol_confirmed_trigger")
-        elif vol_collapse:
-            score -= 0.06
-            notes.append("low_vol_trigger_penalty")
-        return score, notes
+        from signal_engine_modules.scoring_helpers import score_volume_context
+        return score_volume_context(row)
 
     def _score_vwap_magnitude(self, row: pd.Series, side: str, setup_family: str) -> Tuple[float, List[str]]:
-        """
-        Score VWAP deviation using both the session anchor and the weekly anchor.
-
-        Session VWAP (vwap_dev): primary intraday signal — resets at Asia/London/NY open.
-        Weekly VWAP  (vwap_dev_w1): institutional medium-term reference — additive layer.
-          Below weekly VWAP on a LONG = discount zone (+0.04 reversal, +0.02 swing)
-          Above weekly VWAP on a SHORT = premium zone (+0.04 reversal, +0.02 swing)
-          Aligned with weekly on continuation = additional trend confirmation (+0.02)
-        """
-        score = 0.0
-        notes: List[str] = []
-        vwap_dev = float(row.get("vwap_dev", 0.0))
-        vwap_dev_w1 = float(row.get("vwap_dev_w1", 0.0))
-        close = float(row.get("close", 0.0))
-        if close <= 0:
-            return 0.0, []
-
-        abs_dev_pct = abs(vwap_dev) / close
-        abs_w1_pct = abs(vwap_dev_w1) / close
-
-        # ── Session VWAP layer (primary intraday) ─────────────────────────
-        if setup_family == "reversal":
-            correct_side = (side == "LONG" and vwap_dev < 0) or (side == "SHORT" and vwap_dev > 0)
-            if correct_side:
-                if abs_dev_pct > 0.020:
-                    score += 0.10
-                    notes.append(f"deep_session_vwap_reversal_{abs_dev_pct:.3f}")
-                elif abs_dev_pct > 0.010:
-                    score += 0.06
-                    notes.append(f"moderate_session_vwap_reversal_{abs_dev_pct:.3f}")
-                elif abs_dev_pct > 0.005:
-                    score += 0.03
-                    notes.append(f"mild_session_vwap_reversal_{abs_dev_pct:.3f}")
-        elif setup_family == "continuation":
-            trending_correct = (side == "LONG" and vwap_dev > 0) or (side == "SHORT" and vwap_dev < 0)
-            if trending_correct:
-                if abs_dev_pct > 0.010:
-                    score += 0.04
-                    notes.append(f"session_vwap_trend_strength_{abs_dev_pct:.3f}")
-                elif abs_dev_pct > 0.005:
-                    score += 0.02
-                    notes.append(f"session_vwap_trend_mild_{abs_dev_pct:.3f}")
-
-        # ── Weekly VWAP layer (institutional medium-term context) ─────────
-        # Only applies when weekly data is available (vwap_dev_w1 != 0.0)
-        if vwap_dev_w1 != 0.0:
-            w1_in_discount = (side == "LONG" and vwap_dev_w1 < 0)
-            w1_in_premium  = (side == "SHORT" and vwap_dev_w1 > 0)
-            w1_aligned_cont = (
-                (side == "LONG" and vwap_dev_w1 > 0) or
-                (side == "SHORT" and vwap_dev_w1 < 0)
-            )
-
-            if setup_family == "reversal":
-                if (w1_in_discount or w1_in_premium) and abs_w1_pct > 0.010:
-                    score += 0.04
-                    notes.append(f"w1_vwap_{'discount' if w1_in_discount else 'premium'}_{abs_w1_pct:.3f}")
-            elif setup_family == "continuation" and w1_aligned_cont and abs_w1_pct > 0.005:
-                score += 0.02
-                notes.append(f"w1_vwap_momentum_aligned_{abs_w1_pct:.3f}")
-            elif setup_family == "swing":
-                if (w1_in_discount or w1_in_premium) and abs_w1_pct > 0.010:
-                    score += 0.04
-                    notes.append(f"w1_vwap_swing_{'discount' if w1_in_discount else 'premium'}_{abs_w1_pct:.3f}")
-
-        return score, notes
+        from signal_engine_modules.scoring_helpers import score_vwap_magnitude
+        return score_vwap_magnitude(row, side, setup_family)
 
     def _score_trigger_quality(self, row: pd.Series) -> Tuple[float, List[str]]:
-        score = 0.0
-        notes: List[str] = []
-        body_pct = float(row.get("body_pct", 0.5))
-        if pd.isna(body_pct):
-            body_pct = 0.5
-        if body_pct > 0.60:
-            score += 0.05
-            notes.append(f"strong_body_{body_pct:.2f}")
-        elif body_pct < 0.25:
-            score -= 0.05
-            notes.append(f"weak_body_{body_pct:.2f}")
-        return score, notes
+        from signal_engine_modules.scoring_helpers import score_trigger_quality
+        return score_trigger_quality(row)
 
     def _score_flow_context(self, flow_snapshot: Dict[str, Any]) -> Tuple[float, List[str]]:
-        score = 0.0
-        notes: List[str] = []
-        if not flow_snapshot:
-            return score, notes
-        whale_pressure = max(-2.0, min(2.0, float(flow_snapshot.get("whale_pressure", 0.0))))
-        flow_momentum = max(-2.0, min(2.0, float(flow_snapshot.get("flow_momentum", 0.0))))
-        if whale_pressure > 0.7:
-            score += 0.20
-            notes.append("whale_pressure_bull_" + str(round(whale_pressure, 2)))
-        elif whale_pressure < -0.7:
-            score -= 0.20
-            notes.append("whale_pressure_bear_" + str(round(whale_pressure, 2)))
-        elif whale_pressure > 0.2:
-            score += 0.10
-            notes.append("whale_pressure_mild_bull")
-        elif whale_pressure < -0.2:
-            score -= 0.10
-            notes.append("whale_pressure_mild_bear")
-        if flow_momentum > 0.15:
-            score += 0.08
-            notes.append("flow_momentum_up")
-        elif flow_momentum < -0.15:
-            score -= 0.08
-            notes.append("flow_momentum_down")
-        if "30m" in flow_snapshot:
-            imbal_30m = float(flow_snapshot["30m"].get("imbalance", 0.0))
-            if imbal_30m > 0.5:
-                score += 0.10
-                notes.append("net_inflow_30m_" + str(round(imbal_30m, 2)))
-            elif imbal_30m < -0.5:
-                score -= 0.10
-                notes.append("net_outflow_30m_" + str(round(imbal_30m, 2)))
-        return score, notes
+        from signal_engine_modules.scoring_helpers import score_flow_context
+        return score_flow_context(flow_snapshot)
 
     def _score_flow_dead_calm(self, flow_snapshot: Dict[str, Any]) -> Tuple[float, List[str]]:
-        """
-        Side-invariant dead-calm penalty for zero on-chain flow.
-
-        Must be called AFTER the caller applies ±flow_score so the penalty is
-        not subject to the SHORT caller's sign flip.  Returns a negative score
-        when the snapshot is fresh and whale_pressure is in the neutral band,
-        i.e. no tracked wallets were active in the 30-minute window.
-        """
-        if not flow_snapshot or WHALE_PRESSURE_DEAD_CALM_PENALTY >= 0:
-            return 0.0, []
-        snapshot_age = float(flow_snapshot.get("snapshot_age_sec", 9999.0))
-        if snapshot_age >= WHALE_PRESSURE_STALE_AGE_SEC:
-            return 0.0, []
-        whale_pressure = float(flow_snapshot.get("whale_pressure", 0.0))
-        if abs(whale_pressure) < 0.2:
-            return WHALE_PRESSURE_DEAD_CALM_PENALTY, ["whale_pressure_dead_calm"]
-        return 0.0, []
+        from signal_engine_modules.scoring_helpers import score_flow_dead_calm
+        return score_flow_dead_calm(flow_snapshot)
 
     def _score_funding_context(self, sentiment: PerpSentimentSnapshot) -> Tuple[float, List[str]]:
-        score = 0.0
-        notes: List[str] = []
-        fr = float(sentiment.funding_rate)
-        abs_fr = abs(fr)
-        if abs_fr > 0.01:
-            bump, tier = 0.15, "extreme"
-        elif abs_fr > 0.005:
-            bump, tier = 0.08, "high"
-        elif abs_fr > 0.001:
-            bump, tier = 0.05, "mild"
-        else:
-            bump, tier = 0.0, ""
-        if bump > 0:
-            if fr < 0:
-                score += bump
-                notes.append(f"funding_neg_{tier}")
-            else:
-                score -= bump
-                notes.append(f"funding_pos_{tier}")
-        return score, notes
+        from signal_engine_modules.scoring_helpers import score_funding_context
+        return score_funding_context(float(sentiment.funding_rate))
 
     def _score_oi_directional(self, sentiment: PerpSentimentSnapshot, side: str) -> Tuple[float, List[str]]:
-        """
-        Score OI direction using real timeframe deltas (1H primary, 4H structural).
-
-        Old formula compared OI vs 45 seconds ago at a ±5% threshold — that
-        never fired because OI doesn't move 5% in 45s.  New formula:
-          - 1H delta (primary): meaningful intraday OI accumulation signal
-          - 4H delta (structural): confirms trend conviction or unwinding
-          - Falls back to 45s prev_oi if history hasn't warmed up yet.
-
-        Scoring:
-          Rising OI + aligned side → positive (new positions entering with us)
-          Falling OI + signal side → negative (unwind, fade-risk)
-          Opposite-side OI signal → no direct score change (handled by caller)
-        """
-        from perp_sentiment import OI_STRONG_1H, OI_MILD_1H, OI_STRONG_4H
-
-        score = 0.0
-        notes: List[str] = []
-
-        oi_1h = float(getattr(sentiment, "oi_delta_1h_pct", 0.0) or 0.0)
-        oi_4h = float(getattr(sentiment, "oi_delta_4h_pct", 0.0) or 0.0)
-
-        # Cold-start fallback: 1H history not yet warm, use legacy 45s delta
-        # at a tighter threshold (0.3 % in 45s ≈ meaningful burst event).
-        if oi_1h == 0.0:
-            oi = float(getattr(sentiment, "open_interest", 0.0) or 0.0)
-            prev_oi = float(getattr(sentiment, "prev_open_interest", 0.0) or 0.0)
-            if oi > 0 and prev_oi > 0:
-                oi_1h = (oi - prev_oi) / prev_oi
-
-        # ── 1H delta scoring (primary) ────────────────────────────────────
-        if oi_1h > OI_STRONG_1H:        # strong accumulation
-            score += 0.08
-            notes.append(f"oi_1h_surge_{side.lower()}_{oi_1h:.3f}")
-        elif oi_1h > OI_MILD_1H:        # mild accumulation
-            score += 0.04
-            notes.append(f"oi_1h_build_{side.lower()}_{oi_1h:.3f}")
-        elif oi_1h < -OI_STRONG_1H:     # strong liquidation / unwind
-            score -= 0.08
-            notes.append(f"oi_1h_unwind_{side.lower()}_{oi_1h:.3f}")
-        elif oi_1h < -OI_MILD_1H:       # mild unwind
-            score -= 0.04
-            notes.append(f"oi_1h_fade_{side.lower()}_{oi_1h:.3f}")
-
-        # ── 4H delta (structural conviction layer) ─────────────────────────
-        # Additive to 1H score — confirms or undermines the intraday signal.
-        if oi_4h > OI_STRONG_4H:
-            score += 0.04
-            notes.append(f"oi_4h_structural_build_{oi_4h:.3f}")
-        elif oi_4h < -OI_STRONG_4H:
-            score -= 0.04
-            notes.append(f"oi_4h_structural_unwind_{oi_4h:.3f}")
-
-        return score, notes
+        from signal_engine_modules.scoring_helpers import score_oi_directional
+        return score_oi_directional(
+            oi_delta_1h_pct=float(getattr(sentiment, "oi_delta_1h_pct", 0.0) or 0.0),
+            oi_delta_4h_pct=float(getattr(sentiment, "oi_delta_4h_pct", 0.0) or 0.0),
+            open_interest=float(getattr(sentiment, "open_interest", 0.0) or 0.0),
+            prev_open_interest=float(getattr(sentiment, "prev_open_interest", 0.0) or 0.0),
+            side=side,
+        )
 
     def _score_rsi(self, row: pd.Series, side: str, setup_family: str) -> Tuple[float, List[str]]:
-        score = 0.0
-        notes: List[str] = []
-        rsi_val = float(row.get("rsi_14", 50.0))
-        if pd.isna(rsi_val):
-            return 0.0, []
-        if setup_family == "continuation":
-            # Neutral RSI (45-65 LONG / 35-55 SHORT) no longer earns a bonus — those ranges
-            # cover the entire non-extreme zone and don't discriminate quality setups.
-            # Only extreme momentum readings confirm continuation edge.
-            if side == "LONG" and rsi_val >= 60:
-                score += 0.03
-                notes.append(f"rsi_continuation_long_momentum_{rsi_val:.0f}")
-            elif side == "SHORT" and rsi_val <= 40:
-                score += 0.03
-                notes.append(f"rsi_continuation_short_momentum_{rsi_val:.0f}")
-        elif setup_family == "reversal":
-            if side == "LONG" and rsi_val < 30:
-                score += 0.10
-                notes.append(f"rsi_oversold_{rsi_val:.0f}")
-            elif side == "SHORT" and rsi_val > 70:
-                score += 0.10
-                notes.append(f"rsi_overbought_{rsi_val:.0f}")
-            elif side == "LONG" and rsi_val < 40:
-                score += 0.04
-                notes.append(f"rsi_near_oversold_{rsi_val:.0f}")
-            elif side == "SHORT" and rsi_val > 60:
-                score += 0.04
-                notes.append(f"rsi_near_overbought_{rsi_val:.0f}")
-        return score, notes
+        from signal_engine_modules.scoring_helpers import score_rsi
+        return score_rsi(row, side, setup_family)
 
     @staticmethod
     def _hard_chop_block_continuation(
@@ -1620,14 +1400,8 @@ class AdaptiveSignalEngine:
         return market_regime == "chop"
 
     def _score_continuation_regime(self, market_regime: str) -> Tuple[float, List[str]]:
-        notes: List[str] = []
-        if market_regime == "strong_trend":
-            return CONT_REGIME_STRONG_BONUS, ["continuation_regime_strong_trend"]
-        if market_regime == "weak_trend":
-            return CONT_REGIME_WEAK_PENALTY, ["continuation_regime_weak_trend_penalty"]
-        if market_regime == "chop":
-            return CONT_REGIME_CHOP_PENALTY, ["continuation_regime_chop_penalty"]
-        return CONT_REGIME_UNKNOWN_PENALTY, ["continuation_regime_unknown_penalty"]
+        from signal_engine_modules.scoring_helpers import score_continuation_regime
+        return score_continuation_regime(market_regime)
 
     def _score_late_entry(
         self,
