@@ -430,6 +430,26 @@ def _ensure_header(path: Path, fields: Sequence[str]) -> None:
     if not path.exists() or path.stat().st_size == 0:
         with path.open("w", newline="", encoding="utf-8") as fh:
             csv.DictWriter(fh, fieldnames=fields).writeheader()
+        return
+
+    try:
+        with path.open("r", newline="", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            existing = list(reader.fieldnames or [])
+            if all(f in existing for f in fields):
+                return
+            rows = list(reader)
+
+        tmp = path.with_suffix(path.suffix + ".mig")
+        with tmp.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({f: row.get(f, "") for f in fields})
+        os.replace(str(tmp), str(path))
+        print(f"[SHADOW_RESEARCH] migrated header: {path.name} ({len(existing)}→{len(fields)} fields)")
+    except Exception as exc:
+        print(f"[SHADOW_RESEARCH] header migration failed for {path.name}: {exc}")
 
 
 def _load_seen_candidate_ids(path: Path) -> set:

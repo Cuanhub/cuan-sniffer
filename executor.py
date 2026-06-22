@@ -722,6 +722,8 @@ class Executor:
                     setup_family=setup_family, market_regime=market_regime,
                     timeframe=_telemetry_tf,
                 )
+                from executor_modules.chop_exception_shadow import evaluate_and_log_chop_exception
+                evaluate_and_log_chop_exception(signal, reason)
                 return ExecutorResult(traded=False, reason=reason)
 
         if SWING_MIN_CONFIDENCE > 0 and track == "swing":

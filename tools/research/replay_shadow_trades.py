@@ -7,7 +7,7 @@ entry/SL/TP resolution, and produces realized R outcomes for each candidate.
 
 Usage:
     python3 tools/research/replay_shadow_trades.py --days 30
-    python3 tools/research/replay_shadow_trades.py --input shadow_trades.csv --output results.csv
+    python3 tools/research/replay_shadow_trades.py --input shadow_research_candidates.csv --output results.csv
     python3 tools/research/replay_shadow_trades.py --since 2026-06-16 --until 2026-06-21
 
 This script is research-only. It never places trades or modifies live state.
@@ -35,6 +35,7 @@ except ImportError:
     requests = None
 
 HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info"
+DEFAULT_SHADOW_REPLAY_INPUT = "shadow_research_candidates.csv"
 
 # ── Field mapping ────────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ FIELD_ALIASES = {
     "entry": ["entry", "entry_price", "price"],
     "stop": ["stop", "stop_price"],
     "tp": ["tp", "tp_price", "take_profit"],
-    "rr": ["rr", "rr_planned"],
+    "rr": ["rr", "rr_planned", "planned_rr", "final_rr"],
     "timeframe": ["timeframe"],
     "setup_family": ["setup_family", "regime_local"],
     "session": ["session"],
@@ -58,7 +59,13 @@ FIELD_ALIASES = {
     "score_v3": ["score_v3"],
     "score_v2_tags": ["score_v2_tags"],
     "score_v3_tags": ["score_v3_tags"],
-    "live_reject_reason": ["live_reject_reason", "reject_reason"],
+    "live_reject_reason": [
+        "live_reject_reason",
+        "executor_reject_reason",
+        "engine_reject_reason",
+        "governance_reason",
+        "reject_reason",
+    ],
     "metadata": ["metadata"],
 }
 
@@ -294,6 +301,31 @@ def replay_trade(
 PREFERRED_SYMBOLS = {"FARTCOIN", "JTO", "SOL", "WIF", "SUI"}
 NEGATIVE_SYMBOLS = {"ETH", "ZEC", "BNB"}
 NEGATIVE_SESSIONS = {"ny_pm", "london_late", "asia_late"}
+CHOP_EXCEPTION_BLOCKED_SYMBOLS = {"ETH", "ZEC", "BNB", "NEAR"}
+CHOP_EXCEPTION_ALLOWED_SESSIONS = {"ny_open", "asia_open"}
+
+
+def is_chop_exception_candidate(row: Dict[str, Any]) -> bool:
+    reason = str(row.get("live_reject_reason", "") or row.get("reject_reason", "")).lower()
+    if "chop" not in reason:
+        return False
+    symbol = str(row.get("symbol", "")).upper()
+    session = str(row.get("session", "")).lower()
+    family = str(row.get("setup_family", "")).lower()
+    try:
+        conf = float(row.get("confidence_v1", 0) or row.get("confidence", 0) or 0)
+    except (ValueError, TypeError):
+        conf = 0.0
+    tags = str(row.get("score_v3_tags", "") or row.get("tags", "")).lower()
+    has_fvg = "+fvg" in tags or "fvg" in str(row.get("triggers", "")).lower()
+
+    return (
+        conf >= 0.80
+        and symbol not in CHOP_EXCEPTION_BLOCKED_SYMBOLS
+        and session in CHOP_EXCEPTION_ALLOWED_SESSIONS
+        and family == "continuation"
+        and has_fvg
+    )
 
 
 def is_v3_full_recipe(row: Dict[str, Any]) -> bool:
@@ -429,6 +461,61 @@ def generate_summary(results: List[Dict[str, Any]], days: int) -> str:
     else:
         lines.append("No V3 full recipe trades found.\n")
 
+    # Chop exception cohort
+    chop_ex = [r for r in results if is_chop_exception_candidate(r)]
+    lines.append("## Chop Exception Shadow Lane\n")
+    if chop_ex:
+        cer = [r["realized_R"] for r in chop_ex]
+        cen = len(cer)
+        cewr = sum(1 for r in cer if r > 0) / cen * 100
+        ceavg = sum(cer) / cen
+        cegw = sum(r for r in cer if r > 0)
+        cegl = abs(sum(r for r in cer if r < 0))
+        cepf = cegw / cegl if cegl > 0 else (999 if cegw > 0 else 0)
+        lines.append(f"- Count: {cen}")
+        lines.append(f"- WR: {cewr:.1f}%")
+        lines.append(f"- Avg R: {ceavg:+.4f}")
+        lines.append(f"- PF: {cepf:.3f}")
+        lines.append(f"- Total R: {sum(cer):+.2f}")
+        lines.append(f"- Trades/day: {cen / max(1, days):.1f}")
+        lines.append("")
+        lines.append("| Symbol | n | WR% | Avg R | PF |")
+        lines.append("|--------|---|-----|-------|-----|")
+        ce_syms = defaultdict(list)
+        for r in chop_ex:
+            ce_syms[r.get("symbol", "")].append(r["realized_R"])
+        for sym in sorted(ce_syms.keys()):
+            vals = ce_syms[sym]
+            sw = sum(1 for v in vals if v > 0)
+            sgw = sum(v for v in vals if v > 0)
+            sgl = abs(sum(v for v in vals if v < 0))
+            spf = sgw / sgl if sgl > 0 else (999 if sgw > 0 else 0)
+            lines.append(f"| {sym} | {len(vals)} | {sw/len(vals)*100:.1f}% | {sum(vals)/len(vals):+.3f} | {spf:.3f} |")
+        lines.append("")
+        lines.append("| Session | n | WR% | Avg R | PF |")
+        lines.append("|---------|---|-----|-------|-----|")
+        ce_sess = defaultdict(list)
+        for r in chop_ex:
+            ce_sess[r.get("session", "")].append(r["realized_R"])
+        for sess in sorted(ce_sess.keys()):
+            vals = ce_sess[sess]
+            sw = sum(1 for v in vals if v > 0)
+            sgw = sum(v for v in vals if v > 0)
+            sgl = abs(sum(v for v in vals if v < 0))
+            spf = sgw / sgl if sgl > 0 else (999 if sgw > 0 else 0)
+            lines.append(f"| {sess} | {len(vals)} | {sw/len(vals)*100:.1f}% | {sum(vals)/len(vals):+.3f} | {spf:.3f} |")
+        lines.append("")
+        lines.append("| Date | n | WR% | Total R |")
+        lines.append("|------|---|-----|---------|")
+        ce_daily = defaultdict(list)
+        for r in chop_ex:
+            ce_daily[str(r.get("timestamp", ""))[:10]].append(r["realized_R"])
+        for dt in sorted(ce_daily.keys()):
+            vals = ce_daily[dt]
+            lines.append(f"| {dt} | {len(vals)} | {sum(1 for v in vals if v>0)/len(vals)*100:.1f}% | {sum(vals):+.2f} |")
+    else:
+        lines.append("No chop exception candidates found.\n")
+
     # Promotion criteria
     lines.append("\n## Promotion Criteria Check\n")
     unique_days = len(set(str(r.get("timestamp", ""))[:10] for r in results))
@@ -466,17 +553,60 @@ def generate_summary(results: List[Dict[str, Any]], days: int) -> str:
 
     lines.append(f"\n**PROMOTE_V3_LANE = {'YES' if all_pass else 'NO'}**\n")
 
+    # Chop exception promotion criteria
+    lines.append("## Chop Exception Promotion Criteria\n")
+    ce_count = len(chop_ex)
+    ce_pf = cepf if chop_ex else 0
+    ce_avg = ceavg if chop_ex else 0
+    ce_profitable_syms = set()
+    if chop_ex:
+        ce_sym_r = defaultdict(list)
+        for r in chop_ex:
+            ce_sym_r[r.get("symbol", "")].append(r["realized_R"])
+        ce_profitable_syms = {s for s, vals in ce_sym_r.items() if sum(vals) > 0}
+    ce_daily_r = defaultdict(float)
+    if chop_ex:
+        for r in chop_ex:
+            ce_daily_r[str(r.get("timestamp", ""))[:10]] += r["realized_R"]
+    ce_total = sum(r["realized_R"] for r in chop_ex) if chop_ex else 0
+    ce_max_day_pct = 0.0
+    if ce_daily_r and ce_total > 0:
+        ce_max_day_pct = max(ce_daily_r.values()) / ce_total * 100
+
+    ce_criteria = {
+        "chop exception trades >= 100": ce_count >= 100,
+        "chop exception PF > 1.5": ce_pf > 1.5,
+        "chop exception avg R > +0.20": ce_avg > 0.20,
+        "no day > 35% of total R": ce_max_day_pct <= 35.0 if ce_total > 0 else False,
+    }
+    ce_all_pass = all(ce_criteria.values())
+    for criterion, passed in ce_criteria.items():
+        status = "PASS" if passed else "FAIL"
+        lines.append(f"- [{status}] {criterion}")
+    lines.append(f"\n**PROMOTE_CHOP_EXCEPTION = {'YES' if ce_all_pass else 'NO'}**\n")
+
     return "\n".join(lines)
 
 
 # ── Main ─────────────────────────────────────────────────────────────
 
 def load_shadow_trades(input_path: str) -> List[Dict[str, str]]:
-    candidates = [
-        input_path,
-        os.path.join(str(PROJECT_ROOT), "shadow_trades.csv"),
-        os.path.join(str(PROJECT_ROOT), "shadow_scores.csv"),
-    ]
+    candidates = []
+    seen = set()
+
+    def add_candidate(path: str) -> None:
+        if not path:
+            return
+        normalized = os.path.abspath(os.path.expanduser(path))
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        candidates.append(path)
+
+    add_candidate(input_path)
+    add_candidate(os.path.join(str(PROJECT_ROOT), DEFAULT_SHADOW_REPLAY_INPUT))
+    add_candidate(os.path.join(str(PROJECT_ROOT), "shadow_chop_exception.csv"))
+
     for path in candidates:
         if os.path.exists(path) and os.path.getsize(path) > 0:
             try:
@@ -487,13 +617,13 @@ def load_shadow_trades(input_path: str) -> List[Dict[str, str]]:
                     return rows
             except Exception as e:
                 print(f"  [WARN] Failed to read {path}: {e}")
-    print("  [WARN] No shadow trade files found.")
+    print("  [WARN] No canonical shadow research candidate file found.")
     return []
 
 
 def main():
     parser = argparse.ArgumentParser(description="Replay shadow trades against candle data")
-    parser.add_argument("--input", default="shadow_trades.csv", help="Input CSV path")
+    parser.add_argument("--input", default=DEFAULT_SHADOW_REPLAY_INPUT, help="Input CSV path")
     parser.add_argument("--output", default="shadow_replay_results.csv", help="Output CSV path")
     parser.add_argument("--timeframe", default="1h", help="Candle timeframe (default: 1h)")
     parser.add_argument("--days", type=int, default=30, help="Lookback days for candle fetch")

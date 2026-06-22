@@ -5,15 +5,18 @@ Uses synthetic candles — no network access required.
 """
 
 import sys
-import os
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "tools" / "research"))
-from replay_shadow_trades import (  # type: ignore[import-not-found]
-    replay_trade, _parse_row, is_v3_full_recipe, generate_summary,
+from replay_shadow_trades import (  # type: ignore[import-not-found]  # noqa: E402
+    replay_trade,
+    _parse_row,
+    is_v3_full_recipe,
+    generate_summary,
     load_shadow_trades,
-)
+)  # Resolved at runtime via sys.path.insert above
 
 
 def _candles_from(start_ms, n, bar_ms=3600000, base=100.0, move=0.5):
@@ -226,6 +229,41 @@ class TestMissingFiles(unittest.TestCase):
             self.assertEqual(rows, [])
         finally:
             mod.PROJECT_ROOT = orig_root
+
+    def test_load_falls_back_to_canonical_shadow_research_candidates(self):
+        import replay_shadow_trades as mod
+        orig_root = mod.PROJECT_ROOT
+        with tempfile.TemporaryDirectory() as tmp:
+            mod.PROJECT_ROOT = Path(tmp)
+            canonical = Path(tmp) / "shadow_research_candidates.csv"
+            canonical.write_text(
+                "timestamp_utc,symbol,side,entry_price,stop_price,tp_price\n"
+                "2026-06-17T12:00:00Z,SOL,LONG,100,98,104\n",
+                encoding="utf-8",
+            )
+            try:
+                rows = load_shadow_trades(str(Path(tmp) / "missing.csv"))
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["symbol"], "SOL")
+            finally:
+                mod.PROJECT_ROOT = orig_root
+
+    def test_legacy_shadow_files_are_explicit_only(self):
+        import replay_shadow_trades as mod
+        orig_root = mod.PROJECT_ROOT
+        with tempfile.TemporaryDirectory() as tmp:
+            mod.PROJECT_ROOT = Path(tmp)
+            legacy = Path(tmp) / "shadow_trades.csv"
+            legacy.write_text(
+                "timestamp,symbol,side,entry_price,stop_price,tp_price\n"
+                "2026-06-17T12:00:00Z,SOL,LONG,100,98,104\n",
+                encoding="utf-8",
+            )
+            try:
+                self.assertEqual(load_shadow_trades(str(Path(tmp) / "missing.csv")), [])
+                self.assertEqual(len(load_shadow_trades(str(legacy))), 1)
+            finally:
+                mod.PROJECT_ROOT = orig_root
 
 
 class TestParseRow(unittest.TestCase):
