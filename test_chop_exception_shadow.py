@@ -30,11 +30,11 @@ class FakeSignal:
 class TestChopExceptionEvaluator(unittest.TestCase):
 
     def test_qualifying_signal_logged(self):
-        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
-            path = f.name
-
+        path = tempfile.mktemp(suffix=".csv")
+        for m in list(sys.modules):
+            if "chop_exception_shadow" in m:
+                del sys.modules[m]
         import executor_modules.chop_exception_shadow as mod
-        orig = mod.SHADOW_CHOP_PATH
         mod.SHADOW_CHOP_PATH = path
         try:
             sig = FakeSignal(
@@ -49,15 +49,15 @@ class TestChopExceptionEvaluator(unittest.TestCase):
                     "total_score": 0.92,
                 },
             )
-            evaluate_and_log_chop_exception(sig, "market_regime_block:chop")
+            mod.evaluate_and_log_chop_exception(sig, "market_regime_block:chop")
             self.assertTrue(os.path.exists(path))
             with open(path) as fh:
                 lines = fh.readlines()
-            self.assertEqual(len(lines), 2)  # header + 1 data row
+            self.assertEqual(len(lines), 2)
             self.assertIn("SOL", lines[1])
         finally:
-            mod.SHADOW_CHOP_PATH = orig
-            os.unlink(path)
+            if os.path.exists(path):
+                os.unlink(path)
 
     def test_low_confidence_not_logged(self):
         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:

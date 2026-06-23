@@ -469,6 +469,12 @@ class Executor:
         self._print_boot_banner()
 
     def _print_boot_banner(self):
+        if self._RESEARCH_ONLY_MODE:
+            print(
+                "[EXECUTOR] ⚠ RESEARCH_ONLY_MODE=true — "
+                "NO live orders will be placed. "
+                "Signal evaluation, telemetry, and shadow logging continue normally."
+            )
         if GLOBAL_BLOCKED_SESSIONS:
             hard_display = f"global:{','.join(sorted(GLOBAL_BLOCKED_SESSIONS))}"
         else:
@@ -655,6 +661,8 @@ class Executor:
         append_shadow_execution(signal, result)
         return result
 
+    _RESEARCH_ONLY_MODE = os.getenv("RESEARCH_ONLY_MODE", "false").lower() in ("true", "1", "yes")
+
     def _on_signal_inner(self, signal, sig_id: int = 0) -> ExecutorResult:
         signal_side = self._side_str(signal.side)
         meta = signal.meta or {}
@@ -671,6 +679,18 @@ class Executor:
         _telemetry_conf = float(getattr(signal, "confidence", 0.0))
         _telemetry_tf = str(market_meta.get("timeframe", "1h"))
         _telemetry_rr = float(market_meta.get("rr_planned", 0.0))
+
+        if self._RESEARCH_ONLY_MODE:
+            reason = "research_only_mode"
+            print(f"[EXECUTOR] {coin} {signal_side} BLOCKED — research_only_mode (no live orders)")
+            log_executor_reject(
+                symbol=coin, side=signal_side,
+                confidence=_telemetry_conf, rr=_telemetry_rr,
+                reject_reason=reason, session=session,
+                setup_family=setup_family, market_regime=market_regime,
+                timeframe=_telemetry_tf,
+            )
+            return ExecutorResult(traded=False, reason=reason)
 
         if HARD_BLOCK_UNKNOWN_SESSION and session in {"", "unknown", "none", "null"}:
             reason = "session_blocked:unknown"
@@ -722,8 +742,9 @@ class Executor:
                     setup_family=setup_family, market_regime=market_regime,
                     timeframe=_telemetry_tf,
                 )
-                from executor_modules.chop_exception_shadow import evaluate_and_log_chop_exception
+                from executor_modules.chop_exception_shadow import evaluate_and_log_chop_exception, log_broad_chop_lane
                 evaluate_and_log_chop_exception(signal, reason)
+                log_broad_chop_lane(signal, reason)
                 return ExecutorResult(traded=False, reason=reason)
 
         if SWING_MIN_CONFIDENCE > 0 and track == "swing":
