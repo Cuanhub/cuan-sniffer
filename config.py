@@ -4,7 +4,7 @@ import time
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # === RPC ===
 RPC_URL = os.getenv("RPC_URL", "https://api.mainnet-beta.solana.com")
