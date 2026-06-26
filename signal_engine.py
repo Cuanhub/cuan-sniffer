@@ -137,6 +137,13 @@ LOW_VOL_SCORE_PENALTY = -abs(float(os.getenv("LOW_VOL_SCORE_PENALTY", "-0.05")))
 REGIME_SCORE_THRESHOLD_STRONG = float(os.getenv("REGIME_SCORE_THRESHOLD_STRONG", "0.64"))
 REGIME_SCORE_THRESHOLD_WEAK = float(os.getenv("REGIME_SCORE_THRESHOLD_WEAK", "0.64"))
 REGIME_SCORE_THRESHOLD_CHOP = float(os.getenv("REGIME_SCORE_THRESHOLD_CHOP", "0.64"))
+_LIVE_ELIGIBILITY_MODEL_RAW = os.getenv("LIVE_ELIGIBILITY_MODEL", "v3").strip().lower()
+LIVE_ELIGIBILITY_MODEL = (
+    _LIVE_ELIGIBILITY_MODEL_RAW
+    if _LIVE_ELIGIBILITY_MODEL_RAW in {"v1", "v3"}
+    else "v3"
+)
+LIVE_V3_ELIGIBILITY_THRESHOLD = 0.80
 
 DEDUP_ANTI_SPAM_FLOOR_SEC = int(os.getenv("DEDUP_ANTI_SPAM_FLOOR_SEC", "60"))
 DEDUP_PRICE_MOVE_ATR_MULT = float(os.getenv("DEDUP_PRICE_MOVE_ATR_MULT", "0.50"))
@@ -237,6 +244,17 @@ class AdaptiveSignalEngine:
         self._directional_outcomes: Dict[Tuple[str, str, str], deque] = defaultdict(
             lambda: deque(maxlen=max(3, _DIRECTIONAL_OUTCOME_MAXLEN))
         )
+
+    @staticmethod
+    def _v3_eligibility_reject_reason(score_v3: float, htf_regime: str) -> str:
+        if str(htf_regime or "").strip().lower() == "up":
+            return "v3_htf_up_block"
+        if float(score_v3 or 0.0) < LIVE_V3_ELIGIBILITY_THRESHOLD:
+            return (
+                f"score_v3_below_threshold:"
+                f"{float(score_v3 or 0.0):.3f}<{LIVE_V3_ELIGIBILITY_THRESHOLD:.3f}"
+            )
+        return ""
 
     # ------------------------------------------------------------------
     # Feature frame
@@ -2585,7 +2603,7 @@ class AdaptiveSignalEngine:
             market_regime=market_regime, htf_regime=htf_regime, macro_regime=macro_regime,
         )
 
-        if abs(chosen_score) < effective_threshold:
+        if LIVE_ELIGIBILITY_MODEL == "v1" and abs(chosen_score) < effective_threshold:
             self._log_smc_candidate(
                 coin=coin,
                 timeframe="1h",
@@ -2740,7 +2758,8 @@ class AdaptiveSignalEngine:
             )
             return None
 
-        confidence = round(min(0.95, max(0.50, chosen_score)), 3)
+        confidence_v1 = round(min(0.95, max(0.50, chosen_score)), 3)
+        confidence = confidence_v1
         breakout_failure_note = next(
             (
                 n for n in chosen_notes
@@ -2875,16 +2894,105 @@ class AdaptiveSignalEngine:
             **divergence_meta,
         }
 
-        # Shadow scores v2+v3 — research only, never used for live gating
+        # Score telemetry for historical comparison; v3 is also the default live eligibility model.
         from signal_engine_modules.score_adapter import compute_all_shadow_scores
         _shadow_fields = compute_all_shadow_scores(meta, coin, chosen_side, debug=self.debug)
         meta.update(_shadow_fields)
 
+        if LIVE_ELIGIBILITY_MODEL == "v3":
+            score_v3 = float(meta.get("score_v3", 0.0) or 0.0)
+            v3_reject_reason = self._v3_eligibility_reject_reason(score_v3, htf_regime)
+            if v3_reject_reason:
+                self._log_smc_candidate(
+                    coin=coin,
+                    timeframe="1h",
+                    row=row,
+                    triggers=triggers,
+                    side=chosen_side,
+                    score=chosen_score,
+                    confidence=confidence,
+                    accepted=False,
+                    reject_reason=v3_reject_reason,
+                    entry=price,
+                    stop=stop,
+                    tp=tp,
+                    rr=rr,
+                    stop_meta=stop_meta,
+                    htf_regime=htf_regime,
+                    macro_regime=macro_regime,
+                    market_regime=market_regime,
+                    session=session_label,
+                    governance=governance_summary,
+                )
+                if self.debug:
+                    print(
+                        f"[SIGNAL_DEBUG] {coin} {chosen_side} rejected by "
+                        f"LIVE_ELIGIBILITY_MODEL=v3 reason={v3_reject_reason}"
+                    )
+                log_gate_reject(
+                    symbol=coin, timeframe="1h", side=chosen_side,
+                    reject_reason=v3_reject_reason,
+                    raw_score=chosen_score, confidence=confidence,
+                    threshold=LIVE_V3_ELIGIBILITY_THRESHOLD,
+                    rr=rr, price=price, atr=atr_val,
+                    market_regime=market_regime, htf_regime=htf_regime,
+                    macro_regime=macro_regime, session=session_label,
+                    setup_family=setup_family,
+                    metadata=f"live_model=v3|score_v3={score_v3:.3f}",
+                )
+                self._log_shadow_research_candidate(
+                    coin=coin, timeframe="1h", row=row, triggers=triggers,
+                    side=chosen_side, score=chosen_score,
+                    confidence=confidence,
+                    accepted=False,
+                    reject_reason=v3_reject_reason,
+                    entry=price,
+                    stop=stop,
+                    tp=tp,
+                    rr=rr,
+                    stop_meta=stop_meta,
+                    htf_regime=htf_regime,
+                    macro_regime=macro_regime,
+                    market_regime=market_regime,
+                    session=session_label,
+                    setup_family=setup_family,
+                    governance=governance_summary,
+                    meta=meta,
+                )
+                return None
+
+        # Unify confidence with active eligibility model.
+        if LIVE_ELIGIBILITY_MODEL == "v3":
+            _active_v3 = float(meta.get("score_v3", 0.0) or 0.0)
+            if _active_v3 <= 0:
+                log_gate_reject(
+                    symbol=coin, timeframe="1h", side=chosen_side,
+                    reject_reason="v3_score_missing_for_live_model",
+                    raw_score=chosen_score, price=price,
+                    atr=float(row.get("atr_14", 0.0)),
+                    market_regime=market_regime, htf_regime=htf_regime,
+                    macro_regime=macro_regime, session=session_label,
+                    setup_family=setup_family,
+                )
+                return None
+            confidence = round(min(0.95, max(0.50, _active_v3)), 3)
+            meta["active_quality_model"] = "v3"
+            meta["active_quality_score"] = round(_active_v3, 4)
+            meta["confidence_v1"] = confidence_v1
+        else:
+            meta["active_quality_model"] = "v1"
+            meta["active_quality_score"] = round(float(chosen_score), 4)
+            meta["confidence_v1"] = confidence_v1
+
         if self.debug:
             _v2_display = meta.get("score_v2", "n/a")
+            _v3_display = meta.get("score_v3", "n/a")
             print("[SIGNAL_DEBUG] " + coin + " " + chosen_side +
                   " score=" + str(round(chosen_score, 3)) +
                   " score_v2=" + str(_v2_display) +
+                  " score_v3=" + str(_v3_display) +
+                  " confidence=" + str(confidence) +
+                  " model=" + str(meta.get("active_quality_model", "?")) +
                   " rr=" + str(round(rr, 2)) +
                   " session=" + session_label +
                   " vol=" + vol_state)
@@ -3321,7 +3429,7 @@ class AdaptiveSignalEngine:
             market_regime=market_regime, htf_regime=htf_regime, macro_regime=macro_regime,
         )
 
-        if score < threshold:
+        if LIVE_ELIGIBILITY_MODEL == "v1" and score < threshold:
             self._log_smc_candidate(
                 coin=coin,
                 timeframe=swing_tf,
@@ -3561,7 +3669,32 @@ class AdaptiveSignalEngine:
                 )
                 return None
 
-        confidence = round(min(0.95, max(0.55, score)), 3)
+        confidence_v1 = round(min(0.95, max(0.55, score)), 3)
+        confidence = confidence_v1
+
+        # Unify confidence with active eligibility model.
+        if LIVE_ELIGIBILITY_MODEL == "v3":
+            _active_v3 = float(meta.get("score_v3", 0.0) or 0.0)
+            if _active_v3 <= 0:
+                log_gate_reject(
+                    symbol=coin, timeframe=swing_tf, side=side,
+                    reject_reason="v3_score_missing_for_live_model",
+                    raw_score=score, price=price,
+                    atr=float(row.get("atr_14", 0.0)),
+                    market_regime=market_regime, htf_regime=htf_regime,
+                    macro_regime=macro_regime, session=session_label,
+                    setup_family=swing_family,
+                )
+                return None
+            confidence = round(min(0.95, max(0.50, _active_v3)), 3)
+            meta["active_quality_model"] = "v3"
+            meta["active_quality_score"] = round(_active_v3, 4)
+            meta["confidence_v1"] = confidence_v1
+        else:
+            meta["active_quality_model"] = "v1"
+            meta["active_quality_score"] = round(float(score), 4)
+            meta["confidence_v1"] = confidence_v1
+
         combined_regime = (
             "swing_" + swing_tf
             + "|htf_" + htf_regime
@@ -3590,6 +3723,73 @@ class AdaptiveSignalEngine:
             **triggers,
             **market_meta,
         }
+
+        from signal_engine_modules.score_adapter import compute_all_shadow_scores
+        _shadow_fields = compute_all_shadow_scores(meta, coin, side, debug=self.debug)
+        meta.update(_shadow_fields)
+
+        if LIVE_ELIGIBILITY_MODEL == "v3":
+            score_v3 = float(meta.get("score_v3", 0.0) or 0.0)
+            v3_reject_reason = self._v3_eligibility_reject_reason(score_v3, htf_regime)
+            if v3_reject_reason:
+                self._log_smc_candidate(
+                    coin=coin,
+                    timeframe=swing_tf,
+                    row=row,
+                    triggers=triggers,
+                    side=side,
+                    score=score,
+                    confidence=confidence,
+                    accepted=False,
+                    reject_reason=v3_reject_reason,
+                    entry=price,
+                    stop=stop,
+                    tp=tp,
+                    rr=rr,
+                    stop_meta=stop_meta,
+                    htf_regime=htf_regime,
+                    macro_regime=macro_regime,
+                    market_regime=market_regime,
+                    session=session_label,
+                    governance=governance_summary,
+                )
+                if self.debug:
+                    print(
+                        f"[SWING_DEBUG] {coin} {side} rejected by "
+                        f"LIVE_ELIGIBILITY_MODEL=v3 reason={v3_reject_reason}"
+                    )
+                log_gate_reject(
+                    symbol=coin, timeframe=swing_tf, side=side,
+                    reject_reason=v3_reject_reason,
+                    raw_score=score, confidence=confidence,
+                    threshold=LIVE_V3_ELIGIBILITY_THRESHOLD,
+                    rr=rr, price=price, atr=atr_val,
+                    market_regime=market_regime, htf_regime=htf_regime,
+                    macro_regime=macro_regime, session=session_label,
+                    setup_family=swing_family,
+                    metadata=f"live_model=v3|score_v3={score_v3:.3f}",
+                )
+                self._log_shadow_research_candidate(
+                    coin=coin, timeframe=swing_tf, row=row, triggers=triggers,
+                    side=side, score=score,
+                    confidence=confidence,
+                    accepted=False,
+                    reject_reason=v3_reject_reason,
+                    entry=price,
+                    stop=stop,
+                    tp=tp,
+                    rr=rr,
+                    stop_meta=stop_meta,
+                    htf_regime=htf_regime,
+                    macro_regime=macro_regime,
+                    market_regime=market_regime,
+                    session=session_label,
+                    setup_family=swing_family,
+                    swing_family=swing_family,
+                    governance=governance_summary,
+                    meta=meta,
+                )
+                return None
 
         self._log_smc_candidate(
             coin=coin,
