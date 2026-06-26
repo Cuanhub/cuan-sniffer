@@ -283,7 +283,7 @@ class PerpDataFeed:
             lookback_minutes = bar_minutes * desired_bars
             lookback_minutes = max(lookback_minutes, 600)
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         start = now - timedelta(minutes=lookback_minutes)
 
         start_ms = int(start.timestamp() * 1000)

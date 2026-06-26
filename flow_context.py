@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from typing import Dict, List, Optional
 
@@ -18,6 +18,10 @@ FLOW_SNAPSHOT_TTL_SEC = int(os.getenv("FLOW_SNAPSHOT_TTL_SEC", "30"))
 # is older than this, return an empty snapshot and log a warning rather than
 # serving data that is too stale to be meaningful.
 FLOW_SNAPSHOT_MAX_AGE_SEC = int(os.getenv("FLOW_SNAPSHOT_MAX_AGE_SEC", "300"))
+
+
+def _utc_now_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class FlowContext:
@@ -109,7 +113,7 @@ class FlowContext:
     def _build_snapshot(self) -> Dict:
         """Query the DB and compute a fresh snapshot."""
         session = self.session_factory()
-        now = datetime.utcnow()
+        now = _utc_now_naive()
         snapshot = {}
 
         try:

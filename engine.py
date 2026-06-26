@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -13,6 +13,10 @@ from sol_client import (
 from known_entities import is_known_entity
 from config import MIN_SOL_ALERT, get_sol_price
 from token_config import WATCHED_MINTS, MINT_TO_COIN, MIN_TOKEN_FLOW_USD, get_token_prices
+
+
+def _utc_now_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class SolFlowEngine:
@@ -72,7 +76,7 @@ class SolFlowEngine:
         new_record = WalletBalance(
             address=address,
             sol_balance=initial_balance,
-            updated_at=datetime.utcnow(),
+            updated_at=_utc_now_naive(),
         )
         session.add(new_record)
         session.commit()
@@ -133,7 +137,7 @@ class SolFlowEngine:
             signature=signature,
             slot=slot,
             coin=coin,
-            created_at=datetime.utcnow(),
+            created_at=_utc_now_naive(),
         ))
         return True
 
@@ -224,7 +228,7 @@ class SolFlowEngine:
             # Update pointer
             self.last_signatures[address] = new_sigs[0]["signature"]
             wallet_record.last_signature = new_sigs[0]["signature"]
-            wallet_record.updated_at = datetime.utcnow()
+            wallet_record.updated_at = _utc_now_naive()
             session.commit()
 
         except Exception as e:
@@ -271,7 +275,7 @@ class SolFlowEngine:
 
         # Update base balance regardless
         record.sol_balance = new_balance_for_db
-        record.updated_at = datetime.utcnow()
+        record.updated_at = _utc_now_naive()
 
         any_event_written = False
 

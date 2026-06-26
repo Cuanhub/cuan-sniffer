@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, text
 from sqlalchemy.orm import declarative_base, sessionmaker
-from datetime import datetime
+from datetime import datetime, timezone
 
 # SQLite database file stored locally
 DATABASE_URL = "sqlite:///sol_flow.db"
@@ -13,6 +13,10 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 Base = declarative_base()
 
+
+def utc_now_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 # === Wallet Balance Table ===
 class WalletBalance(Base):
     __tablename__ = "wallet_balances"
@@ -21,7 +25,7 @@ class WalletBalance(Base):
     address = Column(String, unique=True, index=True)
     sol_balance = Column(Float, default=0.0)
     last_signature = Column(String, default="")
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=utc_now_naive)
 
 
 # === Flow Event Table (each major inflow/outflow) ===
@@ -35,7 +39,7 @@ class FlowEvent(Base):
     usd_value = Column(Float)
     signature = Column(String, index=True)
     slot = Column(Integer)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now_naive)
     # coin: 'SOL' for native SOL events, 'JTO'/'WIF'/'FARTCOIN' for SPL token events.
     # Added in v2 — existing rows default to 'SOL' via the migration below.
     coin = Column(String, default="SOL", index=True)
