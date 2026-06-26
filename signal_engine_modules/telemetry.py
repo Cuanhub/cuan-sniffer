@@ -26,19 +26,41 @@ _SCORE_DIST_LOCK = threading.Lock()
 _GATE_REJECT_FIELDS: List[str] = [
     "timestamp", "symbol", "timeframe", "side", "reject_reason",
     "raw_score", "threshold", "confidence", "rr",
+    "active_quality_model", "active_quality_score", "signal_confidence",
     "market_regime", "htf_regime", "macro_regime", "session",
     "setup_family", "atr", "price", "metadata",
 ]
 _SCORE_DIST_FIELDS: List[str] = [
     "timestamp", "symbol", "timeframe", "side", "score", "threshold",
-    "confidence", "rr", "setup_family", "market_regime", "htf_regime", "macro_regime",
+    "confidence", "rr", "active_quality_model", "active_quality_score",
+    "signal_confidence", "setup_family", "market_regime", "htf_regime", "macro_regime",
 ]
 
 
 def _telemetry_ensure_csv(path: str, fields: list) -> None:
-    if not os.path.exists(path):
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
         with open(path, "w", newline="") as fh:
             csv.DictWriter(fh, fieldnames=fields).writeheader()
+        return
+
+    try:
+        with open(path, "r", newline="") as fh:
+            reader = csv.DictReader(fh)
+            existing_header = reader.fieldnames or []
+            if all(field in existing_header for field in fields):
+                return
+            rows = list(reader)
+
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({field: row.get(field, "") for field in fields})
+        os.replace(tmp_path, path)
+        print(f"[SIGNAL_TELEMETRY] Migrated header at {path}")
+    except Exception:
+        pass
 
 
 def log_gate_reject(
@@ -59,6 +81,9 @@ def log_gate_reject(
     atr: float = 0.0,
     price: float = 0.0,
     metadata: str = "",
+    active_quality_model: str = "",
+    active_quality_score: float = 0.0,
+    signal_confidence: float = 0.0,
 ) -> None:
     try:
         row = {
@@ -71,6 +96,9 @@ def log_gate_reject(
             "threshold": round(float(threshold), 4),
             "confidence": round(float(confidence), 4),
             "rr": round(float(rr), 4),
+            "active_quality_model": str(active_quality_model or "").lower().strip(),
+            "active_quality_score": round(float(active_quality_score or 0.0), 4),
+            "signal_confidence": round(float(signal_confidence or confidence or 0.0), 4),
             "market_regime": market_regime,
             "htf_regime": htf_regime,
             "macro_regime": macro_regime,
@@ -95,6 +123,9 @@ def log_gate_reject(
             threshold=round(float(threshold), 4),
             effective_threshold=round(float(threshold), 4),
             confidence=round(float(confidence), 4),
+            active_quality_model=str(active_quality_model or "").lower().strip(),
+            active_quality_score=round(float(active_quality_score or 0.0), 4),
+            signal_confidence=round(float(signal_confidence or confidence or 0.0), 4),
             accepted=False,
             reject_reason=reject_reason,
             rr=round(float(rr), 4),
@@ -124,6 +155,9 @@ def log_score_candidate(
     market_regime: str = "",
     htf_regime: str = "",
     macro_regime: str = "",
+    active_quality_model: str = "",
+    active_quality_score: float = 0.0,
+    signal_confidence: float = 0.0,
 ) -> None:
     try:
         confidence = round(min(0.95, max(0.50, float(score))), 4)
@@ -136,6 +170,9 @@ def log_score_candidate(
             "threshold": round(float(threshold), 4),
             "confidence": confidence,
             "rr": round(float(rr), 4),
+            "active_quality_model": str(active_quality_model or "").lower().strip(),
+            "active_quality_score": round(float(active_quality_score or 0.0), 4),
+            "signal_confidence": round(float(signal_confidence or confidence or 0.0), 4),
             "setup_family": setup_family,
             "market_regime": market_regime,
             "htf_regime": htf_regime,
@@ -157,6 +194,9 @@ def log_score_candidate(
             threshold=round(float(threshold), 4),
             effective_threshold=round(float(threshold), 4),
             confidence=confidence,
+            active_quality_model=str(active_quality_model or "").lower().strip(),
+            active_quality_score=round(float(active_quality_score or 0.0), 4),
+            signal_confidence=round(float(signal_confidence or confidence or 0.0), 4),
             accepted="",
             reject_reason="",
             rr=round(float(rr), 4),

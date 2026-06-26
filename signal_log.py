@@ -26,6 +26,12 @@ HEADER = [
     "confidence",
     "regime",
     "total_score",
+    "score_v1",
+    "score_v2",
+    "score_v3",
+    "active_quality_model",
+    "active_quality_score",
+    "signal_confidence",
     "atr",
     "stop_dist",
     "tp_dist",
@@ -58,7 +64,28 @@ def _abs_log_path() -> str:
 def init_signal_log():
     abs_path = _abs_log_path()
 
-    if os.path.exists(LOG_PATH):
+    if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 0:
+        try:
+            with open(LOG_PATH, "r", newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                existing_header = reader.fieldnames or []
+                if all(field in existing_header for field in HEADER):
+                    print(f"[SIGNAL_LOG] Using existing log at {LOG_PATH}")
+                    print(f"[SIGNAL_LOG] Absolute path: {abs_path}")
+                    return
+                rows = list(reader)
+
+            tmp_path = LOG_PATH + ".tmp"
+            with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=HEADER, extrasaction="ignore")
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow({field: row.get(field, "") for field in HEADER})
+                f.flush()
+            os.replace(tmp_path, LOG_PATH)
+            print(f"[SIGNAL_LOG] Migrated header at {LOG_PATH}")
+        except Exception as e:
+            print(f"[SIGNAL_LOG] Header migration failed: {e}")
         print(f"[SIGNAL_LOG] Using existing log at {LOG_PATH}")
         print(f"[SIGNAL_LOG] Absolute path: {abs_path}")
         return
@@ -92,6 +119,12 @@ def append_signal(
 
         timeframe = meta.get("timeframe", "unknown")
         total_score = float(meta.get("total_score", 0.0))
+        score_v1 = float(meta.get("score_v1", meta.get("total_score", 0.0)) or 0.0)
+        score_v2 = float(meta.get("score_v2", 0.0) or 0.0)
+        score_v3 = float(meta.get("score_v3", 0.0) or 0.0)
+        active_quality_model = str(meta.get("active_quality_model", "") or "").lower().strip()
+        active_quality_score = float(meta.get("active_quality_score", 0.0) or 0.0)
+        signal_confidence = float(signal.confidence)
         atr = float(meta.get("atr", 0.0))
         stop_dist = float(meta.get("stop_dist", 0.0))
         tp_dist = float(meta.get("tp_dist", 0.0))
@@ -150,6 +183,12 @@ def append_signal(
             float(signal.confidence),
             signal.regime,
             total_score,
+            score_v1,
+            score_v2,
+            score_v3,
+            active_quality_model,
+            active_quality_score,
+            signal_confidence,
             atr,
             stop_dist,
             tp_dist,
@@ -199,6 +238,12 @@ def append_signal(
             score=total_score,
             raw_score=total_score,
             total_score=total_score,
+            score_v1=score_v1,
+            score_v2=score_v2,
+            score_v3=score_v3,
+            active_quality_model=active_quality_model,
+            active_quality_score=active_quality_score,
+            signal_confidence=signal_confidence,
             effective_threshold=eff_thr,
             confidence=float(signal.confidence),
             accepted=result == "traded",

@@ -33,6 +33,7 @@ def _is_threshold_key(k: str) -> bool:
         "WEAK_TREND_MIN_CONFIDENCE",
         "CHOP_REVERSAL_MIN_CONFIDENCE",
         "MIN_SIGNAL_CONFIDENCE",
+        "MIN_SIGNAL_SCORE",
         "REGIME_SCORE_THRESHOLD_STRONG",
         "REGIME_SCORE_THRESHOLD_WEAK",
         "REGIME_SCORE_THRESHOLD_CHOP",
@@ -41,6 +42,7 @@ def _is_threshold_key(k: str) -> bool:
         "REGIME_TP_CAP_R",
         "STOP_REDESIGN_RR_TOLERANCE",
         "SMC_ENABLE_4H_LIVE",
+        "LIVE_ELIGIBILITY_MODEL",
         "HARD_BLOCK_CONTINUATION",
         "HARD_BLOCKED_TIMEFRAMES",
     }
@@ -201,6 +203,102 @@ class TestFeatureFlags(unittest.TestCase):
         """SMC_ENABLE_4H_LIVE must default to True post-candle-fix."""
         self.assertTrue(self.engine.SMC_ENABLE_4H_LIVE)
 
+    def test_live_eligibility_model_defaults_to_v3(self):
+        self.assertEqual(self.engine.LIVE_ELIGIBILITY_MODEL, "v3")
+
+    def test_live_eligibility_model_can_rollback_to_v1(self):
+        mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="v1"))
+        self.assertEqual(mod.LIVE_ELIGIBILITY_MODEL, "v1")
+
+    def test_live_eligibility_model_invalid_falls_back_to_v3(self):
+        mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="bad"))
+        self.assertEqual(mod.LIVE_ELIGIBILITY_MODEL, "v3")
+
+    def test_v3_eligibility_threshold_and_htf_guard(self):
+        engine = self.engine.AdaptiveSignalEngine(debug=False)
+        self.assertEqual(engine._v3_eligibility_reject_reason(0.80, "down"), "")
+        self.assertIn("v3_score_below_threshold", engine._v3_eligibility_reject_reason(0.79, "down"))
+        self.assertEqual(engine._v3_eligibility_reject_reason(0.95, "up"), "v3_htf_up_block")
+        self.assertEqual(engine._v3_eligibility_reject_reason(None, "down"), "v3_score_missing_for_live_model")
+        self.assertEqual(engine._v3_eligibility_reject_reason("bad", "down"), "v3_score_missing_for_live_model")
+
+    def test_active_quality_stamp_defaults_to_v3(self):
+        engine = self.engine.AdaptiveSignalEngine(debug=False)
+        meta = {"score_v3": 0.83}
+        confidence = engine._stamp_active_quality(
+            meta,
+            score_v1=0.66,
+            confidence_v1=0.66,
+            threshold_v1=0.64,
+        )
+        self.assertAlmostEqual(confidence, 0.83)
+        self.assertEqual(meta["active_quality_model"], "v3")
+        self.assertAlmostEqual(meta["active_quality_score"], 0.83)
+        self.assertAlmostEqual(meta["confidence_v1"], 0.66)
+
+    def test_active_quality_stamp_rolls_back_to_v1(self):
+        mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="v1"))
+        engine = mod.AdaptiveSignalEngine(debug=False)
+        meta = {"score_v3": 0.91}
+        confidence = engine._stamp_active_quality(
+            meta,
+            score_v1=0.67,
+            confidence_v1=0.67,
+            threshold_v1=0.64,
+        )
+        self.assertAlmostEqual(confidence, 0.67)
+        self.assertEqual(meta["active_quality_model"], "v1")
+        self.assertAlmostEqual(meta["active_quality_score"], 0.67)
+        self.assertAlmostEqual(meta["active_quality_threshold"], 0.64)
+
+    def test_generate_swing_signal_stamps_active_quality_after_meta_exists(self):
+        import inspect
+
+        src = inspect.getsource(self.engine.AdaptiveSignalEngine.generate_swing_signal)
+        meta_idx = src.index("meta = {")
+        stamp_idx = src.index("self._stamp_active_quality")
+        self.assertLess(meta_idx, stamp_idx)
+
+    def test_signal_payload_shape_stays_executor_compatible(self):
+        from dataclasses import fields
+
+        field_names = [field.name for field in fields(self.engine.Signal)]
+        self.assertEqual(
+            field_names,
+            [
+                "coin",
+                "side",
+                "entry_price",
+                "stop_price",
+                "tp_price",
+                "confidence",
+                "regime",
+                "reason",
+                "meta",
+            ],
+        )
+
+    def test_score_telemetry_still_emits_v2_and_v3(self):
+        from signal_engine_modules.score_adapter import compute_all_shadow_scores
+
+        meta = {
+            "symbol": "SOL",
+            "setup_family": "continuation",
+            "session": "ny_open",
+            "market_regime": "chop",
+            "macro_regime": "chop",
+            "htf_regime": "down",
+            "fvg_bull": True,
+            "stop_method": "ob",
+        }
+        original = dict(meta)
+        fields = compute_all_shadow_scores(meta, "SOL", "LONG", debug=False)
+        self.assertEqual(meta, original)
+        self.assertIn("score_v2", fields)
+        self.assertIn("score_v3", fields)
+        self.assertIn("score_v2_reason", fields)
+        self.assertIn("score_v3_reason", fields)
+
     def test_hard_block_continuation_disabled_by_default(self):
         """HARD_BLOCK_CONTINUATION must default to False post-candle-fix."""
         self.assertFalse(self.executor.HARD_BLOCK_CONTINUATION)
@@ -208,6 +306,28 @@ class TestFeatureFlags(unittest.TestCase):
     def test_hard_blocked_timeframes_empty_by_default(self):
         """HARD_BLOCKED_TIMEFRAMES must default to empty set (4h no longer blocked)."""
         self.assertEqual(self.executor.HARD_BLOCKED_TIMEFRAMES, set())
+
+    def test_executor_quality_score_resolves_to_active_v3(self):
+        sig = types.SimpleNamespace(
+            confidence=0.86,
+            meta={
+                "active_quality_model": "v3",
+                "active_quality_score": 0.86,
+                "total_score": 0.10,
+            },
+        )
+        self.assertAlmostEqual(self.executor.Executor._signal_total_score(sig), 0.86)
+
+    def test_executor_quality_score_rolls_back_to_v1_total_score(self):
+        sig = types.SimpleNamespace(
+            confidence=0.86,
+            meta={
+                "active_quality_model": "v1",
+                "active_quality_score": 0.86,
+                "total_score": 0.10,
+            },
+        )
+        self.assertAlmostEqual(self.executor.Executor._signal_total_score(sig), 0.10)
 
     def test_4h_can_be_disabled_via_env(self):
         mod = _reload_module("signal_engine", _clean_env(SMC_ENABLE_4H_LIVE="false"))
@@ -261,6 +381,7 @@ class TestValidateThresholds(unittest.TestCase):
         self.assertIn("THRESHOLD SUMMARY", output)
         self.assertIn("UNIVERSAL_MIN_CONFIDENCE", output)
         self.assertIn("REGIME_TP_CAP_R", output)
+        self.assertIn("LIVE_ELIGIBILITY_MODEL", output)
 
     def test_regime_tp_cap_must_exceed_execution_rr_floor(self):
         ok, output = self._run_validate({
@@ -270,6 +391,12 @@ class TestValidateThresholds(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("REGIME_TP_CAP_R", output)
         self.assertIn("must be >", output)
+
+    def test_live_eligibility_model_invalid_warns(self):
+        ok, output = self._run_validate({"LIVE_ELIGIBILITY_MODEL": "v2"})
+        self.assertFalse(ok)
+        self.assertIn("LIVE_ELIGIBILITY_MODEL", output)
+        self.assertIn("supported values: v1, v3", output)
 
 
 # ── Consistency: engine RR floor == executor redesign RR ──────────────────────
@@ -306,6 +433,61 @@ class TestCrossLayerConsistency(unittest.TestCase):
         self.assertAlmostEqual(engine.UNIVERSAL_MIN_CONFIDENCE, 0.91, places=4)
         self.assertAlmostEqual(executor.UNIVERSAL_MIN_CONFIDENCE, 0.91, places=4)
         self.assertAlmostEqual(risk.UNIVERSAL_MIN_CONFIDENCE, 0.91, places=4)
+
+    def test_risk_manager_v3_does_not_reject_legacy_total_score(self):
+        env = _clean_env(
+            UNIVERSAL_MIN_CONFIDENCE="0.90",
+            MIN_SIGNAL_CONFIDENCE="0.90",
+            MIN_SIGNAL_SCORE="0.90",
+        )
+        risk_mod = _reload_module("risk_manager", env)
+        risk = risk_mod.RiskManager(strategy_filter=None)
+        sig = types.SimpleNamespace(
+            coin="SUI",
+            entry_price=100.0,
+            stop_price=99.0,
+            confidence=0.85,
+            meta={
+                "timeframe": "15m",
+                "setup_family": "continuation",
+                "market_regime": "weak_trend",
+                "total_score": 0.10,
+                "effective_threshold": 0.90,
+                "active_quality_model": "v3",
+                "active_quality_score": 0.85,
+                "active_quality_threshold": 0.80,
+            },
+        )
+        decision = risk.check_signal(sig)
+        self.assertTrue(decision.approved, decision.reason)
+        self.assertIn("quality=v3:0.85", decision.reason)
+
+    def test_risk_manager_v1_keeps_legacy_score_floor(self):
+        env = _clean_env(
+            UNIVERSAL_MIN_CONFIDENCE="0.90",
+            MIN_SIGNAL_CONFIDENCE="0.90",
+            MIN_SIGNAL_SCORE="0.90",
+        )
+        risk_mod = _reload_module("risk_manager", env)
+        risk = risk_mod.RiskManager(strategy_filter=None)
+        sig = types.SimpleNamespace(
+            coin="SUI",
+            entry_price=100.0,
+            stop_price=99.0,
+            confidence=0.95,
+            meta={
+                "timeframe": "15m",
+                "setup_family": "continuation",
+                "market_regime": "weak_trend",
+                "total_score": 0.10,
+                "effective_threshold": 0.90,
+                "active_quality_model": "v1",
+                "active_quality_score": 0.10,
+            },
+        )
+        decision = risk.check_signal(sig)
+        self.assertFalse(decision.approved)
+        self.assertIn("score 0.10 < threshold 0.90", decision.reason)
 
 
 if __name__ == "__main__":

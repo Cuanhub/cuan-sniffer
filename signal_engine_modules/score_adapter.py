@@ -2,7 +2,8 @@
 Shadow score adapter — glue between signal_engine and score_v2/v3.
 
 Handles safe import, context construction, failure handling, and result
-packaging for all shadow scorers. Never affects live signal gating.
+packaging for score telemetry. The signal engine may use score_v3 for live
+eligibility when LIVE_ELIGIBILITY_MODEL=v3.
 """
 
 from typing import Any, Dict

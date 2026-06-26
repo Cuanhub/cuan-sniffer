@@ -45,6 +45,7 @@ MIN_SIGNAL_CONFIDENCE = float(
     os.getenv("MIN_SIGNAL_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
 )
 MIN_SIGNAL_SCORE = float(os.getenv("MIN_SIGNAL_SCORE", "0.68"))
+V3_ACTIVE_QUALITY_FLOOR = 0.80
 
 STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "1000.0"))
 MAX_FULL_LOSS_R = float(os.getenv("MAX_FULL_LOSS_R", "-1.5"))
@@ -181,6 +182,11 @@ class RiskManager:
         confidence = float(getattr(signal, "confidence", 0.0))
         meta = signal.meta or {}
         total_score = float(meta.get("total_score", 0.0))
+        active_quality_model = str(meta.get("active_quality_model", "v1") or "v1").strip().lower()
+        try:
+            active_quality_score = float(meta.get("active_quality_score", confidence) or confidence)
+        except (TypeError, ValueError):
+            active_quality_score = confidence
         setup_family = str(
             meta.get("setup_family", meta.get("regime_local", ""))
         ).strip()
@@ -192,23 +198,34 @@ class RiskManager:
                 "Ensure Executor passes a StrategyFilter instance."
             )
 
-        if confidence < MIN_SIGNAL_CONFIDENCE:
+        confidence_floor = MIN_SIGNAL_CONFIDENCE
+        if active_quality_model == "v3":
+            try:
+                confidence_floor = float(
+                    meta.get("active_quality_threshold", V3_ACTIVE_QUALITY_FLOOR)
+                    or V3_ACTIVE_QUALITY_FLOOR
+                )
+            except (TypeError, ValueError):
+                confidence_floor = V3_ACTIVE_QUALITY_FLOOR
+
+        if confidence < confidence_floor:
             return RiskDecision(
                 False,
-                f"confidence {confidence:.2f} < min {MIN_SIGNAL_CONFIDENCE:.2f}",
+                f"confidence {confidence:.2f} < min {confidence_floor:.2f}",
                 track=track,
             )
 
-        # Use engine's regime-adaptive effective_threshold when present (already self-gated by engine).
-        # Fall back to MIN_SIGNAL_SCORE for signals without metadata (backward compat / safety).
-        _score_floor = float(meta.get("effective_threshold", MIN_SIGNAL_SCORE))
-        if total_score < _score_floor:
-            _regime = meta.get("market_regime", "unknown")
-            return RiskDecision(
-                False,
-                f"score {total_score:.2f} < threshold {_score_floor:.2f} (regime={_regime})",
-                track=track,
-            )
+        if active_quality_model != "v3":
+            # V1 rollback / legacy safety floor only. V3-approved trades must not
+            # be re-vetoed by legacy total_score.
+            _score_floor = float(meta.get("effective_threshold", MIN_SIGNAL_SCORE))
+            if total_score < _score_floor:
+                _regime = meta.get("market_regime", "unknown")
+                return RiskDecision(
+                    False,
+                    f"score {total_score:.2f} < threshold {_score_floor:.2f} (regime={_regime})",
+                    track=track,
+                )
 
         # ── Strategy filter — FIXED argument order ───────────────────
         # Old (BUGGY): is_allowed(coin, side, setup_family)
@@ -287,6 +304,7 @@ class RiskManager:
                 "approved [LIVE] "
                 f"track={track} "
                 f"conf={confidence:.2f} "
+                f"quality={active_quality_model}:{active_quality_score:.2f} "
                 f"score={total_score:.2f} "
                 f"size={multiplier:.2f}x "
                 f"budget={track_mult:.2f}x"

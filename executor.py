@@ -313,12 +313,41 @@ MISSED_FIELDS = [
     "tp_price",
     "confidence",
     "total_score",
+    "active_quality_model",
+    "active_quality_score",
+    "signal_confidence",
     "session",
     "regime",
     "reject_reason",
     "current_price",
     "price_move_r",
 ]
+
+
+def _ensure_missed_csv(path: str) -> None:
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        with open(path, "w", newline="") as fh:
+            csv.DictWriter(fh, fieldnames=MISSED_FIELDS).writeheader()
+        return
+
+    try:
+        with open(path, "r", newline="") as fh:
+            reader = csv.DictReader(fh)
+            existing_header = reader.fieldnames or []
+            if all(field in existing_header for field in MISSED_FIELDS):
+                return
+            rows = list(reader)
+
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=MISSED_FIELDS, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({field: row.get(field, "") for field in MISSED_FIELDS})
+        os.replace(tmp_path, path)
+        print(f"[MISSED_SIGNALS] Migrated header at {path}")
+    except Exception:
+        pass
 
 
 @dataclass
@@ -575,7 +604,7 @@ class Executor:
         meta = signal.meta or {}
         return can_override_soft_block(
             session=session,
-            score=float(meta.get("total_score", getattr(signal, "confidence", 0.0)) or 0.0),
+            score=self._signal_total_score(signal),
             setup_family=str(meta.get("setup_family", meta.get("regime_local", ""))).strip().lower(),
             side=self._side_str(signal.side),
             regime=str(getattr(signal, "regime", "")),
@@ -595,8 +624,7 @@ class Executor:
         setup_family: str,
         market_regime: str,
     ) -> Tuple[float, float, float, float, bool]:
-        meta = getattr(signal, "meta", None) or {}
-        total_score = float(meta.get("total_score", getattr(signal, "confidence", 0.0)) or 0.0)
+        total_score = self._signal_total_score(signal)
 
         score_mult = SCORE_SIZE_BASE_MULT
         if total_score >= SCORE_SIZE_HIGH_THRESHOLD:
@@ -613,6 +641,27 @@ class Executor:
         overlay_mult = min(SCORE_SIZE_OVERLAY_MAX_MULT, score_mult * trend_bonus_mult)
 
         return total_score, score_mult, trend_bonus_mult, overlay_mult, trend_bonus_applied
+
+    @staticmethod
+    def _active_quality_model(signal) -> str:
+        meta = getattr(signal, "meta", None) or {}
+        return str(meta.get("active_quality_model", "v1") or "v1").strip().lower()
+
+    @staticmethod
+    def _is_v3_quality_active(signal) -> bool:
+        return Executor._active_quality_model(signal) == "v3"
+
+    @staticmethod
+    def _log_chop_shadow_lanes(signal, reason: str) -> None:
+        try:
+            from executor_modules.chop_exception_shadow import (
+                evaluate_and_log_chop_exception,
+                log_broad_chop_lane,
+            )
+            evaluate_and_log_chop_exception(signal, reason)
+            log_broad_chop_lane(signal, reason)
+        except Exception:
+            pass
 
     def boot_status_message(self) -> str:
         pct = (
@@ -683,6 +732,8 @@ class Executor:
         if self._RESEARCH_ONLY_MODE:
             reason = "research_only_mode"
             print(f"[EXECUTOR] {coin} {signal_side} BLOCKED — research_only_mode (no live orders)")
+            if HARD_BLOCK_CHOP and market_regime == "chop":
+                self._log_chop_shadow_lanes(signal, "market_regime_block:chop")
             log_executor_reject(
                 symbol=coin, side=signal_side,
                 confidence=_telemetry_conf, rr=_telemetry_rr,
@@ -742,12 +793,14 @@ class Executor:
                     setup_family=setup_family, market_regime=market_regime,
                     timeframe=_telemetry_tf,
                 )
-                from executor_modules.chop_exception_shadow import evaluate_and_log_chop_exception, log_broad_chop_lane
-                evaluate_and_log_chop_exception(signal, reason)
-                log_broad_chop_lane(signal, reason)
+                self._log_chop_shadow_lanes(signal, reason)
                 return ExecutorResult(traded=False, reason=reason)
 
-        if SWING_MIN_CONFIDENCE > 0 and track == "swing":
+        if (
+            SWING_MIN_CONFIDENCE > 0
+            and track == "swing"
+            and not self._is_v3_quality_active(signal)
+        ):
             sig_conf = float(getattr(signal, "confidence", 0.0))
             _floor = self.strategy_filter.coin_confidence_floor(coin, SWING_MIN_CONFIDENCE)
             if sig_conf < _floor:
@@ -1038,7 +1091,11 @@ class Executor:
                 return ExecutorResult(traded=False, reason=reason)
 
             # Gate 3: weak-trend confidence floor — sub-0.85 weak_trend drove -19.91R.
-            if market_regime == "weak_trend" and WEAK_TREND_MIN_CONFIDENCE > 0:
+            if (
+                market_regime == "weak_trend"
+                and WEAK_TREND_MIN_CONFIDENCE > 0
+                and not self._is_v3_quality_active(signal)
+            ):
                 _sig_conf = float(getattr(signal, "confidence", 0.0))
                 if _sig_conf < WEAK_TREND_MIN_CONFIDENCE:
                     reason = (
@@ -1065,6 +1122,7 @@ class Executor:
             if (
                 setup_family == "continuation"
                 and market_regime == "weak_trend"
+                and not self._is_v3_quality_active(signal)
                 and _gate_score < WEAK_CONTINUATION_MIN_SCORE
             ):
                 reason = "blocked_weak_continuation_low_score"
@@ -1087,6 +1145,7 @@ class Executor:
             if (
                 setup_family == "reversal"
                 and market_regime in ("chop", "weak_trend")
+                and not self._is_v3_quality_active(signal)
                 and _gate_score < REVERSAL_CHOP_MIN_SCORE
             ):
                 reason = "blocked_low_quality_reversal_in_chop"
@@ -1450,7 +1509,7 @@ class Executor:
                 f"[REJECT] {coin} {side} reason=blocked_chop_dual_regime "
                 f"regime={_combined_regime!r} market_regime={_market_regime_val} "
                 f"macro_regime={_macro_regime_val} "
-                f"score={float(meta.get('total_score', getattr(signal, 'confidence', 0.0)) or 0.0):.3f}"
+                f"score={self._signal_total_score(signal):.3f}"
             )
             return "blocked_chop_dual_regime"
 
@@ -1492,12 +1551,12 @@ class Executor:
         if current_price is None or float(current_price) <= 0:
             print(
                 f"[RR_GUARD] {coin} {side} reject=live_midprice_stale_block "
-                f"score={float(meta.get('total_score', getattr(signal, 'confidence', 0.0)) or 0.0):.3f} "
+                f"score={self._signal_total_score(signal):.3f} "
                 f"entry={signal_price:.6f} tp={tp_price:.6f} sl={stop_price:.6f}"
             )
             return "stale_midprice"
         current_price = float(current_price)
-        score = float(meta.get("total_score", getattr(signal, "confidence", 0.0)) or 0.0)
+        score = self._signal_total_score(signal)
 
         if (side == "LONG" and current_price >= tp_price) or (
             side == "SHORT" and current_price <= tp_price
@@ -1774,7 +1833,7 @@ class Executor:
         setup_family = str(meta.get("setup_family", meta.get("regime_local", ""))).strip().lower()
         session = str(meta.get("session", "")).strip().lower()
         market_regime = str(meta.get("market_regime", "unknown")).strip().lower()
-        total_score = float(meta.get("total_score", getattr(signal, "confidence", 0.0)) or 0.0)
+        total_score = self._signal_total_score(signal)
         score_bucket = str(int(round(total_score * 20.0)))
         entry_price = float(getattr(signal, "entry_price", 0.0) or 0.0)
         atr = float(meta.get("atr", 0.0) or 0.0)
@@ -1952,7 +2011,14 @@ class Executor:
     @staticmethod
     def _signal_total_score(signal) -> float:
         meta = getattr(signal, "meta", None) or {}
-        return float(meta.get("total_score", getattr(signal, "confidence", 0.0)) or 0.0)
+        if Executor._active_quality_model(signal) == "v3":
+            value = meta.get("active_quality_score", getattr(signal, "confidence", 0.0))
+        else:
+            value = meta.get("total_score", getattr(signal, "confidence", 0.0))
+        try:
+            return float(value or 0.0)
+        except (TypeError, ValueError):
+            return float(getattr(signal, "confidence", 0.0) or 0.0)
 
     @staticmethod
     def _regime_component(regime_text: str, prefix: str, default: str = "") -> str:
@@ -2297,7 +2363,6 @@ class Executor:
             else:
                 price_move_r = (signal_price - current_price) / stop_dist
 
-        file_exists = os.path.exists(MISSED_LOG_FILE)
         row = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "signal_id": sig_id,
@@ -2308,6 +2373,9 @@ class Executor:
             "tp_price": round(float(signal.tp_price), 8),
             "confidence": round(float(signal.confidence), 3),
             "total_score": round(float(meta.get("total_score", 0.0)), 3),
+            "active_quality_model": str(meta.get("active_quality_model", "") or "").lower().strip(),
+            "active_quality_score": round(float(meta.get("active_quality_score", 0.0) or 0.0), 3),
+            "signal_confidence": round(float(getattr(signal, "confidence", 0.0) or 0.0), 3),
             "session": meta.get("session", ""),
             "regime": signal.regime,
             "reject_reason": reason[:200],
@@ -2317,10 +2385,9 @@ class Executor:
         _stage_missed_context(row)
 
         try:
+            _ensure_missed_csv(MISSED_LOG_FILE)
             with open(MISSED_LOG_FILE, "a", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=MISSED_FIELDS)
-                if not file_exists:
-                    writer.writeheader()
                 writer.writerow(row)
         except Exception as e:
             print(f"[EXECUTOR] Missed log write failed: {e}")
@@ -2368,7 +2435,7 @@ class Executor:
             setup_family=setup_family,
             htf_regime=meta.get("regime_htf_1h", ""),
             confidence=float(signal.confidence),
-            total_score=float(meta.get("total_score", 0.0)),
+            total_score=self._signal_total_score(signal),
             session=meta.get("session", ""),
             timeframe=str(meta.get("timeframe", "15m") or "15m"),
             execution_track=decision.track,

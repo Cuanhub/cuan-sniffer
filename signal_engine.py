@@ -247,14 +247,44 @@ class AdaptiveSignalEngine:
 
     @staticmethod
     def _v3_eligibility_reject_reason(score_v3: float, htf_regime: str) -> str:
+        if score_v3 is None or str(score_v3).strip() == "":
+            return "v3_score_missing_for_live_model"
+        try:
+            score_value = float(score_v3)
+        except (TypeError, ValueError):
+            return "v3_score_missing_for_live_model"
         if str(htf_regime or "").strip().lower() == "up":
             return "v3_htf_up_block"
-        if float(score_v3 or 0.0) < LIVE_V3_ELIGIBILITY_THRESHOLD:
+        if score_value < LIVE_V3_ELIGIBILITY_THRESHOLD:
             return (
-                f"score_v3_below_threshold:"
-                f"{float(score_v3 or 0.0):.3f}<{LIVE_V3_ELIGIBILITY_THRESHOLD:.3f}"
+                f"v3_score_below_threshold:"
+                f"{score_value:.3f}<{LIVE_V3_ELIGIBILITY_THRESHOLD:.3f}"
             )
         return ""
+
+    @staticmethod
+    def _stamp_active_quality(
+        meta: Dict[str, Any],
+        score_v1: float,
+        confidence_v1: float,
+        threshold_v1: float,
+    ) -> float:
+        meta["confidence_v1"] = round(float(confidence_v1 or 0.0), 4)
+        if LIVE_ELIGIBILITY_MODEL == "v3":
+            try:
+                score_v3 = float(meta.get("score_v3", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                score_v3 = 0.0
+            meta["active_quality_model"] = "v3"
+            meta["active_quality_score"] = round(score_v3, 4)
+            meta["active_quality_threshold"] = LIVE_V3_ELIGIBILITY_THRESHOLD
+            return round(score_v3, 4)
+
+        score_v1_value = float(score_v1 or 0.0)
+        meta["active_quality_model"] = "v1"
+        meta["active_quality_score"] = round(score_v1_value, 4)
+        meta["active_quality_threshold"] = round(float(threshold_v1 or 0.0), 4)
+        return round(score_v1_value, 4)
 
     # ------------------------------------------------------------------
     # Feature frame
@@ -1030,7 +1060,12 @@ class AdaptiveSignalEngine:
         triggers: Dict[str, Any],
         side: str = "",
         score: float = 0.0,
+        score_v2: Any = 0.0,
+        score_v3: Any = 0.0,
         confidence: float = 0.0,
+        active_quality_model: str = "",
+        active_quality_score: Any = 0.0,
+        signal_confidence: Any = 0.0,
         accepted: bool = False,
         reject_reason: str = "",
         entry: float = 0.0,
@@ -1057,6 +1092,12 @@ class AdaptiveSignalEngine:
                 score=round(float(score or 0.0), 4),
                 raw_score=round(float(score or 0.0), 4),
                 total_score=round(float(score or 0.0), 4),
+                score_v1=round(float(score or 0.0), 4),
+                score_v2=round(self._as_float(score_v2), 4),
+                score_v3=round(self._as_float(score_v3), 4),
+                active_quality_model=str(active_quality_model or "").lower().strip(),
+                active_quality_score=round(self._as_float(active_quality_score), 4),
+                signal_confidence=round(self._as_float(signal_confidence, confidence), 4),
                 confidence=round(float(confidence or 0.0), 4),
                 accepted=accepted,
                 reject_reason=reject_reason,
@@ -1184,6 +1225,13 @@ class AdaptiveSignalEngine:
             v2_ctx.update(triggers or {})
             v2 = compute_shadow_score_v2(v2_ctx)
             v3 = compute_shadow_score_v3(v2_ctx)
+            confidence_v1_value = float(
+                meta.get(
+                    "confidence_v1",
+                    round(float(score or 0.0), 4),
+                )
+                or 0.0
+            )
 
             candidate = build_shadow_candidate(
                 symbol=coin,
@@ -1195,7 +1243,7 @@ class AdaptiveSignalEngine:
                 tp_price=tp or 0.0,
                 rr_planned=rr,
                 score_v1=score,
-                confidence_v1=confidence_value,
+                confidence_v1=confidence_v1_value,
                 score_v2=v2.get("score_v2", 0.0),
                 score_v2_version=v2.get("score_v2_version", ""),
                 score_v2_tags=v2.get("score_v2_tags", []),
@@ -1204,6 +1252,9 @@ class AdaptiveSignalEngine:
                 score_v3_version=v3.get("score_v3_version", ""),
                 score_v3_tags=v3.get("score_v3_tags", []),
                 score_v3_reason=v3.get("score_v3_reason", ""),
+                active_quality_model=meta.get("active_quality_model", ""),
+                active_quality_score=meta.get("active_quality_score", ""),
+                signal_confidence=confidence_value,
                 engine_decision="accepted" if accepted else "rejected",
                 engine_reject_reason=reject_reason,
                 setup_family=family,
@@ -2758,7 +2809,7 @@ class AdaptiveSignalEngine:
             )
             return None
 
-        confidence_v1 = round(min(0.95, max(0.50, chosen_score)), 3)
+        confidence_v1 = round(float(chosen_score), 4)
         confidence = confidence_v1
         breakout_failure_note = next(
             (
@@ -2898,11 +2949,17 @@ class AdaptiveSignalEngine:
         from signal_engine_modules.score_adapter import compute_all_shadow_scores
         _shadow_fields = compute_all_shadow_scores(meta, coin, chosen_side, debug=self.debug)
         meta.update(_shadow_fields)
+        confidence = self._stamp_active_quality(
+            meta,
+            score_v1=chosen_score,
+            confidence_v1=confidence_v1,
+            threshold_v1=effective_threshold,
+        )
 
         if LIVE_ELIGIBILITY_MODEL == "v3":
-            score_v3 = float(meta.get("score_v3", 0.0) or 0.0)
-            v3_reject_reason = self._v3_eligibility_reject_reason(score_v3, htf_regime)
+            v3_reject_reason = self._v3_eligibility_reject_reason(meta.get("score_v3"), htf_regime)
             if v3_reject_reason:
+                score_v3 = float(meta.get("active_quality_score", 0.0) or 0.0)
                 self._log_smc_candidate(
                     coin=coin,
                     timeframe="1h",
@@ -2910,7 +2967,12 @@ class AdaptiveSignalEngine:
                     triggers=triggers,
                     side=chosen_side,
                     score=chosen_score,
+                    score_v2=meta.get("score_v2", 0.0),
+                    score_v3=meta.get("score_v3", 0.0),
                     confidence=confidence,
+                    active_quality_model=meta.get("active_quality_model", ""),
+                    active_quality_score=meta.get("active_quality_score", 0.0),
+                    signal_confidence=confidence,
                     accepted=False,
                     reject_reason=v3_reject_reason,
                     entry=price,
@@ -2939,6 +3001,9 @@ class AdaptiveSignalEngine:
                     macro_regime=macro_regime, session=session_label,
                     setup_family=setup_family,
                     metadata=f"live_model=v3|score_v3={score_v3:.3f}",
+                    active_quality_model=meta.get("active_quality_model", ""),
+                    active_quality_score=meta.get("active_quality_score", 0.0),
+                    signal_confidence=confidence,
                 )
                 self._log_shadow_research_candidate(
                     coin=coin, timeframe="1h", row=row, triggers=triggers,
@@ -2961,29 +3026,6 @@ class AdaptiveSignalEngine:
                 )
                 return None
 
-        # Unify confidence with active eligibility model.
-        if LIVE_ELIGIBILITY_MODEL == "v3":
-            _active_v3 = float(meta.get("score_v3", 0.0) or 0.0)
-            if _active_v3 <= 0:
-                log_gate_reject(
-                    symbol=coin, timeframe="1h", side=chosen_side,
-                    reject_reason="v3_score_missing_for_live_model",
-                    raw_score=chosen_score, price=price,
-                    atr=float(row.get("atr_14", 0.0)),
-                    market_regime=market_regime, htf_regime=htf_regime,
-                    macro_regime=macro_regime, session=session_label,
-                    setup_family=setup_family,
-                )
-                return None
-            confidence = round(min(0.95, max(0.50, _active_v3)), 3)
-            meta["active_quality_model"] = "v3"
-            meta["active_quality_score"] = round(_active_v3, 4)
-            meta["confidence_v1"] = confidence_v1
-        else:
-            meta["active_quality_model"] = "v1"
-            meta["active_quality_score"] = round(float(chosen_score), 4)
-            meta["confidence_v1"] = confidence_v1
-
         if self.debug:
             _v2_display = meta.get("score_v2", "n/a")
             _v3_display = meta.get("score_v3", "n/a")
@@ -3004,7 +3046,12 @@ class AdaptiveSignalEngine:
             triggers=triggers,
             side=chosen_side,
             score=chosen_score,
+            score_v2=meta.get("score_v2", 0.0),
+            score_v3=meta.get("score_v3", 0.0),
             confidence=confidence,
+            active_quality_model=meta.get("active_quality_model", ""),
+            active_quality_score=meta.get("active_quality_score", 0.0),
+            signal_confidence=confidence,
             accepted=True,
             reject_reason="",
             entry=price,
@@ -3669,31 +3716,8 @@ class AdaptiveSignalEngine:
                 )
                 return None
 
-        confidence_v1 = round(min(0.95, max(0.55, score)), 3)
+        confidence_v1 = round(float(score), 4)
         confidence = confidence_v1
-
-        # Unify confidence with active eligibility model.
-        if LIVE_ELIGIBILITY_MODEL == "v3":
-            _active_v3 = float(meta.get("score_v3", 0.0) or 0.0)
-            if _active_v3 <= 0:
-                log_gate_reject(
-                    symbol=coin, timeframe=swing_tf, side=side,
-                    reject_reason="v3_score_missing_for_live_model",
-                    raw_score=score, price=price,
-                    atr=float(row.get("atr_14", 0.0)),
-                    market_regime=market_regime, htf_regime=htf_regime,
-                    macro_regime=macro_regime, session=session_label,
-                    setup_family=swing_family,
-                )
-                return None
-            confidence = round(min(0.95, max(0.50, _active_v3)), 3)
-            meta["active_quality_model"] = "v3"
-            meta["active_quality_score"] = round(_active_v3, 4)
-            meta["confidence_v1"] = confidence_v1
-        else:
-            meta["active_quality_model"] = "v1"
-            meta["active_quality_score"] = round(float(score), 4)
-            meta["confidence_v1"] = confidence_v1
 
         combined_regime = (
             "swing_" + swing_tf
@@ -3727,11 +3751,17 @@ class AdaptiveSignalEngine:
         from signal_engine_modules.score_adapter import compute_all_shadow_scores
         _shadow_fields = compute_all_shadow_scores(meta, coin, side, debug=self.debug)
         meta.update(_shadow_fields)
+        confidence = self._stamp_active_quality(
+            meta,
+            score_v1=score,
+            confidence_v1=confidence_v1,
+            threshold_v1=threshold,
+        )
 
         if LIVE_ELIGIBILITY_MODEL == "v3":
-            score_v3 = float(meta.get("score_v3", 0.0) or 0.0)
-            v3_reject_reason = self._v3_eligibility_reject_reason(score_v3, htf_regime)
+            v3_reject_reason = self._v3_eligibility_reject_reason(meta.get("score_v3"), htf_regime)
             if v3_reject_reason:
+                score_v3 = float(meta.get("active_quality_score", 0.0) or 0.0)
                 self._log_smc_candidate(
                     coin=coin,
                     timeframe=swing_tf,
@@ -3739,7 +3769,12 @@ class AdaptiveSignalEngine:
                     triggers=triggers,
                     side=side,
                     score=score,
+                    score_v2=meta.get("score_v2", 0.0),
+                    score_v3=meta.get("score_v3", 0.0),
                     confidence=confidence,
+                    active_quality_model=meta.get("active_quality_model", ""),
+                    active_quality_score=meta.get("active_quality_score", 0.0),
+                    signal_confidence=confidence,
                     accepted=False,
                     reject_reason=v3_reject_reason,
                     entry=price,
@@ -3768,6 +3803,9 @@ class AdaptiveSignalEngine:
                     macro_regime=macro_regime, session=session_label,
                     setup_family=swing_family,
                     metadata=f"live_model=v3|score_v3={score_v3:.3f}",
+                    active_quality_model=meta.get("active_quality_model", ""),
+                    active_quality_score=meta.get("active_quality_score", 0.0),
+                    signal_confidence=confidence,
                 )
                 self._log_shadow_research_candidate(
                     coin=coin, timeframe=swing_tf, row=row, triggers=triggers,
@@ -3798,7 +3836,12 @@ class AdaptiveSignalEngine:
             triggers=triggers,
             side=side,
             score=score,
+            score_v2=meta.get("score_v2", 0.0),
+            score_v3=meta.get("score_v3", 0.0),
             confidence=confidence,
+            active_quality_model=meta.get("active_quality_model", ""),
+            active_quality_score=meta.get("active_quality_score", 0.0),
+            signal_confidence=confidence,
             accepted=True,
             reject_reason="",
             entry=price,

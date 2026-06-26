@@ -57,6 +57,9 @@ FIELD_ALIASES = {
     "confidence_v1": ["confidence_v1", "confidence"],
     "score_v2": ["score_v2"],
     "score_v3": ["score_v3"],
+    "active_quality_model": ["active_quality_model"],
+    "active_quality_score": ["active_quality_score"],
+    "signal_confidence": ["signal_confidence", "confidence"],
     "score_v2_tags": ["score_v2_tags"],
     "score_v3_tags": ["score_v3_tags"],
     "live_reject_reason": [
@@ -77,6 +80,7 @@ OUTPUT_FIELDS = [
     "bars_held", "same_candle_conflict", "max_hold_bars",
     "setup_family", "session", "market_regime", "htf_regime", "macro_regime",
     "score_v1", "confidence_v1", "score_v2", "score_v3",
+    "active_quality_model", "active_quality_score", "signal_confidence",
     "score_v2_tags", "score_v3_tags", "live_reject_reason", "metadata",
 ]
 
@@ -772,6 +776,9 @@ def main():
             "confidence_v1": trade.get("confidence_v1", ""),
             "score_v2": trade.get("score_v2", ""),
             "score_v3": trade.get("score_v3", ""),
+            "active_quality_model": trade.get("active_quality_model", ""),
+            "active_quality_score": trade.get("active_quality_score", ""),
+            "signal_confidence": trade.get("signal_confidence", ""),
             "score_v2_tags": trade.get("score_v2_tags", ""),
             "score_v3_tags": trade.get("score_v3_tags", ""),
             "live_reject_reason": trade.get("live_reject_reason", ""),

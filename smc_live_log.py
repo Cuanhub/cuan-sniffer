@@ -28,6 +28,12 @@ HEADER = [
     "score",
     "raw_score",
     "total_score",
+    "score_v1",
+    "score_v2",
+    "score_v3",
+    "active_quality_model",
+    "active_quality_score",
+    "signal_confidence",
     "threshold",
     "effective_threshold",
     "confidence",
@@ -244,6 +250,8 @@ def append_smc_live_event(**fields: Any) -> None:
         _copy_first_present(row, "symbol", "coin")
         _copy_first_present(row, "raw_score", "score")
         _copy_first_present(row, "total_score", "score", "raw_score")
+        _copy_first_present(row, "score_v1", "total_score", "score", "raw_score")
+        _copy_first_present(row, "signal_confidence", "confidence")
         _copy_first_present(row, "rr_planned", "rr")
         _copy_first_present(row, "regime_htf_1h", "htf_regime")
         _copy_first_present(row, "regime_macro_4h", "macro_regime")

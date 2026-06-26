@@ -19,6 +19,7 @@ _EXECUTOR_REJECT_FIELDS = [
     "timestamp", "signal_id", "symbol", "coin", "side",
     "entry_price", "stop_price", "tp_price",
     "confidence", "required_confidence", "total_score",
+    "active_quality_model", "active_quality_score", "signal_confidence",
     "rr", "required_rr", "reject_reason", "session", "setup_family",
     "market_regime", "regime", "timeframe", "current_price", "price_move_r",
 ]
@@ -116,6 +117,9 @@ def log_executor_reject(
             "confidence": round(float(confidence), 4),
             "required_confidence": round(float(required_confidence), 4),
             "total_score": missed.get("total_score", ""),
+            "active_quality_model": missed.get("active_quality_model", ""),
+            "active_quality_score": missed.get("active_quality_score", ""),
+            "signal_confidence": missed.get("signal_confidence", round(float(confidence), 4)),
             "rr": round(float(rr), 4),
             "required_rr": round(float(required_rr), 4),
             "reject_reason": reject_reason,

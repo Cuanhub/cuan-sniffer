@@ -228,6 +228,7 @@ def validate_thresholds() -> bool:
     feature_flags = {
         "SMC_ENABLE_4H_LIVE":      os.getenv("SMC_ENABLE_4H_LIVE",      "true"),
         "HARD_BLOCK_CONTINUATION": os.getenv("HARD_BLOCK_CONTINUATION", "false"),
+        "LIVE_ELIGIBILITY_MODEL":  os.getenv("LIVE_ELIGIBILITY_MODEL",  "v3"),
     }
 
     sep = "─" * 58
@@ -277,7 +278,11 @@ def validate_thresholds() -> bool:
     print(f"  {sep}")
     print("  FEATURE FLAGS:")
     for name, val in feature_flags.items():
-        print(f"    {name:<36} = {val}")
+        marker = ""
+        if name == "LIVE_ELIGIBILITY_MODEL" and str(val).strip().lower() not in {"v1", "v3"}:
+            marker = "  ← [THRESHOLD WARNING] supported values: v1, v3"
+            all_aligned = False
+        print(f"    {name:<36} = {val}{marker}")
 
     print(f"[THRESHOLD SUMMARY] {sep}\n")
 

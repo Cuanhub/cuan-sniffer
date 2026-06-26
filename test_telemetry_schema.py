@@ -26,6 +26,7 @@ class TestSmcTelemetrySchemaMigration(unittest.TestCase):
                     event_type="score_candidate",
                     coin="SOL",
                     score=0.72,
+                    confidence=0.72,
                     rr=1.8,
                     htf_regime="up",
                     macro_regime="chop",
@@ -47,6 +48,12 @@ class TestSmcTelemetrySchemaMigration(unittest.TestCase):
                     "executor_result",
                     "rr_planned",
                     "total_score",
+                    "score_v1",
+                    "score_v2",
+                    "score_v3",
+                    "active_quality_model",
+                    "active_quality_score",
+                    "signal_confidence",
                     "reason_text",
                     "regime",
                     "regime_local",
@@ -70,6 +77,8 @@ class TestSmcTelemetrySchemaMigration(unittest.TestCase):
                 self.assertEqual(latest["symbol"], "SOL")
                 self.assertAlmostEqual(float(latest["raw_score"]), 0.72)
                 self.assertAlmostEqual(float(latest["total_score"]), 0.72)
+                self.assertAlmostEqual(float(latest["score_v1"]), 0.72)
+                self.assertAlmostEqual(float(latest["signal_confidence"]), 0.72)
                 self.assertAlmostEqual(float(latest["rr_planned"]), 1.8)
                 self.assertEqual(latest["regime_htf_1h"], "up")
                 self.assertEqual(latest["regime_macro_4h"], "chop")
@@ -113,7 +122,12 @@ class TestExecutorRejectSchemaMigration(unittest.TestCase):
                     tp_price=104.0,
                     confidence=0.91,
                     regime="continuation|htf_up",
-                    meta={"total_score": 0.88, "session": "ny_open"},
+                    meta={
+                        "total_score": 0.88,
+                        "session": "ny_open",
+                        "active_quality_model": "v3",
+                        "active_quality_score": 0.91,
+                    },
                 )
 
                 executor.Executor._log_missed(ex, signal, 42, "rr_too_low")
@@ -140,6 +154,9 @@ class TestExecutorRejectSchemaMigration(unittest.TestCase):
                     "stop_price",
                     "tp_price",
                     "total_score",
+                    "active_quality_model",
+                    "active_quality_score",
+                    "signal_confidence",
                     "regime",
                     "current_price",
                     "price_move_r",
@@ -153,6 +170,9 @@ class TestExecutorRejectSchemaMigration(unittest.TestCase):
                 self.assertAlmostEqual(float(row["stop_price"]), 98.0)
                 self.assertAlmostEqual(float(row["tp_price"]), 104.0)
                 self.assertAlmostEqual(float(row["total_score"]), 0.88)
+                self.assertEqual(row["active_quality_model"], "v3")
+                self.assertAlmostEqual(float(row["active_quality_score"]), 0.91)
+                self.assertAlmostEqual(float(row["signal_confidence"]), 0.91)
                 self.assertEqual(row["regime"], "continuation|htf_up")
                 self.assertAlmostEqual(float(row["current_price"]), 103.0)
                 self.assertAlmostEqual(float(row["price_move_r"]), 1.5)

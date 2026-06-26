@@ -101,6 +101,9 @@ class TestShadowResearchIds(unittest.TestCase):
                     "score_v3_version",
                     "score_v3_tags",
                     "score_v3_reason",
+                    "active_quality_model",
+                    "active_quality_score",
+                    "signal_confidence",
                 }
             ]
 
@@ -160,6 +163,9 @@ class TestShadowResearchIds(unittest.TestCase):
                 score_v3_version="v3_2026_06_factor_shadow",
                 score_v3_tags="+fvg,+ob,v3_full_recipe",
                 score_v3_reason="+fvg, +ob",
+                active_quality_model="v3",
+                active_quality_score=0.92,
+                signal_confidence=0.92,
                 engine_decision="accepted",
             )
 
@@ -177,6 +183,7 @@ class TestShadowResearchIds(unittest.TestCase):
             self.assertEqual(rows["old36"]["engine_decision"], "accepted")
             self.assertEqual(rows["old36"]["setup_family"], "reversal")
             self.assertEqual(rows["old36"]["score_v3"], "")
+            self.assertEqual(rows["old36"]["active_quality_model"], "")
 
             self.assertEqual(rows["new40"]["score_v3"], "0.75")
             self.assertEqual(rows["new40"]["score_v3_version"], "v3_2026_06_factor_shadow")
@@ -187,6 +194,9 @@ class TestShadowResearchIds(unittest.TestCase):
             self.assertEqual(rows["new40"]["source"], "signal_engine")
 
             self.assertEqual(rows[appended["shadow_id"]]["score_v3"], "0.92")
+            self.assertEqual(rows[appended["shadow_id"]]["active_quality_model"], "v3")
+            self.assertEqual(rows[appended["shadow_id"]]["active_quality_score"], "0.92")
+            self.assertEqual(rows[appended["shadow_id"]]["signal_confidence"], "0.92")
 
     def test_candidate_migration_repairs_previously_shifted_v3_rows(self):
         with tempfile.TemporaryDirectory() as tmp:

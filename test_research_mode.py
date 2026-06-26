@@ -85,6 +85,52 @@ class TestResearchOnlyMode(unittest.TestCase):
         ret_idx = src.index("return ExecutorResult", ler_idx)
         self.assertLess(ler_idx, ret_idx)
 
+    def test_research_mode_logs_broad_chop_lane_before_blocking_order(self):
+        path = tempfile.mktemp(suffix=".csv")
+        mod = _reload_executor({
+            "RESEARCH_ONLY_MODE": "true",
+            "STARTING_BALANCE": "10000",
+            "HARD_BLOCK_CHOP": "true",
+            "SHADOW_CHOP_LANE_PATH": path,
+        })
+        ex = object.__new__(mod.Executor)
+        ex._live_mode = False
+        ex.notify = MagicMock()
+        ex.backend = MagicMock()
+        ex.signal_engine = None
+
+        try:
+            sig = FakeSignal(
+                coin="WIF",
+                side="LONG",
+                confidence=0.82,
+                regime="reversal|htf_down|macro_chop|mkt_chop",
+                meta={
+                    "session": "ny_open",
+                    "setup_family": "reversal",
+                    "market_regime": "chop",
+                    "regime_htf_1h": "down",
+                    "regime_macro_4h": "chop",
+                    "timeframe": "1h",
+                    "total_score": 0.62,
+                    "score_v2": 0.71,
+                    "score_v3": 0.84,
+                    "active_quality_model": "v3",
+                    "active_quality_score": 0.84,
+                },
+            )
+            result = ex._on_signal_inner(sig, sig_id=7)
+            self.assertFalse(result.traded)
+            self.assertEqual(result.reason, "research_only_mode")
+            with open(path) as fh:
+                lines = fh.readlines()
+            self.assertEqual(len(lines), 2)
+            self.assertIn("WIF", lines[1])
+            self.assertIn("preferred_symbol", lines[1])
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
 
 class TestBroadChopLane(unittest.TestCase):
 
