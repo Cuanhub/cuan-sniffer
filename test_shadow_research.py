@@ -10,6 +10,7 @@ import pandas as pd
 
 from score_v2 import compute_shadow_score_v2
 from shadow_research import (
+    CANDIDATE_FIELDS,
     append_shadow_candidate,
     append_shadow_execution,
     build_shadow_candidate,
@@ -89,6 +90,181 @@ class TestShadowResearchIds(unittest.TestCase):
                 rows = list(csv.DictReader(fh))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["shadow_id"], row["shadow_id"])
+
+    def test_candidate_header_migration_preserves_inserted_v3_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "candidates.csv")
+            old_fields = [
+                field for field in CANDIDATE_FIELDS
+                if field not in {
+                    "score_v3",
+                    "score_v3_version",
+                    "score_v3_tags",
+                    "score_v3_reason",
+                }
+            ]
+
+            old_row = {field: "" for field in old_fields}
+            old_row.update({
+                "timestamp_utc": "2026-06-21T13:33:15Z",
+                "shadow_id": "old36",
+                "setup_key": "old-setup",
+                "symbol": "SOL",
+                "timeframe": "1h",
+                "bar_time": "2026-06-21T13:00:00Z",
+                "side": "LONG",
+                "score_v2_reason": "old v2 reason",
+                "engine_decision": "accepted",
+                "setup_family": "reversal",
+                "session": "london_open",
+                "source": "signal_engine",
+            })
+
+            stale_new_row = {field: "" for field in CANDIDATE_FIELDS}
+            stale_new_row.update({
+                "timestamp_utc": "2026-06-21T14:33:15Z",
+                "shadow_id": "new40",
+                "setup_key": "new-setup",
+                "symbol": "SUI",
+                "timeframe": "1h",
+                "bar_time": "2026-06-21T14:00:00Z",
+                "side": "SHORT",
+                "score_v2": "0.76",
+                "score_v2_reason": "new v2 reason",
+                "score_v3": "0.75",
+                "score_v3_version": "v3_2026_06_factor_shadow",
+                "score_v3_tags": "+fvg,+ob",
+                "score_v3_reason": "+fvg, +ob",
+                "engine_decision": "rejected",
+                "engine_reject_reason": "score_below_threshold",
+                "setup_family": "continuation",
+                "session": "ny_open",
+                "price": "123.45",
+                "vol_ratio": "0.0123",
+                "source": "signal_engine",
+            })
+
+            with open(path, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(old_fields)
+                writer.writerow([old_row.get(field, "") for field in old_fields])
+                writer.writerow([stale_new_row.get(field, "") for field in CANDIDATE_FIELDS])
+
+            appended = build_shadow_candidate(
+                symbol="JTO",
+                timeframe="1h",
+                bar_time="2026-06-21T15:00:00Z",
+                side="LONG",
+                setup_family="continuation",
+                score_v3=0.92,
+                score_v3_version="v3_2026_06_factor_shadow",
+                score_v3_tags="+fvg,+ob,v3_full_recipe",
+                score_v3_reason="+fvg, +ob",
+                engine_decision="accepted",
+            )
+
+            with patch.dict(os.environ, {"SHADOW_RESEARCH_ENABLED": "true"}, clear=False):
+                self.assertTrue(append_shadow_candidate(appended, path=path))
+
+            with open(path, newline="", encoding="utf-8") as fh:
+                raw_rows = list(csv.reader(fh))
+            self.assertEqual(raw_rows[0], CANDIDATE_FIELDS)
+            self.assertTrue(all(len(row) == len(CANDIDATE_FIELDS) for row in raw_rows[1:]))
+
+            with open(path, newline="", encoding="utf-8") as fh:
+                rows = {row["shadow_id"]: row for row in csv.DictReader(fh)}
+
+            self.assertEqual(rows["old36"]["engine_decision"], "accepted")
+            self.assertEqual(rows["old36"]["setup_family"], "reversal")
+            self.assertEqual(rows["old36"]["score_v3"], "")
+
+            self.assertEqual(rows["new40"]["score_v3"], "0.75")
+            self.assertEqual(rows["new40"]["score_v3_version"], "v3_2026_06_factor_shadow")
+            self.assertEqual(rows["new40"]["score_v3_tags"], "+fvg,+ob")
+            self.assertEqual(rows["new40"]["engine_decision"], "rejected")
+            self.assertEqual(rows["new40"]["setup_family"], "continuation")
+            self.assertEqual(rows["new40"]["session"], "ny_open")
+            self.assertEqual(rows["new40"]["source"], "signal_engine")
+
+            self.assertEqual(rows[appended["shadow_id"]]["score_v3"], "0.92")
+
+    def test_candidate_migration_repairs_previously_shifted_v3_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "candidates.csv")
+            shifted_row = {field: "" for field in CANDIDATE_FIELDS}
+            shifted_row.update({
+                "timestamp_utc": "2026-06-21T14:36:51Z",
+                "shadow_id": "shifted40",
+                "setup_key": "shifted-setup",
+                "symbol": "JTO",
+                "timeframe": "1h",
+                "bar_time": "2026-06-21T14:00:00Z",
+                "side": "SHORT",
+                "entry_price": "0.70489000",
+                "score_v2": "0.46",
+                "score_v2_version": "v2_2026_06_factor_shadow",
+                "score_v2_tags": "+fvg,+macro_chop",
+                "score_v2_reason": "+fvg, +macro_chop",
+                "score_v3": "0.56",
+                "score_v3_version": "v3_2026_06_factor_shadow",
+                "score_v3_tags": "missing_macro_regime,+preferred_symbol",
+                "score_v3_reason": "+preferred_symbol",
+                "engine_decision": "0.72",
+                "engine_reject_reason": "v3_2026_06_factor_shadow",
+                "setup_family": "+fvg,+macro_chop,+htf_down",
+                "swing_family": "+fvg, +macro_chop, +htf_down",
+                "session": "rejected",
+                "market_regime": "score_below_threshold:0.490<0.640",
+                "htf_regime": "reversal",
+                "macro_regime": "",
+                "edge_buckets": "asia_late",
+                "edge_bucket_count": "weak_trend",
+                "independent_bucket_count": "down",
+                "governance_reason": "chop",
+                "triggers": "execution_quality,orderflow,price_location",
+                "stop_method": "5",
+                "atr": "4",
+                "price": "pass",
+                "vol_state": "fvg_bull,fvg_bear",
+                "vol_ratio": "",
+                "source": "0.01695289",
+            })
+
+            with open(path, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=CANDIDATE_FIELDS)
+                writer.writeheader()
+                writer.writerow(shifted_row)
+
+            appended = build_shadow_candidate(
+                symbol="SOL",
+                timeframe="1h",
+                bar_time="2026-06-21T15:00:00Z",
+                side="LONG",
+                setup_family="reversal",
+                engine_decision="accepted",
+            )
+            with patch.dict(os.environ, {"SHADOW_RESEARCH_ENABLED": "true"}, clear=False):
+                self.assertTrue(append_shadow_candidate(appended, path=path))
+
+            with open(path, newline="", encoding="utf-8") as fh:
+                rows = {row["shadow_id"]: row for row in csv.DictReader(fh)}
+
+            repaired = rows["shifted40"]
+            self.assertEqual(repaired["score_v3"], "0.72")
+            self.assertEqual(repaired["score_v3_tags"], "+fvg,+macro_chop,+htf_down")
+            self.assertEqual(repaired["engine_decision"], "rejected")
+            self.assertEqual(repaired["engine_reject_reason"], "score_below_threshold:0.490<0.640")
+            self.assertEqual(repaired["setup_family"], "reversal")
+            self.assertEqual(repaired["session"], "asia_late")
+            self.assertEqual(repaired["market_regime"], "weak_trend")
+            self.assertEqual(repaired["htf_regime"], "down")
+            self.assertEqual(repaired["macro_regime"], "chop")
+            self.assertEqual(repaired["edge_bucket_count"], "5")
+            self.assertEqual(repaired["independent_bucket_count"], "4")
+            self.assertEqual(repaired["governance_reason"], "pass")
+            self.assertEqual(repaired["triggers"], "fvg_bull,fvg_bear")
+            self.assertEqual(repaired["atr"], "0.01695289")
+            self.assertEqual(repaired["source"], "signal_engine")
 
 
 class TestShadowForwardOutcome(unittest.TestCase):

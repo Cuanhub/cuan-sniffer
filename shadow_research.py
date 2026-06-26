@@ -424,30 +424,98 @@ def build_shadow_candidate(
     }
 
 
+def _repair_shifted_candidate_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Repair rows previously migrated from the 36-column candidate schema with
+    DictReader after the four V3 fields had been inserted before engine_decision.
+    """
+    decision = str(row.get("engine_decision", "") or "").strip().lower()
+    shifted_decision = str(row.get("session", "") or "").strip().lower()
+    if decision in {"", "accepted", "rejected"}:
+        return row
+    if shifted_decision not in {"accepted", "rejected"}:
+        return row
+    if not str(row.get("engine_reject_reason", "") or "").startswith("v3_"):
+        return row
+
+    original = dict(row)
+    repaired = dict(row)
+    repaired.update({
+        "score_v3": original.get("engine_decision", ""),
+        "score_v3_version": original.get("engine_reject_reason", ""),
+        "score_v3_tags": original.get("setup_family", ""),
+        "score_v3_reason": original.get("swing_family", ""),
+        "engine_decision": original.get("session", ""),
+        "engine_reject_reason": original.get("market_regime", ""),
+        "setup_family": original.get("htf_regime", ""),
+        "swing_family": original.get("macro_regime", ""),
+        "session": original.get("edge_buckets", ""),
+        "market_regime": original.get("edge_bucket_count", ""),
+        "htf_regime": original.get("independent_bucket_count", ""),
+        "macro_regime": original.get("governance_reason", ""),
+        "edge_buckets": original.get("triggers", ""),
+        "edge_bucket_count": original.get("stop_method", ""),
+        "independent_bucket_count": original.get("atr", ""),
+        "governance_reason": original.get("price", ""),
+        "triggers": original.get("vol_state", ""),
+        "stop_method": original.get("vol_ratio", ""),
+        "atr": original.get("source", ""),
+        "price": original.get("entry_price", ""),
+        "vol_state": "",
+        "vol_ratio": "",
+        "source": "signal_engine",
+    })
+    return repaired
+
+
 def _ensure_header(path: Path, fields: Sequence[str]) -> None:
+    expected = list(fields)
     if path.parent and str(path.parent) not in {"", "."}:
         path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists() or path.stat().st_size == 0:
         with path.open("w", newline="", encoding="utf-8") as fh:
-            csv.DictWriter(fh, fieldnames=fields).writeheader()
+            csv.DictWriter(fh, fieldnames=expected).writeheader()
         return
 
     try:
         with path.open("r", newline="", encoding="utf-8") as fh:
-            reader = csv.DictReader(fh)
-            existing = list(reader.fieldnames or [])
-            if all(f in existing for f in fields):
-                return
-            rows = list(reader)
+            raw_rows = list(csv.reader(fh))
+
+        if not raw_rows:
+            with path.open("w", newline="", encoding="utf-8") as fh:
+                csv.DictWriter(fh, fieldnames=expected).writeheader()
+            return
+
+        existing = list(raw_rows[0])
+        changed = existing != expected
+        missing_expected = [field for field in expected if field not in existing]
+        data_rows = []
+        for values in raw_rows[1:]:
+            migrated = {field: "" for field in expected}
+            if missing_expected and len(values) == len(expected):
+                # Header was stale but rows were already written with the new
+                # canonical field order. Preserve inserted middle columns.
+                migrated.update(dict(zip(expected, values)))
+            else:
+                migrated.update(dict(zip(existing, values)))
+            if expected == CANDIDATE_FIELDS:
+                repaired = _repair_shifted_candidate_row(migrated)
+                if repaired != migrated:
+                    changed = True
+                migrated = repaired
+            data_rows.append(migrated)
+
+        if not changed:
+            return
 
         tmp = path.with_suffix(path.suffix + ".mig")
         with tmp.open("w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+            writer = csv.DictWriter(fh, fieldnames=expected, extrasaction="ignore")
             writer.writeheader()
-            for row in rows:
-                writer.writerow({f: row.get(f, "") for f in fields})
+            for row in data_rows:
+                writer.writerow({field: row.get(field, "") for field in expected})
         os.replace(str(tmp), str(path))
-        print(f"[SHADOW_RESEARCH] migrated header: {path.name} ({len(existing)}→{len(fields)} fields)")
+        print(f"[SHADOW_RESEARCH] migrated header: {path.name} ({len(existing)}→{len(expected)} fields)")
     except Exception as exc:
         print(f"[SHADOW_RESEARCH] header migration failed for {path.name}: {exc}")
 

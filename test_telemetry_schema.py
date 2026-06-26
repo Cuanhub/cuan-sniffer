@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import executor
+import executor_modules.telemetry as executor_telemetry
 import smc_live_log
 
 
@@ -90,13 +91,15 @@ class TestExecutorRejectSchemaMigration(unittest.TestCase):
             )
 
             old_reject_path = executor.EXECUTOR_REJECTS_PATH
+            old_telemetry_reject_path = executor_telemetry.EXECUTOR_REJECTS_PATH
             old_missed_path = executor.MISSED_LOG_FILE
             old_log_missed = executor.LOG_MISSED
             try:
                 executor.EXECUTOR_REJECTS_PATH = str(reject_path)
+                executor_telemetry.EXECUTOR_REJECTS_PATH = str(reject_path)
                 executor.MISSED_LOG_FILE = str(missed_path)
                 executor.LOG_MISSED = True
-                executor._MISSED_CONTEXTS.clear()
+                executor_telemetry._MISSED_CONTEXTS.clear()
 
                 ex = object.__new__(executor.Executor)
                 ex.backend = SimpleNamespace(get_cached_mid_price=lambda coin: 103.0)
@@ -155,9 +158,10 @@ class TestExecutorRejectSchemaMigration(unittest.TestCase):
                 self.assertAlmostEqual(float(row["price_move_r"]), 1.5)
             finally:
                 executor.EXECUTOR_REJECTS_PATH = old_reject_path
+                executor_telemetry.EXECUTOR_REJECTS_PATH = old_telemetry_reject_path
                 executor.MISSED_LOG_FILE = old_missed_path
                 executor.LOG_MISSED = old_log_missed
-                executor._MISSED_CONTEXTS.clear()
+                executor_telemetry._MISSED_CONTEXTS.clear()
 
 
 if __name__ == "__main__":
