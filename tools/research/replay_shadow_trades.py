@@ -34,6 +34,12 @@ try:
 except ImportError:
     requests = None
 
+from executor_modules.execution_policy import (
+    ExecutionPolicyConfig,
+    ExecutionPolicyResult,
+    evaluate_execution_policy,
+)
+
 HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info"
 DEFAULT_SHADOW_REPLAY_INPUT = "shadow_research_candidates.csv"
 
@@ -47,12 +53,15 @@ FIELD_ALIASES = {
     "stop": ["stop", "stop_price"],
     "tp": ["tp", "tp_price", "take_profit"],
     "rr": ["rr", "rr_planned", "planned_rr", "final_rr"],
+    "atr": ["atr"],
     "timeframe": ["timeframe"],
     "setup_family": ["setup_family", "regime_local"],
     "session": ["session"],
     "market_regime": ["market_regime"],
     "htf_regime": ["htf_regime", "regime_htf_1h"],
     "macro_regime": ["macro_regime", "regime_macro_4h"],
+    "regime": ["regime"],
+    "execution_track": ["execution_track", "track"],
     "score_v1": ["score_v1", "score", "total_score"],
     "confidence_v1": ["confidence_v1", "confidence"],
     "score_v2": ["score_v2"],
@@ -76,6 +85,8 @@ REQUIRED_FIELDS = {"timestamp", "symbol", "side", "entry", "stop", "tp"}
 
 OUTPUT_FIELDS = [
     "timestamp", "symbol", "side", "timeframe", "entry", "stop", "tp",
+    "policy", "policy_reject_reason", "policy_final_stop", "policy_final_tp",
+    "policy_final_rr",
     "risk", "exit_time", "exit_price", "exit_reason", "realized_R",
     "bars_held", "same_candle_conflict", "max_hold_bars",
     "setup_family", "session", "market_regime", "htf_regime", "macro_regime",
@@ -106,6 +117,7 @@ def _parse_row(row: Dict[str, str]) -> Optional[Dict[str, Any]]:
         parsed["entry"] = float(parsed["entry"])
         parsed["stop"] = float(parsed["stop"])
         parsed["tp"] = float(parsed["tp"])
+        parsed["atr"] = float(parsed["atr"]) if parsed.get("atr") else 0.0
     except (ValueError, TypeError):
         return None
 
@@ -185,6 +197,66 @@ def fetch_candles(
 
 
 # ── Replay logic ─────────────────────────────────────────────────────
+
+POLICY_CHOICES = ("engine_only", "production_executor", "no_stop_redesign", "no_chop_block")
+
+
+def _policy_config(policy: str) -> ExecutionPolicyConfig:
+    if policy == "no_stop_redesign":
+        return ExecutionPolicyConfig(apply_stop_redesign=False)
+    if policy == "no_chop_block":
+        return ExecutionPolicyConfig(apply_chop_block=False, apply_dual_chop_block=False)
+    return ExecutionPolicyConfig()
+
+
+def apply_replay_policy(trade: Dict[str, Any], policy: str) -> ExecutionPolicyResult:
+    if policy == "engine_only":
+        rr = 0.0
+        risk = abs(float(trade["entry"]) - float(trade["stop"]))
+        if risk > 0:
+            rr = abs(float(trade["tp"]) - float(trade["entry"])) / risk
+        return ExecutionPolicyResult(
+            approved=True,
+            reject_reason=None,
+            entry=float(trade["entry"]),
+            original_stop=float(trade["stop"]),
+            redesigned_stop=float(trade["stop"]),
+            original_tp=float(trade["tp"]),
+            final_tp=float(trade["tp"]),
+            original_rr=rr,
+            final_rr=rr,
+            widen_mult=1.0,
+            tp_capped=False,
+            metadata={},
+        )
+
+    return evaluate_execution_policy(
+        entry=float(trade["entry"]),
+        stop=float(trade["stop"]),
+        tp=float(trade["tp"]),
+        side=str(trade["side"]),
+        atr=float(trade.get("atr", 0.0) or 0.0),
+        timeframe=str(trade.get("timeframe", "")),
+        session=str(trade.get("session", "")),
+        market_regime=str(trade.get("market_regime", "")),
+        htf_regime=str(trade.get("htf_regime", "")),
+        macro_regime=str(trade.get("macro_regime", "")),
+        setup_family=str(trade.get("setup_family", "")),
+        confidence=float(
+            trade.get("signal_confidence")
+            or trade.get("active_quality_score")
+            or trade.get("confidence_v1")
+            or 0.0
+        ),
+        config=_policy_config(policy),
+        current_price=float(trade["entry"]),
+        regime=str(trade.get("regime", "")),
+        track=str(trade.get("execution_track", "")),
+        metadata={
+            "source": "replay_shadow_trades",
+            "shadow_policy": policy,
+        },
+    )
 
 def replay_trade(
     entry: float,
@@ -639,6 +711,8 @@ def main():
     parser.add_argument("--entry-mode", choices=["next_candle", "same_candle"], default="next_candle",
                         help="next_candle=start checking after signal bar (default); same_candle=include signal bar")
     parser.add_argument("--candle-file", default="", help="JSON file with cached candles (no network). Format: {SYMBOL: [{time,open,high,low,close,volume}]}")
+    parser.add_argument("--policy", choices=POLICY_CHOICES, default="engine_only",
+                        help="Execution geometry policy to apply before replay (default: engine_only)")
     args = parser.parse_args()
 
     tp_first = args.tp_first and not args.sl_first
@@ -652,6 +726,7 @@ def main():
     print(f"  Max hold:   {args.max_hold_bars} bars")
     print(f"  Conflict:   {'TP-first' if tp_first else 'SL-first'}")
     print(f"  Entry mode: {entry_mode}")
+    print(f"  Policy:     {args.policy}")
     print(f"  Candle src: {'file: ' + args.candle_file if args.candle_file else 'Hyperliquid API'}")
     print()
 
@@ -711,6 +786,7 @@ def main():
     print(f"\n  Replaying {len(parsed)} trades...")
     results = []
     replay_skipped = Counter()
+    policy_rejects = Counter()
 
     for trade in parsed:
         sym = trade["symbol"]
@@ -735,10 +811,15 @@ def main():
             replay_skipped["bad_timestamp"] += 1
             continue
 
+        policy_result = apply_replay_policy(trade, args.policy)
+        if not policy_result.approved:
+            policy_rejects[policy_result.reject_reason or "policy_reject"] += 1
+            continue
+
         outcome = replay_trade(
-            entry=trade["entry"],
-            stop=trade["stop"],
-            tp=trade["tp"],
+            entry=policy_result.entry,
+            stop=policy_result.redesigned_stop,
+            tp=policy_result.final_tp,
             side=trade["side"],
             candles=candles,
             signal_epoch_ms=sig_epoch,
@@ -759,6 +840,11 @@ def main():
             "entry": trade["entry"],
             "stop": trade["stop"],
             "tp": trade["tp"],
+            "policy": args.policy,
+            "policy_reject_reason": "",
+            "policy_final_stop": round(policy_result.redesigned_stop, 8),
+            "policy_final_tp": round(policy_result.final_tp, 8),
+            "policy_final_rr": round(policy_result.final_rr, 4),
             "risk": outcome["risk"],
             "exit_time": outcome["exit_time"],
             "exit_price": outcome["exit_price"],
@@ -789,6 +875,8 @@ def main():
     print(f"  Replayed: {len(results)}")
     if replay_skipped:
         print(f"  Skipped: {dict(replay_skipped)}")
+    if policy_rejects:
+        print(f"  Policy rejected: {dict(policy_rejects)}")
 
     # Write output
     output_path = args.output

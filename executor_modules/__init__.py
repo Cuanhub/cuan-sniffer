@@ -3,7 +3,8 @@ Extracted executor sub-modules.
 
 Behavioral contracts:
 - telemetry.py: CSV logging for executor rejects (no trade logic)
-- stop_redesign.py: stop widening + RR validation (pure computation)
+- execution_policy.py: pure stop/RR/TP-cap geometry shared by replay/live
+- stop_redesign.py: stop widening + RR validation telemetry wrapper
 - session_filters.py: session/regime blocking decisions (pure functions)
 - position_replacement.py: replacement eligibility + quality scoring
 """
@@ -28,6 +29,12 @@ from executor_modules.stop_redesign import (
     HIGH_CONF_STOP_REDESIGN_FAMILIES,
     STOP_REDESIGN_MAX_WIDEN_MULT,
     apply_entry_stop_redesign,
+)
+from executor_modules.execution_policy import (
+    ExecutionPolicyConfig,
+    ExecutionPolicyResult,
+    evaluate_execution_policy,
+    infer_execution_track,
 )
 from executor_modules.session_filters import (
     GLOBAL_BLOCKED_SESSIONS,

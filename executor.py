@@ -112,6 +112,10 @@ from executor_modules.telemetry import (
     _stage_missed_context,
     _take_missed_context,
 )
+from executor_modules.execution_policy import (
+    ExecutionPolicyConfig,
+    evaluate_execution_policy,
+)
 
 
 # ── Unified Threshold Framework ───────────────────────────────────────────────
@@ -1517,32 +1521,40 @@ class Executor:
         # signal.tp_price is mutated in-place so _build_position picks up the cap.
         # If capped TP fails MIN_EXECUTION_EFFECTIVE_RR, the RR guard below rejects.
         _cap_combined = str(getattr(signal, "regime", "")).strip().lower()
-        if (
-            "mkt_chop" in _cap_combined
-            or "mkt_weak_trend" in _cap_combined
-            or "macro_chop" in _cap_combined
-        ):
-            _stop_dist_cap = abs(signal_price - stop_price)
-            if _stop_dist_cap > 0:
-                _cap_dist = REGIME_TP_CAP_R * _stop_dist_cap
-                if side == "LONG":
-                    _capped_tp = signal_price + _cap_dist
-                    if tp_price > _capped_tp:
-                        print(
-                            f"[TP_CAP] coin={coin} side={side} regime={_cap_combined!r} "
-                            f"old_tp={tp_price:.6f} new_tp={_capped_tp:.6f} cap_r={REGIME_TP_CAP_R:.1f}"
-                        )
-                        signal.tp_price = _capped_tp
-                        tp_price = _capped_tp
-                else:  # SHORT
-                    _capped_tp = signal_price - _cap_dist
-                    if tp_price < _capped_tp:
-                        print(
-                            f"[TP_CAP] coin={coin} side={side} regime={_cap_combined!r} "
-                            f"old_tp={tp_price:.6f} new_tp={_capped_tp:.6f} cap_r={REGIME_TP_CAP_R:.1f}"
-                        )
-                        signal.tp_price = _capped_tp
-                        tp_price = _capped_tp
+        _tp_policy = evaluate_execution_policy(
+            entry=signal_price,
+            stop=stop_price,
+            tp=tp_price,
+            side=side,
+            atr=atr,
+            timeframe=str(meta.get("timeframe", "1h")),
+            session=session,
+            market_regime=self._signal_market_regime(signal),
+            htf_regime=str(meta.get("regime_htf_1h", "")).strip().lower(),
+            macro_regime=str(meta.get("regime_macro_4h", "")).strip().lower(),
+            setup_family=self._signal_setup_family(signal),
+            confidence=float(getattr(signal, "confidence", 0.0) or 0.0),
+            config=ExecutionPolicyConfig(
+                min_execution_effective_rr=MIN_EXECUTION_EFFECTIVE_RR,
+                regime_tp_cap_r=REGIME_TP_CAP_R,
+                apply_chop_block=False,
+                apply_dual_chop_block=False,
+                apply_stop_redesign=False,
+                apply_tp_cap=True,
+                apply_effective_rr=False,
+            ),
+            regime=_cap_combined,
+            track=self._signal_track(signal),
+        )
+        if not _tp_policy.approved:
+            return _tp_policy.reject_reason
+        if _tp_policy.tp_capped:
+            print(
+                f"[TP_CAP] coin={coin} side={side} regime={_cap_combined!r} "
+                f"old_tp={tp_price:.6f} new_tp={_tp_policy.final_tp:.6f} cap_r={REGIME_TP_CAP_R:.1f}"
+            )
+            signal.tp_price = _tp_policy.final_tp
+            tp_price = _tp_policy.final_tp
 
         if signal_price <= 0 or stop_price <= 0 or tp_price <= 0:
             return "invalid_signal_levels_for_rr_guard"
@@ -1635,14 +1647,34 @@ class Executor:
                     f"[aligned={trend_aligned}, limit={drift_limit:.0%}]"
                 )
 
-        if side == "LONG":
-            rr_num = tp_price - current_price
-            rr_den = current_price - stop_price
-        else:
-            rr_num = current_price - tp_price
-            rr_den = stop_price - current_price
-
-        if rr_den <= 0:
+        _rr_policy = evaluate_execution_policy(
+            entry=signal_price,
+            stop=stop_price,
+            tp=tp_price,
+            side=side,
+            atr=atr,
+            timeframe=str(meta.get("timeframe", "1h")),
+            session=session,
+            market_regime=self._signal_market_regime(signal),
+            htf_regime=str(meta.get("regime_htf_1h", "")).strip().lower(),
+            macro_regime=str(meta.get("regime_macro_4h", "")).strip().lower(),
+            setup_family=self._signal_setup_family(signal),
+            confidence=float(getattr(signal, "confidence", 0.0) or 0.0),
+            config=ExecutionPolicyConfig(
+                min_execution_effective_rr=MIN_EXECUTION_EFFECTIVE_RR,
+                apply_chop_block=False,
+                apply_dual_chop_block=False,
+                apply_stop_redesign=False,
+                apply_tp_cap=False,
+                apply_effective_rr=True,
+            ),
+            current_price=current_price,
+            regime=_cap_combined,
+            track=self._signal_track(signal),
+        )
+        effective_rr = float(_rr_policy.final_rr)
+        if _rr_policy.reject_reason == "fill_rr_invalid_geometry":
+            rr_den = float(_rr_policy.metadata.get("execution_rr_den", 0.0) or 0.0)
             print(
                 f"[RR_GUARD] {coin} {side} reject=fill_rr_invalid_geometry "
                 f"score={score:.3f} current={current_price:.6f} entry={signal_price:.6f} "
@@ -1650,18 +1682,14 @@ class Executor:
             )
             return "fill_rr_invalid_geometry"
 
-        effective_rr = rr_num / rr_den
-        if effective_rr < MIN_EXECUTION_EFFECTIVE_RR:
+        if _rr_policy.reject_reason and _rr_policy.reject_reason.startswith("fill_rr_below_threshold"):
             print(
                 f"[RR_GUARD] {coin} {side} reject=fill_rr_below_threshold "
                 f"score={score:.3f} rr={effective_rr:.3f} min_rr={MIN_EXECUTION_EFFECTIVE_RR:.3f} "
                 f"current={current_price:.6f} entry={signal_price:.6f} "
                 f"tp={tp_price:.6f} sl={stop_price:.6f}"
             )
-            return (
-                f"fill_rr_below_threshold "
-                f"(rr={effective_rr:.2f} < {MIN_EXECUTION_EFFECTIVE_RR:.2f})"
-            )
+            return _rr_policy.reject_reason
 
         if atr <= 0:
             print(
