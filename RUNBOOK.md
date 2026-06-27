@@ -204,6 +204,35 @@ python tools/research/analyze_winrate.py
 python tools/research/analyze_smc_live.py
 ```
 
+### Run production policy replay (daily)
+
+```bash
+python3 tools/research/analyze_production_policy_replay.py
+python3 tools/research/analyze_production_policy_replay.py --days 30
+python3 tools/research/analyze_production_policy_replay.py --since 2026-06-16 --until 2026-06-27
+```
+
+Compares four scenarios using the shared execution policy:
+
+| Scenario | Purpose |
+|---|---|
+| **engine_only** | Research baseline — raw engine signals with no executor gates |
+| **production_executor** | **Promotion source of truth** — applies stop redesign, chop block, TP cap, effective RR |
+| **no_stop_redesign** | Counterfactual — what if stop widening was disabled |
+| **no_chop_block** | Counterfactual — what if chop block was disabled |
+
+**Promotion criteria** (must all pass on `production_executor`):
+- Resolved trades >= 100
+- PF > 1.50
+- Avg R > +0.20
+- Max DD < 15R
+- No single symbol > 40% of total R
+- No single day > 35% of total R
+- At least 3 profitable symbols
+- At least 60% positive trading days
+
+If `engine_only` passes but `production_executor` fails, the report prints `ENGINE_ONLY_EDGE_NOT_EXECUTABLE` — meaning the edge exists in research but executor gates destroy it.
+
 ---
 
 ## Do not
