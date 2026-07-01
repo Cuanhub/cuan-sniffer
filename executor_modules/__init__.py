@@ -58,6 +58,7 @@ from executor_modules.session_filters import (
     HARD_BLOCK_UNKNOWN_SESSION,
     HARD_BLOCKED_TIMEFRAMES,
     BLOCK_CONTINUATION_IN_CHOP,
+    BLOCK_CONTINUATION_IN_WEAK_TREND,
     BLOCK_REVERSAL_AGAINST_DUAL_TREND,
     get_hard_blocked_sessions,
     is_trend_aligned,

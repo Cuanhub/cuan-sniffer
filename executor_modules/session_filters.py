@@ -61,7 +61,7 @@ HARD_BLOCKED_COINS: Set[str] = {
 HARD_BLOCK_CONTINUATION = (
     os.getenv("HARD_BLOCK_CONTINUATION", "false").lower() == "true"
 )
-HARD_BLOCK_CHOP = os.getenv("HARD_BLOCK_CHOP", "true").lower() == "true"
+HARD_BLOCK_CHOP = os.getenv("HARD_BLOCK_CHOP", "false").lower() == "true"
 CHOP_REVERSAL_EXCEPTION = os.getenv("CHOP_REVERSAL_EXCEPTION", "false").lower() == "true"
 CHOP_REVERSAL_MIN_CONFIDENCE = float(
     os.getenv("CHOP_REVERSAL_MIN_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
@@ -76,6 +76,9 @@ HARD_BLOCKED_TIMEFRAMES: Set[str] = {
 }
 BLOCK_CONTINUATION_IN_CHOP = (
     os.getenv("BLOCK_CONTINUATION_IN_CHOP", "true").lower() == "true"
+)
+BLOCK_CONTINUATION_IN_WEAK_TREND = (
+    os.getenv("BLOCK_CONTINUATION_IN_WEAK_TREND", "false").lower() == "true"
 )
 BLOCK_REVERSAL_AGAINST_DUAL_TREND = (
     os.getenv("BLOCK_REVERSAL_AGAINST_DUAL_TREND", "true").lower() == "true"
@@ -212,6 +215,13 @@ def evaluate_regime_block(
             pass  # exception
         else:
             return True, "market_regime_block:chop"
+
+    if (
+        BLOCK_CONTINUATION_IN_WEAK_TREND
+        and setup_family == "continuation"
+        and market_regime == "weak_trend"
+    ):
+        return True, "market_regime_block:continuation_in_weak_trend"
 
     if (
         BLOCK_CONTINUATION_IN_CHOP
