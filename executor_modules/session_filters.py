@@ -78,7 +78,10 @@ BLOCK_CONTINUATION_IN_CHOP = (
     os.getenv("BLOCK_CONTINUATION_IN_CHOP", "true").lower() == "true"
 )
 BLOCK_CONTINUATION_IN_WEAK_TREND = (
-    os.getenv("BLOCK_CONTINUATION_IN_WEAK_TREND", "false").lower() == "true"
+    os.getenv("BLOCK_CONTINUATION_IN_WEAK_TREND", "true").lower() == "true"
+)
+BLOCK_REVERSAL_IN_WEAK_TREND = (
+    os.getenv("BLOCK_REVERSAL_IN_WEAK_TREND", "true").lower() == "true"
 )
 BLOCK_REVERSAL_AGAINST_DUAL_TREND = (
     os.getenv("BLOCK_REVERSAL_AGAINST_DUAL_TREND", "true").lower() == "true"
@@ -196,6 +199,16 @@ def evaluate_regime_block(
     """
     Returns (blocked: bool, reason: str) for regime/profitability gates.
     """
+    coin = str(coin or "").strip().upper()
+    side = str(side or "").strip().upper()
+    setup_family = str(setup_family or "").strip().lower()
+    market_regime = str(market_regime or "").strip().lower()
+    if market_regime.startswith("mkt_"):
+        market_regime = market_regime[4:]
+    htf_regime = str(htf_regime or "").strip().lower()
+    macro_regime = str(macro_regime or "").strip().lower()
+    timeframe = str(timeframe or "").strip().lower()
+
     if coin in HARD_BLOCKED_COINS:
         return True, f"hard_blocked_coin:{coin}"
 
@@ -222,6 +235,13 @@ def evaluate_regime_block(
         and market_regime == "weak_trend"
     ):
         return True, "market_regime_block:continuation_in_weak_trend"
+
+    if (
+        BLOCK_REVERSAL_IN_WEAK_TREND
+        and setup_family in ("reversal", "swing", "swing_4h")
+        and market_regime == "weak_trend"
+    ):
+        return True, "market_regime_block:reversal_in_weak_trend"
 
     if (
         BLOCK_CONTINUATION_IN_CHOP

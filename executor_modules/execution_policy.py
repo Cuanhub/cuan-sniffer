@@ -57,7 +57,7 @@ class ExecutionPolicyConfig:
     regime_tp_cap_r: float = field(
         default_factory=lambda: float(os.getenv("REGIME_TP_CAP_R", "1.75"))
     )
-    hard_block_chop: bool = field(default_factory=lambda: _env_bool("HARD_BLOCK_CHOP", "true"))
+    hard_block_chop: bool = field(default_factory=lambda: _env_bool("HARD_BLOCK_CHOP", "false"))
     chop_reversal_exception: bool = field(default_factory=lambda: _env_bool("CHOP_REVERSAL_EXCEPTION", "false"))
     chop_reversal_min_confidence: float = field(
         default_factory=lambda: float(os.getenv("CHOP_REVERSAL_MIN_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90")))
@@ -65,8 +65,15 @@ class ExecutionPolicyConfig:
     block_continuation_in_chop: bool = field(
         default_factory=lambda: _env_bool("BLOCK_CONTINUATION_IN_CHOP", "true")
     )
+    block_continuation_in_weak_trend: bool = field(
+        default_factory=lambda: _env_bool("BLOCK_CONTINUATION_IN_WEAK_TREND", "true")
+    )
+    block_reversal_in_weak_trend: bool = field(
+        default_factory=lambda: _env_bool("BLOCK_REVERSAL_IN_WEAK_TREND", "true")
+    )
+    preserve_rr_after_stop_redesign: bool = True
     apply_chop_block: bool = True
-    apply_dual_chop_block: bool = True
+    apply_dual_chop_block: bool = False
     apply_stop_redesign: bool = True
     apply_tp_cap: bool = True
     apply_effective_rr: bool = True
@@ -132,6 +139,13 @@ def _rr_from_entry(entry: float, stop: float, tp: float) -> float:
     if risk <= 0:
         return 0.0
     return abs(tp - entry) / risk
+
+
+def _tp_for_rr(entry: float, stop: float, side: str, rr: float) -> float:
+    tp_dist = abs(entry - stop) * max(0.0, rr)
+    if side == "LONG":
+        return entry + tp_dist
+    return entry - tp_dist
 
 
 def _reject(result: ExecutionPolicyResult, reason: str) -> ExecutionPolicyResult:
@@ -235,6 +249,8 @@ def evaluate_execution_policy(
     timeframe = str(timeframe or "").strip().lower()
     session = str(session or "").strip().lower()
     market_regime = str(market_regime or "").strip().lower()
+    if market_regime.startswith("mkt_"):
+        market_regime = market_regime[4:]
     htf_regime = str(htf_regime or "").strip().lower()
     macro_regime = str(macro_regime or "").strip().lower()
     setup_family = str(setup_family or "").strip().lower()
@@ -265,6 +281,20 @@ def evaluate_execution_policy(
         return _reject(result, "market_regime_block:continuation_in_chop")
 
     regime_text = str(regime or "").strip().lower()
+    if (
+        config.block_continuation_in_weak_trend
+        and setup_family == "continuation"
+        and market_regime == "weak_trend"
+    ):
+        return _reject(result, "market_regime_block:continuation_in_weak_trend")
+
+    if (
+        config.block_reversal_in_weak_trend
+        and setup_family in {"reversal", "swing", "swing_4h"}
+        and market_regime == "weak_trend"
+    ):
+        return _reject(result, "market_regime_block:reversal_in_weak_trend")
+
     if (
         config.apply_dual_chop_block
         and config.apply_chop_block
@@ -370,6 +400,22 @@ def evaluate_execution_policy(
             "stop_rr_min_effective": round(min_rr_effective, 4),
             "stop_rr_tolerance_reason": "high_conf_non_chop" if high_conf_rr_tolerance else "base",
         })
+
+        if (
+            result.final_rr < min_rr_effective
+            and config.preserve_rr_after_stop_redesign
+            and result.original_rr >= min_rr_effective
+        ):
+            adjusted_tp = _tp_for_rr(entry, result.redesigned_stop, side, result.original_rr)
+            result.final_tp = adjusted_tp
+            result.final_rr = _rr_from_entry(entry, result.redesigned_stop, result.final_tp)
+            result.metadata.update({
+                "stop_redesign_tp_adjusted": True,
+                "stop_redesign_tp_adjustment_reason": "preserve_original_rr",
+                "stop_redesign_original_tp": round(tp, 8),
+                "stop_redesign_adjusted_tp": round(adjusted_tp, 8),
+                "stop_redesign_preserved_rr": round(result.original_rr, 4),
+            })
 
         if result.final_rr < min_rr_effective:
             return _reject(

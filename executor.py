@@ -30,6 +30,10 @@ from protection_manager import ProtectionManager
 from position import Position, PositionState, CloseReason
 from risk_manager import (
     STARTING_BALANCE,
+    RISK_PCT_PER_TRADE,
+    RISK_PCT_MULT_INTRADAY,
+    RISK_PCT_MULT_SWING,
+    CONFIDENCE_SIZING_TIERS,
     MAX_OPEN_POSITIONS,
     MAX_OPEN_POSITIONS_INTRADAY,
     MAX_OPEN_POSITIONS_SWING,
@@ -132,14 +136,11 @@ MAX_RECENT_MOVE_ATR = float(os.getenv("MAX_RECENT_MOVE_ATR", "1.50"))
 TRAIL_ATR_MULT = float(os.getenv("TRAIL_ATR_MULT", "1.0"))
 MAX_FULL_LOSS_R = float(os.getenv("MAX_FULL_LOSS_R", "-1.5"))
 
-# ── FULL_TP_MODE profit protection ────────────────────────────────────
-# FULL_TP_MODE_BE_R: move software + native stop to entry_price once
-# position reaches this R level. 0 = disabled.
-FULL_TP_MODE_BE_R = float(os.getenv("FULL_TP_MODE_BE_R", "1.0"))
-# FULL_TP_MODE_TRAIL_R: begin ATR-trailing the stop (1×TRAIL_ATR_MULT)
-# once this R level is reached. Only activates after BE stop is set.
-# 0 = disabled.
-FULL_TP_MODE_TRAIL_R = float(os.getenv("FULL_TP_MODE_TRAIL_R", "1.5"))
+# ── FULL_TP_MODE static exit controls ─────────────────────────────────
+# Defaults match V3 shadow replay: full position exits at static TP/stop.
+# Set these above zero only when deliberately testing BE/trailing variants.
+FULL_TP_MODE_BE_R = float(os.getenv("FULL_TP_MODE_BE_R", "0"))
+FULL_TP_MODE_TRAIL_R = float(os.getenv("FULL_TP_MODE_TRAIL_R", "0"))
 LIVE_FLAT_EPSILON_SZ = float(os.getenv("LIVE_FLAT_EPSILON_SZ", "1e-9"))
 LIVE_EXIT_RETRY_COOLDOWN_SEC = float(os.getenv("LIVE_EXIT_RETRY_COOLDOWN_SEC", "10"))
 LIVE_TINY_POSITION_USD = float(os.getenv("LIVE_TINY_POSITION_USD", "5.0"))
@@ -177,6 +178,8 @@ from executor_modules.session_filters import (
     HARD_BLOCK_UNKNOWN_SESSION,
     HARD_BLOCKED_TIMEFRAMES,
     BLOCK_CONTINUATION_IN_CHOP,
+    BLOCK_CONTINUATION_IN_WEAK_TREND,
+    BLOCK_REVERSAL_IN_WEAK_TREND,
     BLOCK_REVERSAL_AGAINST_DUAL_TREND,
     get_hard_blocked_sessions,
     is_trend_aligned,
@@ -231,6 +234,7 @@ SCORE_SIZE_HIGH_THRESHOLD = float(os.getenv("SCORE_SIZE_HIGH_THRESHOLD", "0.90")
 SCORE_SIZE_HIGH_MULT = float(os.getenv("SCORE_SIZE_HIGH_MULT", "1.50"))
 CONT_STRONG_TREND_BONUS_MULT = float(os.getenv("CONT_STRONG_TREND_BONUS_MULT", "1.15"))
 SCORE_SIZE_OVERLAY_MAX_MULT = float(os.getenv("SCORE_SIZE_OVERLAY_MAX_MULT", "1.50"))
+FINAL_RISK_AUTHORITY_TOLERANCE = float(os.getenv("FINAL_RISK_AUTHORITY_TOLERANCE", "0.001"))
 
 # ── Portfolio replacement (extracted to executor_modules/position_replacement.py) ──
 from executor_modules.position_replacement import (
@@ -545,6 +549,8 @@ class Executor:
             f"buffer={STOP_BUFFER_ATR_MULT:.2f}xATR "
             f"min_stop={MIN_STOP_ATR_REJECT:.2f}xATR | "
             f"Mkt regime: block_cont_chop={BLOCK_CONTINUATION_IN_CHOP} "
+            f"block_cont_weak={BLOCK_CONTINUATION_IN_WEAK_TREND} "
+            f"block_rev_weak={BLOCK_REVERSAL_IN_WEAK_TREND} "
             f"weak_mult={WEAK_TREND_SIZE_MULT:.2f}x | "
             f"Hard-blocked: {hard_display} | "
             f"Soft-blocked: {soft_display} (override>={SESSION_OVERRIDE_MIN_SCORE}) | "
@@ -564,22 +570,45 @@ class Executor:
             print("[EXIT_MODE] legacy partial mode — 50% at 1R + ATR trail")
 
         # ── Risk stress snapshot ───────────────────────────────────────────────
-        _risk_pct = float(os.getenv("RISK_PCT_PER_TRADE", "1.00"))
+        _risk_pct = float(RISK_PCT_PER_TRADE)
         _daily_halt_r = float(os.getenv("DAILY_LOSS_LIMIT_R", "3.0"))
         _dd_halt_pct = float(os.getenv("MAX_DD_PCT", "15.0"))
         _taker_bps = float(os.getenv("TAKER_FEE_BPS", "4.5"))
         _balance = self._boot_balance if self._boot_balance > 0 else float(
             os.getenv("STARTING_BALANCE", "1000")
         )
-        _risk_usd = _balance * (_risk_pct / 100.0)
-        _max_risk_usd = MAX_OPEN_POSITIONS * _risk_usd
-        _worst_dd_usd = MAX_OPEN_POSITIONS * _risk_usd * abs(MAX_FULL_LOSS_R)
+        _base_risk_usd = _balance * (_risk_pct / 100.0)
+        _max_conf_mult = max((float(mult) for _, mult in CONFIDENCE_SIZING_TIERS), default=1.0)
+        _max_track_mult = max(float(RISK_PCT_MULT_INTRADAY), float(RISK_PCT_MULT_SWING))
+        _score_overlay_raw_max = min(
+            float(SCORE_SIZE_OVERLAY_MAX_MULT),
+            max(
+                float(SCORE_SIZE_BASE_MULT),
+                float(SCORE_SIZE_MID_MULT),
+                float(SCORE_SIZE_HIGH_MULT),
+            ) * float(CONT_STRONG_TREND_BONUS_MULT),
+        )
+        _score_overlay_config_max = _score_overlay_raw_max
+        _score_overlay_applied_max = min(1.0, _score_overlay_config_max)
+        _true_risk_usd = (
+            _base_risk_usd
+            * _max_conf_mult
+            * _max_track_mult
+            * _score_overlay_applied_max
+        )
+        _max_risk_usd = MAX_OPEN_POSITIONS * _true_risk_usd
+        _worst_dd_usd = MAX_OPEN_POSITIONS * _true_risk_usd * abs(MAX_FULL_LOSS_R)
         _worst_dd_pct = (_worst_dd_usd / _balance * 100.0) if _balance > 0 else 0.0
-        _daily_halt_usd = _daily_halt_r * _risk_usd
+        _daily_halt_usd = _daily_halt_r * _base_risk_usd
         print(
-            f"[STRESS] Risk/trade: ${_risk_usd:.2f} ({_risk_pct:.2f}% of ${_balance:.2f}) | "
-            f"Max simultaneous: ${_max_risk_usd:.2f} ({MAX_OPEN_POSITIONS} slots × {_risk_pct:.2f}%) | "
-            f"Worst-case DD (all {MAX_FULL_LOSS_R:.1f}R): -${_worst_dd_usd:.2f} "
+            f"[STRESS] Base risk: ${_base_risk_usd:.2f} ({_risk_pct:.2f}% of ${_balance:.2f}) | "
+            f"Confidence multiplier max: {_max_conf_mult:.2f}x | "
+            f"Track budget max: {_max_track_mult:.2f}x | "
+            f"Score overlay max: config={_score_overlay_config_max:.2f}x "
+            f"applied={_score_overlay_applied_max:.2f}x reduce_only | "
+            f"Max true per-trade risk: ${_true_risk_usd:.2f} | "
+            f"Max simultaneous open risk: ${_max_risk_usd:.2f} ({MAX_OPEN_POSITIONS} slots) | "
+            f"Worst-case account drawdown (all {MAX_FULL_LOSS_R:.1f}R): -${_worst_dd_usd:.2f} "
             f"({_worst_dd_pct:.1f}% of balance) | "
             f"Daily halt: -{_daily_halt_r:.1f}R (≈-${_daily_halt_usd:.2f}) | "
             f"DD halt: {_dd_halt_pct:.1f}% | "
@@ -612,7 +641,7 @@ class Executor:
             setup_family=str(meta.get("setup_family", meta.get("regime_local", ""))).strip().lower(),
             side=self._side_str(signal.side),
             regime=str(getattr(signal, "regime", "")),
-            is_swing_timeframe=(self._signal_timeframe_class(signal) == "swing"),
+            is_swing_timeframe=(self._signal_track(signal) == "swing"),
         )
 
     @staticmethod
@@ -645,6 +674,126 @@ class Executor:
         overlay_mult = min(SCORE_SIZE_OVERLAY_MAX_MULT, score_mult * trend_bonus_mult)
 
         return total_score, score_mult, trend_bonus_mult, overlay_mult, trend_bonus_applied
+
+    @staticmethod
+    def _approved_max_risk_usd(decision) -> float:
+        try:
+            approved = float(getattr(decision, "approved_max_risk_usd", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            approved = 0.0
+        if approved > 0:
+            return approved
+        try:
+            return float(getattr(decision, "risk_usd", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _risk_authority_limit(approved_max_risk_usd: float) -> float:
+        return max(0.0, float(approved_max_risk_usd or 0.0)) * (
+            1.0 + FINAL_RISK_AUTHORITY_TOLERANCE
+        )
+
+    @staticmethod
+    def _final_risk_authority_violation(decision, approved_max_risk_usd: float) -> bool:
+        try:
+            final_risk = float(getattr(decision, "risk_usd", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            final_risk = 0.0
+        limit = Executor._risk_authority_limit(approved_max_risk_usd)
+        return approved_max_risk_usd > 0 and final_risk > limit
+
+    def _apply_score_size_overlay_reduce_only(
+        self,
+        decision,
+        signal,
+        setup_family: str,
+        market_regime: str,
+    ) -> Dict[str, Any]:
+        (
+            score_for_sizing,
+            score_mult,
+            trend_bonus_mult,
+            raw_overlay_mult,
+            trend_bonus_applied,
+        ) = self._score_size_overlay(
+            signal=signal,
+            setup_family=setup_family,
+            market_regime=market_regime,
+        )
+        overlay_mult = min(1.0, max(0.0, raw_overlay_mult))
+        old_size = float(getattr(decision, "size_usd", 0.0) or 0.0)
+        old_risk = float(getattr(decision, "risk_usd", 0.0) or 0.0)
+        old_multiplier = float(getattr(decision, "size_multiplier", 0.0) or 0.0)
+
+        if old_size > 0 and old_risk > 0:
+            decision.size_usd = round(old_size * overlay_mult, 2)
+            decision.risk_usd = round(old_risk * overlay_mult, 2)
+            decision.size_multiplier = round(old_multiplier * overlay_mult, 4)
+            decision.reason += (
+                f" | score_mult={score_mult:.2f}x"
+                f" trend_bonus={'on' if trend_bonus_applied else 'off'}"
+                f" requested_overlay={raw_overlay_mult:.2f}x"
+                f" final_mult={overlay_mult:.2f}x reduce_only"
+            )
+
+        return {
+            "score_for_sizing": score_for_sizing,
+            "score_mult": score_mult,
+            "trend_bonus_mult": trend_bonus_mult,
+            "raw_overlay_mult": raw_overlay_mult,
+            "overlay_mult": overlay_mult,
+            "trend_bonus_applied": trend_bonus_applied,
+            "old_size": old_size,
+            "old_risk": old_risk,
+        }
+
+    @staticmethod
+    def _apply_continuation_size_cap_reduce_only(decision, setup_family: str) -> bool:
+        if (
+            str(setup_family or "").strip().lower() != "continuation"
+            or float(getattr(decision, "size_multiplier", 0.0) or 0.0) <= CONTINUATION_MAX_SIZE_MULT
+        ):
+            return False
+
+        original_mult = float(getattr(decision, "size_multiplier", 0.0) or 0.0)
+        if original_mult <= 0:
+            return False
+        scale = min(1.0, CONTINUATION_MAX_SIZE_MULT / original_mult)
+        decision.size_usd = round(float(getattr(decision, "size_usd", 0.0) or 0.0) * scale, 2)
+        decision.risk_usd = round(float(getattr(decision, "risk_usd", 0.0) or 0.0) * scale, 2)
+        decision.size_multiplier = min(CONTINUATION_MAX_SIZE_MULT, original_mult)
+        decision.reason += f" | continuation_cap={CONTINUATION_MAX_SIZE_MULT:.2f}x"
+        return True
+
+    @staticmethod
+    def _apply_weak_trend_size_mult_reduce_only(decision, market_regime: str) -> Optional[str]:
+        if str(market_regime or "").strip().lower() != "weak_trend":
+            return None
+        if WEAK_TREND_SIZE_MULT >= 1.0:
+            return None
+        if WEAK_TREND_SIZE_MULT <= 0:
+            return "market_regime_invalid_weak_trend_mult"
+
+        decision.size_usd = round(
+            float(getattr(decision, "size_usd", 0.0) or 0.0) * WEAK_TREND_SIZE_MULT,
+            2,
+        )
+        decision.risk_usd = round(
+            float(getattr(decision, "risk_usd", 0.0) or 0.0) * WEAK_TREND_SIZE_MULT,
+            2,
+        )
+        decision.size_multiplier = round(
+            float(getattr(decision, "size_multiplier", 0.0) or 0.0) * WEAK_TREND_SIZE_MULT,
+            4,
+        )
+        decision.reason += f" | weak_trend_mult={WEAK_TREND_SIZE_MULT:.2f}x"
+        if (
+            float(getattr(decision, "size_usd", 0.0) or 0.0) <= 0
+            or float(getattr(decision, "risk_usd", 0.0) or 0.0) <= 0
+        ):
+            return "market_regime_weak_trend_size_too_small"
+        return None
 
     @staticmethod
     def _active_quality_model(signal) -> str:
@@ -744,11 +893,44 @@ class Executor:
                 reject_reason=reason, session=session,
                 setup_family=setup_family, market_regime=market_regime,
                 timeframe=_telemetry_tf,
+                signal_id=sig_id,
+                coin=coin,
+                entry_price=round(float(getattr(signal, "entry_price", 0.0) or 0.0), 8),
+                stop_price=round(float(getattr(signal, "stop_price", 0.0) or 0.0), 8),
+                tp_price=round(float(getattr(signal, "tp_price", 0.0) or 0.0), 8),
+                total_score=round(float(meta.get("total_score", 0.0) or 0.0), 4),
+                active_quality_model=str(meta.get("active_quality_model", "") or "").lower().strip(),
+                active_quality_score=round(float(meta.get("active_quality_score", 0.0) or 0.0), 4),
+                signal_confidence=_telemetry_conf,
+                regime=str(getattr(signal, "regime", "") or ""),
             )
             return ExecutorResult(traded=False, reason=reason)
 
         if HARD_BLOCK_UNKNOWN_SESSION and session in {"", "unknown", "none", "null"}:
             reason = "session_blocked:unknown"
+            print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
+            self._log_missed(signal, sig_id, reason)
+            log_executor_reject(
+                symbol=coin, side=signal_side,
+                confidence=_telemetry_conf, rr=_telemetry_rr,
+                reject_reason=reason, session=session,
+                setup_family=setup_family, market_regime=market_regime,
+                timeframe=_telemetry_tf,
+            )
+            return ExecutorResult(traded=False, reason=reason)
+
+        _regime_blocked, _regime_reason = evaluate_regime_block(
+            coin=coin,
+            side=signal_side,
+            setup_family=setup_family,
+            market_regime=market_regime,
+            htf_regime=str(market_meta.get("regime_htf_1h", "")),
+            macro_regime=str(market_meta.get("regime_macro_4h", "")),
+            timeframe=_telemetry_tf,
+            confidence=_telemetry_conf,
+        )
+        if _regime_blocked:
+            reason = _regime_reason
             print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
             self._log_missed(signal, sig_id, reason)
             log_executor_reject(
@@ -1227,36 +1409,31 @@ class Executor:
                     )
                     return ExecutorResult(traded=False, reason=decision.reason)
 
-            (
-                score_for_sizing,
-                score_mult,
-                trend_bonus_mult,
-                overlay_mult,
-                trend_bonus_applied,
-            ) = self._score_size_overlay(
+            approved_max_risk_usd = self._approved_max_risk_usd(decision)
+            if approved_max_risk_usd > 0:
+                decision.approved_max_risk_usd = approved_max_risk_usd
+            if float(getattr(decision, "approved_size_usd", 0.0) or 0.0) <= 0:
+                decision.approved_size_usd = float(getattr(decision, "size_usd", 0.0) or 0.0)
+            if float(getattr(decision, "approved_size_multiplier", 0.0) or 0.0) <= 0:
+                decision.approved_size_multiplier = float(
+                    getattr(decision, "size_multiplier", 0.0) or 0.0
+                )
+
+            overlay_info = self._apply_score_size_overlay_reduce_only(
+                decision=decision,
                 signal=signal,
                 setup_family=setup_family,
                 market_regime=market_regime,
             )
-            old_size_overlay = float(getattr(decision, "size_usd", 0.0) or 0.0)
-            old_risk_overlay = float(getattr(decision, "risk_usd", 0.0) or 0.0)
-            if old_size_overlay > 0 and old_risk_overlay > 0 and overlay_mult > 0:
-                decision.size_usd = round(old_size_overlay * overlay_mult, 2)
-                decision.risk_usd = round(old_risk_overlay * overlay_mult, 2)
-                decision.size_multiplier = round(float(decision.size_multiplier) * overlay_mult, 4)
-                decision.reason += (
-                    f" | score_mult={score_mult:.2f}x"
-                    f" trend_bonus={'on' if trend_bonus_applied else 'off'}"
-                    f" final_mult={overlay_mult:.2f}x"
-                )
             print(
                 f"[EXECUTOR] {coin} sizing overlay: "
-                f"score={score_for_sizing:.3f} "
-                f"score_mult={score_mult:.2f}x "
-                f"trend_bonus={'on' if trend_bonus_applied else 'off'}"
-                f"({trend_bonus_mult:.2f}x) "
-                f"final_mult={overlay_mult:.2f}x "
-                f"size ${old_size_overlay:.2f}->{float(getattr(decision, 'size_usd', 0.0) or 0.0):.2f}"
+                f"score={float(overlay_info['score_for_sizing']):.3f} "
+                f"score_mult={float(overlay_info['score_mult']):.2f}x "
+                f"trend_bonus={'on' if overlay_info['trend_bonus_applied'] else 'off'}"
+                f"({float(overlay_info['trend_bonus_mult']):.2f}x) "
+                f"requested={float(overlay_info['raw_overlay_mult']):.2f}x "
+                f"final_mult={float(overlay_info['overlay_mult']):.2f}x reduce_only "
+                f"size ${float(overlay_info['old_size']):.2f}->{float(getattr(decision, 'size_usd', 0.0) or 0.0):.2f}"
             )
 
             margin_reject = self._apply_available_margin_sizing(decision, coin=coin)
@@ -1274,38 +1451,29 @@ class Executor:
                 )
                 return ExecutorResult(traded=False, reason=reason)
 
-            if (
-                setup_family == "continuation"
-                and decision.size_multiplier > CONTINUATION_MAX_SIZE_MULT
-            ):
-                original_mult = decision.size_multiplier
-                scale = CONTINUATION_MAX_SIZE_MULT / original_mult
-                decision.size_usd = round(decision.size_usd * scale, 2)
-                decision.risk_usd = round(decision.risk_usd * scale, 2)
-                decision.size_multiplier = CONTINUATION_MAX_SIZE_MULT
-                decision.reason += f" | continuation_cap={CONTINUATION_MAX_SIZE_MULT:.2f}x"
+            original_cont_mult = float(getattr(decision, "size_multiplier", 0.0) or 0.0)
+            if self._apply_continuation_size_cap_reduce_only(decision, setup_family):
                 print(
                     f"[EXECUTOR] {coin} continuation cap: "
-                    f"{original_mult:.2f}x → {CONTINUATION_MAX_SIZE_MULT:.2f}x"
+                    f"{original_cont_mult:.2f}x → {CONTINUATION_MAX_SIZE_MULT:.2f}x"
                 )
 
+            weak_trend_size_reason = self._apply_weak_trend_size_mult_reduce_only(
+                decision,
+                market_regime,
+            )
             if market_regime == "weak_trend" and WEAK_TREND_SIZE_MULT < 1.0:
-                if WEAK_TREND_SIZE_MULT <= 0:
-                    reason = "market_regime_invalid_weak_trend_mult"
+                if weak_trend_size_reason == "market_regime_invalid_weak_trend_mult":
+                    reason = weak_trend_size_reason
                     print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                     self._log_missed(signal, sig_id, reason)
                     return ExecutorResult(traded=False, reason=reason)
-
-                decision.size_usd = round(decision.size_usd * WEAK_TREND_SIZE_MULT, 2)
-                decision.risk_usd = round(decision.risk_usd * WEAK_TREND_SIZE_MULT, 2)
-                decision.size_multiplier = round(decision.size_multiplier * WEAK_TREND_SIZE_MULT, 4)
-                decision.reason += f" | weak_trend_mult={WEAK_TREND_SIZE_MULT:.2f}x"
                 print(
                     f"[EXECUTOR] {coin} weak-trend size: "
                     f"multiplied by {WEAK_TREND_SIZE_MULT:.2f}x"
                 )
-                if decision.size_usd <= 0 or decision.risk_usd <= 0:
-                    reason = "market_regime_weak_trend_size_too_small"
+                if weak_trend_size_reason:
+                    reason = weak_trend_size_reason
                     print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
                     self._log_missed(signal, sig_id, reason)
                     log_executor_reject(
@@ -1330,6 +1498,34 @@ class Executor:
                     session=session,
                     setup_family=setup_family, market_regime=market_regime,
                     timeframe=_telemetry_tf,
+                )
+                return ExecutorResult(traded=False, reason=reason)
+
+            if self._final_risk_authority_violation(decision, approved_max_risk_usd):
+                final_risk = float(getattr(decision, "risk_usd", 0.0) or 0.0)
+                reason = (
+                    "final_risk_authority_violation:"
+                    f"final={final_risk:.2f}>approved={approved_max_risk_usd:.2f}"
+                )
+                print(f"[RISK_AUTHORITY] {coin} {signal_side} REJECTED — {reason}")
+                self._log_missed(signal, sig_id, reason)
+                log_executor_reject(
+                    symbol=coin, side=signal_side,
+                    confidence=_telemetry_conf, rr=_telemetry_rr,
+                    reject_reason="final_risk_authority_violation",
+                    session=session,
+                    setup_family=setup_family, market_regime=market_regime,
+                    timeframe=_telemetry_tf,
+                    signal_id=sig_id,
+                    coin=coin,
+                    entry_price=round(float(getattr(signal, "entry_price", 0.0) or 0.0), 8),
+                    stop_price=round(float(getattr(signal, "stop_price", 0.0) or 0.0), 8),
+                    tp_price=round(float(getattr(signal, "tp_price", 0.0) or 0.0), 8),
+                    total_score=round(float(meta.get("total_score", 0.0) or 0.0), 4),
+                    active_quality_model=str(meta.get("active_quality_model", "") or "").lower().strip(),
+                    active_quality_score=round(float(meta.get("active_quality_score", 0.0) or 0.0), 4),
+                    signal_confidence=_telemetry_conf,
+                    regime=str(getattr(signal, "regime", "") or ""),
                 )
                 return ExecutorResult(traded=False, reason=reason)
 
@@ -1424,6 +1620,9 @@ class Executor:
             self.live_monitor.register(position, allow_reconcile=False)
             self.risk.apply_entry_fee(position, entry_fee_usd)
             self._ensure_native_protection(position, entry_fill=fill, source="entry_fill")
+            if getattr(position, "risk_authority_status", "") == "actual_risk_exceeded_approved":
+                position.protection_status = "protection_critical"
+                position.protection_error = "actual_risk_exceeded_approved"
             append_trade(position, paper_mode=False)
             if self.signal_engine is not None and hasattr(self.signal_engine, "record_emitted_signal"):
                 try:
@@ -1470,7 +1669,7 @@ class Executor:
         tp = float(getattr(signal, "tp_price", 0.0) or 0.0)
         atr = float(meta.get("atr", 0.0) or 0.0)
 
-        reject, final_stop, updated_meta = apply_entry_stop_redesign(
+        reject, final_stop, final_tp, updated_meta = apply_entry_stop_redesign(
             coin=coin,
             side=side,
             entry=entry,
@@ -1488,6 +1687,7 @@ class Executor:
             return reject
 
         signal.stop_price = final_stop
+        signal.tp_price = final_tp
         signal.meta = updated_meta
         return None
 
@@ -1499,23 +1699,6 @@ class Executor:
         stop_price = float(signal.stop_price)
         tp_price = float(signal.tp_price)
         side = self._side_str(signal.side)
-
-        # HARD BLOCK: Reject signals when both market and macro regimes are chop.
-        # The combined_regime string on signal.regime is the authoritative source —
-        # it is built as "family|htf_X|macro_Y|mkt_Z" (signal_engine.py).
-        # meta["market_regime"] is a single word ("chop"/"strong_trend"/"weak_trend")
-        # and never contains these substrings, so we must read signal.regime here.
-        _combined_regime = str(getattr(signal, "regime", "")).strip().lower()
-        _market_regime_val = str(meta.get("market_regime", "")).strip().lower()
-        _macro_regime_val = str(meta.get("regime_macro_4h", "")).strip().lower()
-        if "macro_chop" in _combined_regime and "mkt_chop" in _combined_regime:
-            print(
-                f"[REJECT] {coin} {side} reason=blocked_chop_dual_regime "
-                f"regime={_combined_regime!r} market_regime={_market_regime_val} "
-                f"macro_regime={_macro_regime_val} "
-                f"score={self._signal_total_score(signal):.3f}"
-            )
-            return "blocked_chop_dual_regime"
 
         # Regime-aware TP cap: in weak/chop regimes, pull TP in to REGIME_TP_CAP_R.
         # signal.tp_price is mutated in-place so _build_position picks up the cap.
@@ -1542,6 +1725,8 @@ class Executor:
                 apply_stop_redesign=False,
                 apply_tp_cap=True,
                 apply_effective_rr=False,
+                block_continuation_in_weak_trend=False,
+                block_reversal_in_weak_trend=False,
             ),
             regime=_cap_combined,
             track=self._signal_track(signal),
@@ -1667,6 +1852,8 @@ class Executor:
                 apply_stop_redesign=False,
                 apply_tp_cap=False,
                 apply_effective_rr=True,
+                block_continuation_in_weak_trend=False,
+                block_reversal_in_weak_trend=False,
             ),
             current_price=current_price,
             regime=_cap_combined,
@@ -2017,23 +2204,23 @@ class Executor:
     @staticmethod
     def _signal_market_regime(signal) -> str:
         meta = getattr(signal, "meta", None) or {}
-        for key in ("market_regime", "regime_htf_1h", "regime_macro_4h"):
-            if str(meta.get(key, "")).strip().lower() == "chop":
-                return "chop"
-        regime_text = str(getattr(signal, "regime", "")).strip().lower()
-        for token in regime_text.split("|"):
-            token = token.strip()
-            if token in {"chop", "mkt_chop", "htf_chop", "macro_chop"} or token.endswith("_chop"):
-                return "chop"
         tag = str(meta.get("market_regime", "unknown")).strip().lower()
         if tag in {"chop", "weak_trend", "strong_trend"}:
             return tag
+
+        regime_text = str(getattr(signal, "regime", "")).strip().lower()
         for token in regime_text.split("|"):
             token = token.strip()
-            if token in {"weak_trend", "mkt_weak_trend"}:
-                return "weak_trend"
-            if token in {"strong_trend", "mkt_strong_trend"}:
-                return "strong_trend"
+            if token.startswith("mkt_"):
+                market_tag = token[4:]
+                if market_tag in {"chop", "weak_trend", "strong_trend"}:
+                    return market_tag
+
+        # Legacy rows may store the local market regime without the mkt_ prefix.
+        for token in regime_text.split("|"):
+            token = token.strip()
+            if token in {"chop", "weak_trend", "strong_trend"}:
+                return token
         return "unknown"
 
     @staticmethod
@@ -2443,6 +2630,52 @@ class Executor:
         else:
             actual_risk = decision.risk_usd
 
+        approved_max_risk = self._approved_max_risk_usd(decision)
+        risk_authority_status = "within_approved" if approved_max_risk > 0 else "unknown_budget"
+        risk_authority_reason = ""
+        accounting_risk = float(actual_risk or 0.0)
+        if approved_max_risk > 0 and accounting_risk > self._risk_authority_limit(approved_max_risk):
+            risk_authority_status = "actual_risk_exceeded_approved"
+            risk_authority_reason = (
+                f"actual={accounting_risk:.2f}>approved={approved_max_risk:.2f}"
+            )
+            print(
+                f"[RISK_AUTHORITY][CRITICAL] {signal.coin} {self._side_str(signal.side)} "
+                f"{risk_authority_status} {risk_authority_reason}; "
+                "capping accounting R and marking protection-critical"
+            )
+            try:
+                self.notify(
+                    "[RISK_AUTHORITY][CRITICAL] "
+                    f"{signal.coin} {self._side_str(signal.side)} "
+                    f"{risk_authority_status} {risk_authority_reason}. "
+                    "Position remains open; protection is critical."
+                )
+            except Exception:
+                pass
+            log_executor_reject(
+                symbol=str(signal.coin).upper(),
+                side=self._side_str(signal.side),
+                confidence=float(getattr(signal, "confidence", 0.0) or 0.0),
+                rr=float(meta.get("rr_planned", 0.0) or 0.0),
+                reject_reason="actual_risk_exceeded_approved",
+                session=str(meta.get("session", "") or ""),
+                setup_family=self._signal_setup_family(signal),
+                market_regime=self._signal_market_regime(signal),
+                timeframe=str(meta.get("timeframe", "1h") or "1h"),
+                signal_id=sig_id,
+                coin=str(signal.coin).upper(),
+                entry_price=round(actual_entry, 8),
+                stop_price=round(float(signal.stop_price), 8),
+                tp_price=round(float(signal.tp_price), 8),
+                total_score=round(float(meta.get("total_score", 0.0) or 0.0), 4),
+                active_quality_model=str(meta.get("active_quality_model", "") or "").lower().strip(),
+                active_quality_score=round(float(meta.get("active_quality_score", 0.0) or 0.0), 4),
+                signal_confidence=float(getattr(signal, "confidence", 0.0) or 0.0),
+                regime=str(getattr(signal, "regime", "") or ""),
+            )
+            accounting_risk = approved_max_risk
+
         pos = Position(
             position_id=pos_id,
             coin=signal.coin,
@@ -2455,8 +2688,12 @@ class Executor:
             original_tp_price=float(signal.tp_price),
             atr=float(meta.get("atr", 0.0)),
             size_usd=actual_size,
-            risk_usd=round(actual_risk, 2),
-            r_value=round(actual_risk, 2),
+            risk_usd=round(accounting_risk, 2),
+            r_value=round(accounting_risk, 2),
+            approved_max_risk_usd=round(approved_max_risk, 2),
+            actual_risk_usd=round(float(actual_risk or 0.0), 2),
+            risk_authority_status=risk_authority_status,
+            risk_authority_reason=risk_authority_reason,
             size_multiplier=decision.size_multiplier,
             peak_price=actual_entry,
             regime=signal.regime,
@@ -2472,6 +2709,9 @@ class Executor:
         setattr(pos, "allow_reconcile_close", False)
         setattr(pos, "reconciled_from_venue", False)
         setattr(pos, "bootstrap_restored", False)
+        if risk_authority_status == "actual_risk_exceeded_approved":
+            pos.protection_status = "protection_critical"
+            pos.protection_error = risk_authority_status
         return pos
 
     @staticmethod

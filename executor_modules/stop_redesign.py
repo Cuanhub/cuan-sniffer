@@ -12,7 +12,6 @@ from executor_modules.execution_policy import (
     ExecutionPolicyConfig,
     evaluate_execution_policy,
 )
-from executor_modules.telemetry import log_executor_reject
 
 # ── Constants (read from env at import time, same as executor.py) ─────
 STOP_ATR_FLOOR_MULT_INTRADAY = float(os.getenv("STOP_ATR_FLOOR_MULT_INTRADAY", "1.10"))
@@ -49,12 +48,12 @@ def apply_entry_stop_redesign(
     market_regime: str,
     timeframe: str = "1h",
     meta: Optional[Dict[str, Any]] = None,
-) -> Tuple[Optional[str], float, Dict[str, Any]]:
+) -> Tuple[Optional[str], float, float, Dict[str, Any]]:
     """
     Compute the widened stop and validate RR.
 
     Returns:
-        (reject_reason or None, final_stop, updated meta dict)
+        (reject_reason or None, final_stop, final_tp, updated meta dict)
 
     If reject_reason is not None, the signal should be rejected.
     If None, final_stop and meta are ready for use.
@@ -77,6 +76,8 @@ def apply_entry_stop_redesign(
         apply_stop_redesign=True,
         apply_tp_cap=False,
         apply_effective_rr=False,
+        block_continuation_in_weak_trend=False,
+        block_reversal_in_weak_trend=False,
     )
     result = evaluate_execution_policy(
         entry=entry,
@@ -112,16 +113,7 @@ def apply_entry_stop_redesign(
                 f" | original_sd={original_stop_dist:.8f}"
                 f" | final_sd={final_stop_dist:.8f}"
             )
-            log_executor_reject(
-                symbol=coin, side=side,
-                confidence=confidence,
-                rr=0.0,
-                reject_reason=reason,
-                setup_family=setup_family,
-                market_regime=market_regime,
-                timeframe=timeframe,
-            )
-            return reason, 0.0, meta
+            return reason, 0.0, tp, meta
 
         if reason.startswith("stop_redesign_rr_destroyed"):
             min_rr_effective = float(result.metadata.get("stop_rr_min_effective", 0.0) or 0.0)
@@ -134,25 +126,12 @@ def apply_entry_stop_redesign(
                 f" | original_sd={original_stop_dist:.8f}"
                 f" | final_sd={final_stop_dist:.8f}"
             )
-            log_executor_reject(
-                symbol=coin, side=side,
-                confidence=confidence,
-                rr=final_rr, required_rr=min_rr_effective,
-                reject_reason=(
-                    f"stop_redesign_rr_destroyed"
-                    f" (original_rr={original_rr:.2f}"
-                    f" final_rr={final_rr:.2f}"
-                    f" widen={widen_mult:.2f}x)"
-                ),
-                setup_family=setup_family,
-                market_regime=market_regime,
-                timeframe=timeframe,
-            )
-            return reason, 0.0, meta
+            return reason, 0.0, tp, meta
 
-        return reason, 0.0, meta
+        return reason, 0.0, tp, meta
 
     final_stop = result.redesigned_stop
+    final_tp = result.final_tp
     updated_meta = dict(result.metadata)
     original_rr = result.original_rr
     final_rr = result.final_rr
@@ -179,6 +158,8 @@ def apply_entry_stop_redesign(
     updated_meta["stop_atr_floor"] = round(atr_floor_stop, 8)
     updated_meta["stop_buffered"] = round(buffered_stop, 8)
     updated_meta["stop_final"] = round(final_stop, 8)
+    updated_meta["tp_original"] = round(tp, 8)
+    updated_meta["tp_final"] = round(final_tp, 8)
     updated_meta["rr_original"] = round(original_rr, 4)
     updated_meta["rr_final"] = round(final_rr, 4)
     updated_meta["stop_floor_mult"] = round(floor_mult, 4)
@@ -194,10 +175,11 @@ def apply_entry_stop_redesign(
         f"atr_floor_stop={atr_floor_stop:.6f} "
         f"buffered_stop={buffered_stop:.6f} "
         f"final_stop={final_stop:.6f} "
+        f"final_tp={final_tp:.6f} "
         f"original_rr={original_rr:.2f} "
         f"final_rr={final_rr:.2f} "
         f"widen={widen_mult:.2f}x "
         f"min_rr={min_rr_effective:.2f}"
     )
 
-    return None, final_stop, updated_meta
+    return None, final_stop, final_tp, updated_meta

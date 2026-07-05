@@ -57,6 +57,10 @@ def _reject_family_key(reason: str) -> str:
     return str(reason or "").strip().split(":", 1)[0].lower()
 
 
+def _has_value(value: Any) -> bool:
+    return value is not None and str(value).strip() != ""
+
+
 def _stage_missed_context(row: Dict[str, Any]) -> None:
     staged = dict(row)
     staged["_staged_at"] = time.time()
@@ -102,34 +106,49 @@ def log_executor_reject(
     setup_family: str = "",
     market_regime: str = "",
     timeframe: str = "1h",
+    signal_id: Any = "",
+    coin: str = "",
+    entry_price: Any = "",
+    stop_price: Any = "",
+    tp_price: Any = "",
+    total_score: Any = "",
+    active_quality_model: str = "",
+    active_quality_score: Any = "",
+    signal_confidence: Any = "",
+    regime: str = "",
+    current_price: Any = "",
+    price_move_r: Any = "",
 ) -> None:
     try:
         missed = _take_missed_context(symbol, side, reject_reason)
+        active_model = str(active_quality_model or missed.get("active_quality_model", "") or "").strip().lower()
+        active_score = active_quality_score if _has_value(active_quality_score) else missed.get("active_quality_score", "")
+        sig_conf = signal_confidence if _has_value(signal_confidence) else missed.get("signal_confidence", round(float(confidence), 4))
         row = {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "signal_id": missed.get("signal_id", ""),
+            "signal_id": signal_id if _has_value(signal_id) else missed.get("signal_id", ""),
             "symbol": symbol,
-            "coin": missed.get("coin", symbol),
+            "coin": coin or missed.get("coin", symbol),
             "side": side,
-            "entry_price": missed.get("entry_price", ""),
-            "stop_price": missed.get("stop_price", ""),
-            "tp_price": missed.get("tp_price", ""),
+            "entry_price": entry_price if _has_value(entry_price) else missed.get("entry_price", ""),
+            "stop_price": stop_price if _has_value(stop_price) else missed.get("stop_price", ""),
+            "tp_price": tp_price if _has_value(tp_price) else missed.get("tp_price", ""),
             "confidence": round(float(confidence), 4),
             "required_confidence": round(float(required_confidence), 4),
-            "total_score": missed.get("total_score", ""),
-            "active_quality_model": missed.get("active_quality_model", ""),
-            "active_quality_score": missed.get("active_quality_score", ""),
-            "signal_confidence": missed.get("signal_confidence", round(float(confidence), 4)),
+            "total_score": total_score if _has_value(total_score) else missed.get("total_score", ""),
+            "active_quality_model": active_model,
+            "active_quality_score": active_score,
+            "signal_confidence": sig_conf,
             "rr": round(float(rr), 4),
             "required_rr": round(float(required_rr), 4),
             "reject_reason": reject_reason,
             "session": session,
             "setup_family": setup_family,
             "market_regime": market_regime,
-            "regime": missed.get("regime", ""),
+            "regime": regime if _has_value(regime) else missed.get("regime", ""),
             "timeframe": timeframe,
-            "current_price": missed.get("current_price", ""),
-            "price_move_r": missed.get("price_move_r", ""),
+            "current_price": current_price if _has_value(current_price) else missed.get("current_price", ""),
+            "price_move_r": price_move_r if _has_value(price_move_r) else missed.get("price_move_r", ""),
         }
         with _EXECUTOR_REJECT_LOCK:
             _exec_ensure_csv(EXECUTOR_REJECTS_PATH, _EXECUTOR_REJECT_FIELDS)
