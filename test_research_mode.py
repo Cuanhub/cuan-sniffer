@@ -131,6 +131,27 @@ class TestResearchOnlyMode(unittest.TestCase):
             if os.path.exists(path):
                 os.unlink(path)
 
+    def test_soft_block_override_path_uses_signal_track_without_crashing(self):
+        mod = _reload_executor({
+            "STARTING_BALANCE": "10000",
+            "DEAD_ZONE_SOFT_OVERRIDE_ENABLED": "true",
+        })
+        ex = object.__new__(mod.Executor)
+        sig = FakeSignal(
+            side="LONG",
+            confidence=0.86,
+            regime="reversal|htf_chop|macro_chop|mkt_chop",
+            meta={
+                "session": "dead_zone",
+                "setup_family": "reversal",
+                "timeframe": "1h",
+                "active_quality_model": "v3",
+                "active_quality_score": 0.86,
+            },
+        )
+        result = ex._can_override_soft_block(sig, "dead_zone")
+        self.assertIsInstance(result, bool)
+
 
 class TestBroadChopLane(unittest.TestCase):
 

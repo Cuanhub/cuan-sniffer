@@ -35,7 +35,7 @@ def _base_trade(**overrides):
 
 
 class TestExecutionPolicyParity(unittest.TestCase):
-    def test_engine_rr_169_widened_to_147_rejects(self):
+    def test_engine_rr_169_widened_preserves_original_rr(self):
         result = evaluate_execution_policy(
             entry=100.0,
             stop=98.7,
@@ -52,10 +52,12 @@ class TestExecutionPolicyParity(unittest.TestCase):
             current_price=100.0,
         )
 
-        self.assertFalse(result.approved)
-        self.assertIn("stop_redesign_rr_destroyed", result.reject_reason)
+        self.assertTrue(result.approved)
+        self.assertIsNone(result.reject_reason)
         self.assertAlmostEqual(result.original_rr, 1.69, places=2)
-        self.assertAlmostEqual(result.final_rr, 1.47, places=2)
+        self.assertAlmostEqual(result.final_rr, result.original_rr, places=3)
+        self.assertTrue(result.metadata["stop_redesign_tp_adjusted"])
+        self.assertGreater(result.final_tp, result.original_tp)
 
     def test_stop_widening_beyond_max_rejects_too_wide(self):
         result = evaluate_execution_policy(
@@ -100,6 +102,7 @@ class TestExecutionPolicyParity(unittest.TestCase):
                 apply_effective_rr=False,
                 apply_chop_block=False,
                 apply_dual_chop_block=False,
+                block_continuation_in_weak_trend=False,
             ),
         )
 
@@ -147,30 +150,68 @@ class TestExecutionPolicyParity(unittest.TestCase):
         self.assertEqual(replay_result.reject_reason, direct_result.reject_reason)
         self.assertAlmostEqual(replay_result.final_rr, direct_result.final_rr, places=6)
 
+    def test_production_executor_blocks_continuation_in_weak_trend(self):
+        trade = _base_trade(
+            setup_family="continuation",
+            market_regime="weak_trend",
+            regime="continuation|htf_down|macro_down|mkt_weak_trend",
+        )
+
+        result = apply_replay_policy(trade, "production_executor")
+
+        self.assertFalse(result.approved)
+        self.assertEqual(
+            result.reject_reason,
+            "market_regime_block:continuation_in_weak_trend",
+        )
+
+    def test_production_executor_blocks_reversal_in_local_weak_trend(self):
+        trade = _base_trade(
+            setup_family="reversal",
+            market_regime="mkt_weak_trend",
+            htf_regime="chop",
+            macro_regime="chop",
+            regime="reversal|htf_chop|macro_chop|mkt_weak_trend",
+        )
+
+        result = apply_replay_policy(trade, "production_executor")
+
+        self.assertFalse(result.approved)
+        self.assertEqual(
+            result.reject_reason,
+            "market_regime_block:reversal_in_weak_trend",
+        )
+
     def test_no_stop_redesign_differs_only_when_selected(self):
         trade = _base_trade(market_regime="strong_trend", regime="continuation|mkt_strong_trend")
 
         production_result = apply_replay_policy(trade, "production_executor")
         no_stop_result = apply_replay_policy(trade, "no_stop_redesign")
 
-        self.assertFalse(production_result.approved)
-        self.assertIn("stop_redesign_rr_destroyed", production_result.reject_reason)
+        self.assertTrue(production_result.approved)
+        self.assertTrue(production_result.metadata["stop_redesign_tp_adjusted"])
+        self.assertGreater(
+            abs(trade["entry"] - production_result.redesigned_stop),
+            abs(trade["entry"] - trade["stop"]),
+        )
         self.assertTrue(no_stop_result.approved)
         self.assertEqual(no_stop_result.redesigned_stop, trade["stop"])
+        self.assertEqual(no_stop_result.final_tp, trade["tp"])
 
-    def test_chop_block_applies_in_production_executor_policy(self):
+    def test_chop_hard_block_removed_from_production_executor_policy(self):
         trade = _base_trade(
             stop=96.0,
             tp=108.0,
             market_regime="chop",
-            macro_regime="chop",
-            regime="continuation|htf_down|macro_chop|mkt_chop",
+            macro_regime="down",
+            setup_family="reversal",
+            regime="reversal|htf_down|macro_down|mkt_chop",
         )
 
         result = apply_replay_policy(trade, "production_executor")
 
-        self.assertFalse(result.approved)
-        self.assertEqual(result.reject_reason, "market_regime_block:chop")
+        self.assertTrue(result.approved)
+        self.assertNotEqual(result.reject_reason, "market_regime_block:chop")
 
     def test_chop_block_does_not_apply_in_no_chop_block_policy(self):
         trade = _base_trade(

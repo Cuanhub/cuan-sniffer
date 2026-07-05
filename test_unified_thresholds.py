@@ -44,6 +44,11 @@ def _is_threshold_key(k: str) -> bool:
         "SMC_ENABLE_4H_LIVE",
         "LIVE_ELIGIBILITY_MODEL",
         "HARD_BLOCK_CONTINUATION",
+        "HARD_BLOCK_CHOP",
+        "BLOCK_CONTINUATION_IN_WEAK_TREND",
+        "BLOCK_REVERSAL_IN_WEAK_TREND",
+        "BLOCK_CONTINUATION_IN_CHOP",
+        "BLOCK_REVERSAL_AGAINST_DUAL_TREND",
         "HARD_BLOCKED_TIMEFRAMES",
     }
     return k in THRESHOLD_KEYS
@@ -336,6 +341,101 @@ class TestFeatureFlags(unittest.TestCase):
     def test_hard_block_continuation_can_be_enabled_via_env(self):
         mod = _reload_module("executor", _clean_env(HARD_BLOCK_CONTINUATION="true"))
         self.assertTrue(mod.HARD_BLOCK_CONTINUATION)
+
+
+class TestWeakTrendRegimeProtection(unittest.TestCase):
+
+    def test_weak_trend_blocks_default_on(self):
+        filters = _reload_module("executor_modules.session_filters", _clean_env())
+        self.assertTrue(filters.BLOCK_CONTINUATION_IN_WEAK_TREND)
+        self.assertTrue(filters.BLOCK_REVERSAL_IN_WEAK_TREND)
+
+    def test_regime_block_rejects_v3_loss_lanes_by_default(self):
+        filters = _reload_module("executor_modules.session_filters", _clean_env())
+
+        base = {
+            "coin": "TEST",
+            "side": "SHORT",
+            "market_regime": "weak_trend",
+            "confidence": 0.93,
+            "htf_regime": "down",
+            "macro_regime": "down",
+            "timeframe": "1h",
+        }
+
+        blocked, reason = filters.evaluate_regime_block(
+            **base,
+            setup_family="continuation",
+        )
+        self.assertTrue(blocked)
+        self.assertEqual(reason, "market_regime_block:continuation_in_weak_trend")
+
+        blocked, reason = filters.evaluate_regime_block(
+            **base,
+            setup_family="reversal",
+        )
+        self.assertTrue(blocked)
+        self.assertEqual(reason, "market_regime_block:reversal_in_weak_trend")
+
+        swing_base = dict(base, timeframe="4h")
+        blocked, reason = filters.evaluate_regime_block(
+            **swing_base,
+            setup_family="swing",
+        )
+        self.assertTrue(blocked)
+        self.assertEqual(reason, "market_regime_block:reversal_in_weak_trend")
+
+    def test_chop_reversal_still_allowed_when_chop_hard_block_disabled(self):
+        filters = _reload_module(
+            "executor_modules.session_filters",
+            _clean_env(HARD_BLOCK_CHOP="false"),
+        )
+        blocked, reason = filters.evaluate_regime_block(
+            coin="TEST",
+            side="SHORT",
+            setup_family="reversal",
+            market_regime="chop",
+            confidence=0.93,
+            htf_regime="down",
+            macro_regime="down",
+            timeframe="1h",
+        )
+        self.assertFalse(blocked)
+        self.assertEqual(reason, "")
+
+    def test_executor_market_regime_uses_local_mkt_before_htf_or_macro(self):
+        executor = _reload_module("executor", _clean_env())
+
+        signal = types.SimpleNamespace(
+            regime="reversal|htf_chop|macro_chop|mkt_weak_trend",
+            meta={
+                "market_regime": "weak_trend",
+                "regime_htf_1h": "chop",
+                "regime_macro_4h": "chop",
+            },
+        )
+        self.assertEqual(executor.Executor._signal_market_regime(signal), "weak_trend")
+
+        signal = types.SimpleNamespace(
+            regime="reversal|htf_down|macro_chop|mkt_weak_trend",
+            meta={
+                "market_regime": "weak_trend",
+                "regime_htf_1h": "down",
+                "regime_macro_4h": "chop",
+            },
+        )
+        self.assertEqual(executor.Executor._signal_market_regime(signal), "weak_trend")
+
+    def test_executor_market_regime_falls_back_to_mkt_token(self):
+        executor = _reload_module("executor", _clean_env())
+        signal = types.SimpleNamespace(
+            regime="reversal|htf_chop|macro_chop|mkt_weak_trend",
+            meta={
+                "regime_htf_1h": "chop",
+                "regime_macro_4h": "chop",
+            },
+        )
+        self.assertEqual(executor.Executor._signal_market_regime(signal), "weak_trend")
 
 
 # ── validate_thresholds() ─────────────────────────────────────────────────────

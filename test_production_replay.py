@@ -1,5 +1,6 @@
 """Tests for production policy replay report logic."""
 
+import csv
 import io
 import sys
 import unittest
@@ -8,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "tools" / "research"))
 from analyze_production_policy_replay import (  # type: ignore[import-not-found]
-    _stats, _sf,
+    _active_confidence, _stats, _sf, load_candidates,
 )
 
 
@@ -64,6 +65,58 @@ class TestSafeFloat(unittest.TestCase):
 
     def test_garbage(self):
         self.assertAlmostEqual(_sf("abc"), 0.0)
+
+
+class TestReplayConfidenceSource(unittest.TestCase):
+
+    def test_active_confidence_prefers_signal_confidence_over_legacy_v1(self):
+        row = {
+            "signal_confidence": "0.84",
+            "active_quality_score": "0.83",
+            "confidence_v1": "0.41",
+            "confidence": "0.52",
+        }
+        self.assertAlmostEqual(_active_confidence(row), 0.84)
+
+    def test_load_candidates_uses_active_v3_confidence_for_policy(self):
+        import tempfile
+
+        fields = [
+            "timestamp_utc", "symbol", "side", "entry_price", "stop_price",
+            "tp_price", "score_v1", "confidence_v1", "score_v3",
+            "active_quality_score", "signal_confidence", "setup_family",
+            "session", "market_regime", "htf_regime", "macro_regime",
+            "stop_method", "atr", "timeframe",
+        ]
+        with tempfile.NamedTemporaryFile("w", newline="", suffix=".csv") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fields)
+            writer.writeheader()
+            writer.writerow({
+                "timestamp_utc": "2026-07-01T00:00:00+00:00",
+                "symbol": "SOL",
+                "side": "LONG",
+                "entry_price": "100",
+                "stop_price": "98",
+                "tp_price": "104",
+                "score_v1": "0.42",
+                "confidence_v1": "0.42",
+                "score_v3": "0.84",
+                "active_quality_score": "0.84",
+                "signal_confidence": "0.84",
+                "setup_family": "reversal",
+                "session": "ny_open",
+                "market_regime": "chop",
+                "htf_regime": "down",
+                "macro_regime": "chop",
+                "stop_method": "atr",
+                "atr": "1.0",
+                "timeframe": "1h",
+            })
+            fh.flush()
+            rows = load_candidates(fh.name)
+
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(rows[0]["confidence"], 0.84)
 
 
 class TestPromotionCriteria(unittest.TestCase):

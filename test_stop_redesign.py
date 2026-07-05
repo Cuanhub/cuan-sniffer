@@ -3,7 +3,8 @@ Tests for _apply_entry_stop_redesign telemetry and widen guard.
 
 Covers:
   - original_rr and final_rr captured in meta
-  - stop_redesign_rr_destroyed reject reason when widening kills RR
+  - TP is adjusted to preserve original_rr when widening would kill RR
+  - stop_redesign_rr_destroyed still fires when original_rr is below floor
   - stop_redesign_too_wide reject reason when widen_mult exceeds cap
   - widen_mult captured in meta on successful redesign
   - high-conf tolerance path still works
@@ -14,8 +15,10 @@ Covers:
 import importlib
 import os
 import sys
+import tempfile
 import unittest
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import MagicMock
 
@@ -57,6 +60,7 @@ def _reload_executor(env: dict):
                     "order_tracker", "protection_manager", "position",
                     "trade_log", "live_data_guard",
                     "executor_modules", "executor_modules.telemetry",
+                    "executor_modules.execution_policy",
                     "executor_modules.stop_redesign"):
             sys.modules.pop(dep, None)
     return importlib.import_module("executor")
@@ -119,8 +123,8 @@ class TestStopRedesignTelemetry(unittest.TestCase):
         self.assertGreater(meta["rr_final"], 0)
         self.assertGreater(meta["stop_widen_mult"], 0)
 
-    def test_rr_destroyed_explicit_reason(self):
-        """When widening collapses RR below floor, reason says rr_destroyed with details."""
+    def test_rr_preserved_when_widening_would_destroy_rr(self):
+        """When widening would collapse valid RR, TP moves to preserve original RR."""
         ex = _make_executor(self.executor_mod)
         # entry=100, stop=98 (sd=2.0), atr=2.0
         # ATR floor: 100 - 1.10*2.0 = 97.8. structural=98 > 97.8 → floor widens.
@@ -135,14 +139,16 @@ class TestStopRedesignTelemetry(unittest.TestCase):
                   "market_regime": "weak_trend"},
         )
         result = ex._apply_entry_stop_redesign(sig, track="intraday")
-        self.assertIsNotNone(result)
-        self.assertIn("stop_redesign_rr_destroyed", result)
-        self.assertIn("original_rr=", result)
-        self.assertIn("final_rr=", result)
-        self.assertIn("widen=", result)
+        self.assertIsNone(result, f"Expected preserved RR pass but got: {result}")
+        self.assertGreater(sig.tp_price, 103.5)
+        self.assertTrue(sig.meta["stop_redesign_tp_adjusted"])
+        self.assertEqual(sig.meta["stop_redesign_tp_adjustment_reason"], "preserve_original_rr")
+        self.assertAlmostEqual(sig.meta["original_rr"], 1.75, places=2)
+        self.assertAlmostEqual(sig.meta["rr_final"], sig.meta["original_rr"], places=3)
+        self.assertAlmostEqual(sig.meta["tp_final"], sig.tp_price, places=8)
 
-    def test_rr_destroyed_includes_original_rr_value(self):
-        """The rr_destroyed message must show the pre-widen RR."""
+    def test_rr_preservation_records_original_rr_value(self):
+        """The preservation metadata must show the pre-widen RR."""
         ex = _make_executor(self.executor_mod)
         # original_rr = 3.5 / 2.0 = 1.75
         sig = FakeSignal(
@@ -154,7 +160,10 @@ class TestStopRedesignTelemetry(unittest.TestCase):
                   "market_regime": "weak_trend"},
         )
         result = ex._apply_entry_stop_redesign(sig, track="intraday")
-        self.assertIn("original_rr=1.75", result)
+        self.assertIsNone(result)
+        self.assertAlmostEqual(sig.meta["stop_redesign_preserved_rr"], 1.75, places=2)
+        self.assertAlmostEqual(sig.meta["stop_redesign_original_tp"], 103.5, places=8)
+        self.assertGreater(sig.meta["stop_redesign_adjusted_tp"], 103.5)
 
     def test_too_wide_reject(self):
         """When widen_mult exceeds STOP_REDESIGN_MAX_WIDEN_MULT, reject explicitly."""
@@ -177,6 +186,31 @@ class TestStopRedesignTelemetry(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIn("stop_redesign_too_wide", result)
         self.assertIn("widen=", result)
+
+    def test_direct_stop_redesign_reject_has_no_executor_log_side_effect(self):
+        """Stop redesign calculation returns reasons; executor.py owns reject logging."""
+        with tempfile.TemporaryDirectory() as tmp:
+            reject_path = Path(tmp) / "executor_rejects.csv"
+            env = _clean_env(
+                STOP_REDESIGN_MAX_WIDEN_MULT="1.10",
+                EXECUTOR_REJECTS_PATH=str(reject_path),
+            )
+            mod = _reload_executor(env)
+            ex = _make_executor(mod)
+
+            sig = FakeSignal(
+                entry_price=100.0,
+                stop_price=99.5,
+                tp_price=103.0,
+                confidence=0.92,
+                meta={"atr": 1.5, "timeframe": "1h", "setup_family": "continuation",
+                      "market_regime": "weak_trend"},
+            )
+            result = ex._apply_entry_stop_redesign(sig, track="intraday")
+
+            self.assertIsNotNone(result)
+            self.assertIn("stop_redesign_too_wide", result)
+            self.assertFalse(reject_path.exists())
 
     def test_too_wide_disabled_when_zero(self):
         """Setting STOP_REDESIGN_MAX_WIDEN_MULT=0 disables the widen guard."""
@@ -238,8 +272,8 @@ class TestStopRedesignTelemetry(unittest.TestCase):
             self.assertNotIn("stop_redesign_rr_destroyed", result,
                              "High-conf reversal should not be RR-destroyed with tolerance")
 
-    def test_short_side_rr_destroyed(self):
-        """RR destruction detection works for SHORT signals too."""
+    def test_short_side_rr_preserved(self):
+        """RR preservation works for SHORT signals too."""
         ex = _make_executor(self.executor_mod)
         # entry=100, stop=102 (sd=2.0), atr=2.0
         # ATR floor: 100 + 1.10*2.0 = 102.2. structural=102 < 102.2 → floor widens.
@@ -256,8 +290,10 @@ class TestStopRedesignTelemetry(unittest.TestCase):
                   "market_regime": "weak_trend"},
         )
         result = ex._apply_entry_stop_redesign(sig, track="intraday")
-        self.assertIsNotNone(result)
-        self.assertIn("stop_redesign_rr_destroyed", result)
+        self.assertIsNone(result, f"Expected preserved RR pass but got: {result}")
+        self.assertLess(sig.tp_price, 96.5)
+        self.assertTrue(sig.meta["stop_redesign_tp_adjusted"])
+        self.assertAlmostEqual(sig.meta["rr_final"], sig.meta["original_rr"], places=3)
 
     def test_widen_mult_calculation_accuracy(self):
         """widen_mult = final_stop_dist / original_stop_dist, verify numerically."""
@@ -309,19 +345,21 @@ class TestStopRedesignTelemetry(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIn("stop_redesign_too_wide", result)
 
-    def test_rr_destroyed_telemetry_logged(self):
-        """Verify log_executor_reject is called on rr_destroyed (via side-effect)."""
+    def test_low_original_rr_still_rejects(self):
+        """Preservation must not rescue a signal whose original RR is already too low."""
         ex = _make_executor(self.executor_mod)
         sig = FakeSignal(
             entry_price=100.0,
             stop_price=98.0,
-            tp_price=103.5,
+            tp_price=102.8,
             confidence=0.91,
             meta={"atr": 2.0, "timeframe": "1h", "setup_family": "continuation",
                   "market_regime": "weak_trend"},
         )
         result = ex._apply_entry_stop_redesign(sig, track="intraday")
+        self.assertIsNotNone(result)
         self.assertIn("stop_redesign_rr_destroyed", result)
+        self.assertIn("original_rr=1.40", result)
 
 
 class TestStopRedesignWorkedExamples(unittest.TestCase):
@@ -336,8 +374,8 @@ class TestStopRedesignWorkedExamples(unittest.TestCase):
     def setUpClass(cls):
         cls.executor_mod = _reload_executor(_clean_env())
 
-    def test_wif_long_rr_destroyed(self):
-        """WIF LONG: engine_rr=1.69 → final_rr≈1.47 after widening."""
+    def test_wif_long_rr_preserved(self):
+        """WIF LONG: engine_rr=1.69 is preserved after widening."""
         ex = _make_executor(self.executor_mod)
         # ATR calibrated so ATR floor at 1.10x causes enough widening
         # to collapse RR from 1.69 to below 1.55.
@@ -361,12 +399,14 @@ class TestStopRedesignWorkedExamples(unittest.TestCase):
                   "setup_family": "continuation", "market_regime": "weak_trend"},
         )
         result = ex._apply_entry_stop_redesign(sig, track="intraday")
-        self.assertIsNotNone(result, "WIF should be rejected")
-        self.assertIn("stop_redesign_rr_destroyed", result)
-        self.assertIn("original_rr=1.69", result)
+        self.assertIsNone(result, f"WIF should preserve RR: {result}")
+        self.assertTrue(sig.meta["stop_redesign_tp_adjusted"])
+        self.assertAlmostEqual(sig.meta["original_rr"], 1.69, places=2)
+        self.assertAlmostEqual(sig.meta["rr_final"], sig.meta["original_rr"], places=3)
+        self.assertGreater(sig.tp_price, 0.17755349)
 
-    def test_pengu_long_rr_destroyed(self):
-        """PENGU LONG: engine_rr=1.69 → final_rr<1.55 after widening."""
+    def test_pengu_long_rr_preserved(self):
+        """PENGU LONG: engine_rr=1.69 is preserved after widening."""
         ex = _make_executor(self.executor_mod)
         # entry=0.007053, stop=0.00688359 (sd=0.00016941), tp=0.0073397
         # tp_dist = 0.0002867
@@ -388,8 +428,11 @@ class TestStopRedesignWorkedExamples(unittest.TestCase):
                   "setup_family": "continuation", "market_regime": "strong_trend"},
         )
         result = ex._apply_entry_stop_redesign(sig, track="intraday")
-        self.assertIsNotNone(result, "PENGU should be rejected")
-        self.assertIn("stop_redesign_rr_destroyed", result)
+        self.assertIsNone(result, f"PENGU should preserve RR: {result}")
+        self.assertTrue(sig.meta["stop_redesign_tp_adjusted"])
+        self.assertAlmostEqual(sig.meta["original_rr"], 1.69, places=2)
+        self.assertAlmostEqual(sig.meta["rr_final"], sig.meta["original_rr"], places=3)
+        self.assertGreater(sig.tp_price, 0.0073397)
 
     def test_wide_stop_passes_cleanly(self):
         """A signal with a stop already wider than ATR floor passes without widening."""
