@@ -34,6 +34,7 @@ HEADER = [
     "active_quality_model",
     "active_quality_score",
     "signal_confidence",
+    "active_quality_score_source",
     "threshold",
     "effective_threshold",
     "confidence",
@@ -150,6 +151,64 @@ def _copy_first_present(row: dict, target: str, *sources: str) -> None:
             return
 
 
+def _live_quality_model() -> str:
+    model = str(os.getenv("LIVE_ELIGIBILITY_MODEL", "v3") or "").strip().lower()
+    return model if model in {"v1", "v3"} else ""
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if _is_blank(value):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_active_quality(row: dict) -> None:
+    model = str(row.get("active_quality_model") or "").strip().lower()
+    source = str(row.get("active_quality_score_source") or "").strip().lower()
+    if source == "pending_score_v3":
+        row["active_quality_model"] = ""
+        row["active_quality_score"] = 0.0
+        row["active_quality_score_source"] = source
+        if _is_blank(row.get("signal_confidence")):
+            row["signal_confidence"] = _safe_float(row.get("confidence"), 0.0)
+        return
+
+    if not model:
+        model = _live_quality_model()
+        if model:
+            row["active_quality_model"] = model
+
+    explicit_active = not _is_blank(row.get("active_quality_score"))
+    if explicit_active:
+        row["active_quality_score"] = _safe_float(row.get("active_quality_score"), 0.0)
+        row["active_quality_score_source"] = source or "explicit"
+    elif model == "v3" and not _is_blank(row.get("score_v3")):
+        row["active_quality_score"] = _safe_float(row.get("score_v3"), 0.0)
+        row["active_quality_score_source"] = source or "score_v3"
+    elif model == "v1":
+        row["active_quality_score"] = _safe_float(
+            row.get("score_v1"),
+            _safe_float(row.get("total_score"), _safe_float(row.get("score"), 0.0)),
+        )
+        row["active_quality_score_source"] = source or "score_v1"
+    elif model == "v3":
+        row["active_quality_score"] = 0.0
+        row["active_quality_score_source"] = source or "pending_score_v3"
+    else:
+        row["active_quality_score"] = 0.0
+        row["active_quality_score_source"] = source or "unavailable"
+
+    if _is_blank(row.get("signal_confidence")):
+        score_source = str(row.get("active_quality_score_source") or "")
+        if score_source in {"explicit", "score_v3", "score_v1"}:
+            row["signal_confidence"] = row.get("active_quality_score", 0.0)
+        else:
+            row["signal_confidence"] = _safe_float(row.get("confidence"), 0.0)
+
+
 def normalize_reject_reason_family(reason: str) -> str:
     text = str(reason or "").strip().lower()
     if not text:
@@ -251,7 +310,6 @@ def append_smc_live_event(**fields: Any) -> None:
         _copy_first_present(row, "raw_score", "score")
         _copy_first_present(row, "total_score", "score", "raw_score")
         _copy_first_present(row, "score_v1", "total_score", "score", "raw_score")
-        _copy_first_present(row, "signal_confidence", "confidence")
         _copy_first_present(row, "rr_planned", "rr")
         _copy_first_present(row, "regime_htf_1h", "htf_regime")
         _copy_first_present(row, "regime_macro_4h", "macro_regime")
@@ -259,6 +317,7 @@ def append_smc_live_event(**fields: Any) -> None:
         _copy_first_present(row, "regime_local", "setup_family")
         _copy_first_present(row, "fill_slippage_bps", "slippage_bps")
         _copy_first_present(row, "slippage_bps", "fill_slippage_bps")
+        _normalize_active_quality(row)
 
         with path.open("a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=HEADER, extrasaction="ignore")

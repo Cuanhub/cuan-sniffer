@@ -55,6 +55,10 @@ class Position:
     size_usd: float = 0.0
     risk_usd: float = 0.0
     r_value: float = 0.0
+    approved_max_risk_usd: float = 0.0
+    actual_risk_usd: float = 0.0
+    risk_authority_status: str = ""
+    risk_authority_reason: str = ""
 
     # State
     state: PositionState = PositionState.OPEN
@@ -213,6 +217,10 @@ class Position:
             "size_usd": self.size_usd,
             "risk_usd": self.risk_usd,
             "r_value": self.r_value,
+            "approved_max_risk_usd": round(self.approved_max_risk_usd, 8),
+            "actual_risk_usd": round(self.actual_risk_usd, 8),
+            "risk_authority_status": self.risk_authority_status,
+            "risk_authority_reason": self.risk_authority_reason,
             "state": self.state.value,
             "close_reason": self.close_reason.value if self.close_reason else "",
             "partial_r": round(self.partial_r, 4),

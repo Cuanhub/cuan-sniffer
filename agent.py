@@ -228,6 +228,9 @@ def validate_thresholds() -> bool:
     feature_flags = {
         "SMC_ENABLE_4H_LIVE":      os.getenv("SMC_ENABLE_4H_LIVE",      "true"),
         "HARD_BLOCK_CONTINUATION": os.getenv("HARD_BLOCK_CONTINUATION", "false"),
+        "HARD_BLOCK_CHOP":         os.getenv("HARD_BLOCK_CHOP",         "false"),
+        "BLOCK_CONTINUATION_IN_WEAK_TREND": os.getenv("BLOCK_CONTINUATION_IN_WEAK_TREND", "true"),
+        "BLOCK_REVERSAL_IN_WEAK_TREND":     os.getenv("BLOCK_REVERSAL_IN_WEAK_TREND",     "true"),
         "LIVE_ELIGIBILITY_MODEL":  os.getenv("LIVE_ELIGIBILITY_MODEL",  "v3"),
     }
 

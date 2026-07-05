@@ -78,6 +78,9 @@ class RiskDecision:
     size_usd: float = 0.0
     risk_usd: float = 0.0
     size_multiplier: float = 1.0
+    approved_size_usd: float = 0.0
+    approved_max_risk_usd: float = 0.0
+    approved_size_multiplier: float = 1.0
     track: str = "intraday"
 
 
@@ -312,6 +315,9 @@ class RiskManager:
             size_usd=size_usd,
             risk_usd=risk_usd,
             size_multiplier=multiplier,
+            approved_size_usd=size_usd,
+            approved_max_risk_usd=risk_usd,
+            approved_size_multiplier=multiplier,
             track=track,
         )
 

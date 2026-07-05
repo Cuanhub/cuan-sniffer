@@ -278,12 +278,14 @@ class AdaptiveSignalEngine:
             meta["active_quality_model"] = "v3"
             meta["active_quality_score"] = round(score_v3, 4)
             meta["active_quality_threshold"] = LIVE_V3_ELIGIBILITY_THRESHOLD
+            meta["active_quality_score_source"] = "score_v3"
             return round(score_v3, 4)
 
         score_v1_value = float(score_v1 or 0.0)
         meta["active_quality_model"] = "v1"
         meta["active_quality_score"] = round(score_v1_value, 4)
         meta["active_quality_threshold"] = round(float(threshold_v1 or 0.0), 4)
+        meta["active_quality_score_source"] = "score_v1"
         return round(score_v1_value, 4)
 
     # ------------------------------------------------------------------
@@ -2646,15 +2648,14 @@ class AdaptiveSignalEngine:
                 f" | reasons={chosen_notes}"
             )
 
-        # Log every scored candidate to score_distribution.csv before the gate.
-        log_score_candidate(
-            symbol=coin, timeframe="1h", side=chosen_side,
-            score=chosen_score, threshold=effective_threshold,
-            setup_family=setup_family,
-            market_regime=market_regime, htf_regime=htf_regime, macro_regime=macro_regime,
-        )
-
         if LIVE_ELIGIBILITY_MODEL == "v1" and abs(chosen_score) < effective_threshold:
+            log_score_candidate(
+                symbol=coin, timeframe="1h", side=chosen_side,
+                score=chosen_score, threshold=effective_threshold,
+                setup_family=setup_family,
+                market_regime=market_regime, htf_regime=htf_regime, macro_regime=macro_regime,
+                session=session_label,
+            )
             self._log_smc_candidate(
                 coin=coin,
                 timeframe="1h",
@@ -2955,6 +2956,20 @@ class AdaptiveSignalEngine:
             confidence_v1=confidence_v1,
             threshold_v1=effective_threshold,
         )
+        log_score_candidate(
+            symbol=coin, timeframe="1h", side=chosen_side,
+            score=chosen_score, threshold=effective_threshold, rr=rr,
+            setup_family=setup_family,
+            market_regime=market_regime, htf_regime=htf_regime, macro_regime=macro_regime,
+            session=session_label,
+            score_v1=chosen_score,
+            score_v2=meta.get("score_v2", 0.0),
+            score_v3=meta.get("score_v3", 0.0),
+            active_quality_model=meta.get("active_quality_model", ""),
+            active_quality_score=meta.get("active_quality_score", ""),
+            signal_confidence=confidence,
+            active_quality_score_source=meta.get("active_quality_score_source", ""),
+        )
 
         if LIVE_ELIGIBILITY_MODEL == "v3":
             v3_reject_reason = self._v3_eligibility_reject_reason(meta.get("score_v3"), htf_regime)
@@ -3004,6 +3019,7 @@ class AdaptiveSignalEngine:
                     active_quality_model=meta.get("active_quality_model", ""),
                     active_quality_score=meta.get("active_quality_score", 0.0),
                     signal_confidence=confidence,
+                    score_v3=meta.get("score_v3", 0.0),
                 )
                 self._log_shadow_research_candidate(
                     coin=coin, timeframe="1h", row=row, triggers=triggers,
@@ -3468,15 +3484,14 @@ class AdaptiveSignalEngine:
             )
             return None
 
-        # Log all swing candidates before the score gate.
-        log_score_candidate(
-            symbol=coin, timeframe=swing_tf, side=side,
-            score=score, threshold=threshold,
-            setup_family=swing_family,
-            market_regime=market_regime, htf_regime=htf_regime, macro_regime=macro_regime,
-        )
-
         if LIVE_ELIGIBILITY_MODEL == "v1" and score < threshold:
+            log_score_candidate(
+                symbol=coin, timeframe=swing_tf, side=side,
+                score=score, threshold=threshold,
+                setup_family=swing_family,
+                market_regime=market_regime, htf_regime=htf_regime, macro_regime=macro_regime,
+                session=session_label,
+            )
             self._log_smc_candidate(
                 coin=coin,
                 timeframe=swing_tf,
@@ -3757,6 +3772,20 @@ class AdaptiveSignalEngine:
             confidence_v1=confidence_v1,
             threshold_v1=threshold,
         )
+        log_score_candidate(
+            symbol=coin, timeframe=swing_tf, side=side,
+            score=score, threshold=threshold, rr=rr,
+            setup_family=swing_family,
+            market_regime=market_regime, htf_regime=htf_regime, macro_regime=macro_regime,
+            session=session_label,
+            score_v1=score,
+            score_v2=meta.get("score_v2", 0.0),
+            score_v3=meta.get("score_v3", 0.0),
+            active_quality_model=meta.get("active_quality_model", ""),
+            active_quality_score=meta.get("active_quality_score", ""),
+            signal_confidence=confidence,
+            active_quality_score_source=meta.get("active_quality_score_source", ""),
+        )
 
         if LIVE_ELIGIBILITY_MODEL == "v3":
             v3_reject_reason = self._v3_eligibility_reject_reason(meta.get("score_v3"), htf_regime)
@@ -3806,6 +3835,7 @@ class AdaptiveSignalEngine:
                     active_quality_model=meta.get("active_quality_model", ""),
                     active_quality_score=meta.get("active_quality_score", 0.0),
                     signal_confidence=confidence,
+                    score_v3=meta.get("score_v3", 0.0),
                 )
                 self._log_shadow_research_candidate(
                     coin=coin, timeframe=swing_tf, row=row, triggers=triggers,
