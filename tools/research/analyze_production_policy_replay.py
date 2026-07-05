@@ -53,6 +53,15 @@ def _sf(val, default=0.0):
         return default
 
 
+def _active_confidence(row: Dict) -> float:
+    return (
+        _sf(row.get("signal_confidence"))
+        or _sf(row.get("active_quality_score"))
+        or _sf(row.get("confidence_v1"))
+        or _sf(row.get("confidence"))
+    )
+
+
 def _stats(rs):
     if not rs:
         return {"n": 0, "wr": 0, "avg": 0, "med": 0, "total": 0, "pf": 0, "mdd": 0}
@@ -126,7 +135,7 @@ def load_candidates(csv_path=None):
                 "stop_method": row.get("stop_method", ""),
                 "atr": _sf(row.get("atr")),
                 "timeframe": row.get("timeframe", "1h"),
-                "confidence": _sf(row.get("confidence_v1")),
+                "confidence": _active_confidence(row),
             })
     return candidates
 
