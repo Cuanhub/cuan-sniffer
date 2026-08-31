@@ -29,6 +29,17 @@ def check(name: str, condition: bool, detail: str = ""):
     status = PASS if condition else FAIL
     print(f"  [{status}] {name}" + (f" — {detail}" if detail else ""))
     _results.append((name, condition))
+    # Must raise: this file's test_* functions are collected directly by
+    # pytest (which calls each function and only fails on a raised
+    # exception). Without this, every check() call here was silently
+    # toothless under `pytest` — a failed check just printed FAIL and kept
+    # going, so pytest reported every one of these tests as "passed"
+    # regardless of what actually failed underneath. Only the standalone
+    # `python3 test_candle_integrity.py` runner ever surfaced real failures,
+    # via its own separate sys.exit(1) logic in run_all(). Found 2026-08-22
+    # while adding a regression test for the perp_data.py clock-drift bug —
+    # confirmed by reverting that fix: pytest still reported "passed".
+    assert condition, f"{name}" + (f" — {detail}" if detail else "")
     return condition
 
 
@@ -139,6 +150,38 @@ def test_perp_data_timestamp():
         "'time' column equals candle open (t), not close (T)",
         abs((actual_open - expected_open).total_seconds()) < 1,
         f"actual={actual_open} expected={expected_open}",
+    )
+
+
+def test_perp_data_fetch_window_not_clamped_by_local_clock():
+    print("\n=== 1b. perp_data.py — endTime is not derived from local now() ===")
+    from perp_data import PerpDataFeed
+
+    feed = PerpDataFeed(coin="SOL", interval="1h", max_candles=10, debug=False)
+
+    captured_payload = {}
+
+    def _capture(payload, *args, **kwargs):
+        captured_payload.update(payload)
+        return _make_raw_hl_response(n=5, interval_h=1, include_forming=True)
+
+    # A drifted/incorrect local clock must not silently truncate every live
+    # candle fetch to however far behind real time it is. Verified live on
+    # 2026-08-22: a local clock ~11h behind real UTC caused every request to
+    # ask Hyperliquid for candles ending ~11h in the past — and Hyperliquid
+    # genuinely truncates its response to the requested endTime, so this
+    # wasn't just a cosmetic timestamp bug, it silently dropped the most
+    # recent ~11h of real price action from every single fetch.
+    with patch.object(feed, "_post_with_backoff", side_effect=_capture):
+        feed.refresh(force=True)
+
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    requested_end_ms = captured_payload.get("req", {}).get("endTime", 0)
+    check(
+        "endTime is comfortably in the future relative to local now()",
+        requested_end_ms > now_ms + (24 * 3600 * 1000),
+        f"endTime={requested_end_ms} now_ms={now_ms} "
+        f"(endTime must never equal/track local now() directly)",
     )
 
 
@@ -410,6 +453,7 @@ def test_no_lookahead_in_signal():
 def run_all():
     suites = [
         test_perp_data_timestamp,
+        test_perp_data_fetch_window_not_clamped_by_local_clock,
         test_build_feature_frame_drops_forming,
         test_htf_regime_excludes_forming,
         test_htf_regime_insufficient_after_drops,

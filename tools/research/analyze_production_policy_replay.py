@@ -214,25 +214,80 @@ def main():
     parser.add_argument("--since", default="")
     parser.add_argument("--until", default="")
     parser.add_argument("--csv", default="", help="Path to shadow_research_candidates.csv")
+    parser.add_argument(
+        "--sessions", default="",
+        help="Comma-separated session allow-list to test as an extra scenario on top "
+             "of the production policy, e.g. --sessions ny_open,asia_open",
+    )
     args = parser.parse_args()
+    session_allowlist = (
+        {s.strip().lower() for s in args.sessions.split(",") if s.strip()}
+        if args.sessions else None
+    )
 
     candidates = load_candidates(args.csv if args.csv else None)
     if not candidates:
         print("No shadow_research_candidates.csv data.")
         return
 
-    start_dt = (datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                if args.since else datetime.now(timezone.utc) - timedelta(days=args.days))
-    end_dt = (datetime.strptime(args.until, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-              if args.until else datetime.now(timezone.utc) + timedelta(days=1))
+    # --since/--until/--days select WHICH candidates to replay. They must not
+    # also drive the candle-fetch window below: if "now" has drifted far past
+    # the candidate data (e.g. the bot's been offline for weeks), a window
+    # anchored to now() can end up entirely after every candidate's signal
+    # time. replay_trade()'s idx-lookup ("first candle after sig_ms") then
+    # silently resolves EVERY trade against candles[0] — an unrelated,
+    # unrolated later slice of price action — instead of what actually
+    # happened after the signal. This previously produced a wildly wrong
+    # (and wildly different run-to-run) profitability read with no error or
+    # warning. Fix: derive the fetch window from the candidates actually
+    # being replayed, always, regardless of args or wall-clock time.
+    def _parse_date_arg(s):
+        return datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc) if s else None
 
-    # V3 filter
-    v3_candidates = [c for c in candidates if c["v3"] >= 0.80 and c["htf"] != "up"]
+    since_filter = _parse_date_arg(args.since)
+    until_filter = _parse_date_arg(args.until)
+    if since_filter is None and until_filter is None:
+        since_filter = datetime.now(timezone.utc) - timedelta(days=args.days)
+
+    def _cand_dt(c):
+        ts = c["ts"]
+        if ts.endswith("Z"):
+            ts = ts[:-1] + "+00:00"
+        elif "+" not in ts:
+            ts += "+00:00"
+        return datetime.fromisoformat(ts)
+
+    if since_filter is not None or until_filter is not None:
+        candidates = [
+            c for c in candidates
+            if (since_filter is None or _cand_dt(c) >= since_filter)
+            and (until_filter is None or _cand_dt(c) <= until_filter)
+        ]
+
+    # V3 filter — mirrors signal_engine.py's _v3_eligibility_reject_reason:
+    # htf=up only blocks non-LONG sides (LONG-in-uptrend is a documented
+    # live exception), not every htf=up signal regardless of side.
+    v3_candidates = [
+        c for c in candidates
+        if c["v3"] >= 0.80
+        and not (c["htf"] == "up" and str(c.get("side", "")).strip().upper() != "LONG")
+    ]
     print(f"Candidates: {len(candidates)} total, {len(v3_candidates)} V3-eligible")
 
-    # Fetch candles
+    if not v3_candidates:
+        print("No V3-eligible candidates in the selected date range.")
+        return
+
+    # Fetch window: earliest signal minus a day, latest signal plus max_hold
+    # (24h) plus a day of buffer — always covers every candidate regardless
+    # of wall-clock time.
+    cand_dts = [_cand_dt(c) for c in v3_candidates]
+    start_dt = min(cand_dts) - timedelta(days=1)
+    end_dt = max(cand_dts) + timedelta(days=2)
+
     syms = sorted(set(c["sym"] for c in v3_candidates))
-    print(f"Fetching candles for {len(syms)} symbols...")
+    print(f"Fetching candles for {len(syms)} symbols "
+          f"({start_dt.date()} -> {end_dt.date()})...")
     for sym in syms:
         fetch_candles(sym, start_dt, end_dt)
         time.sleep(0.35)
@@ -243,7 +298,10 @@ def main():
     cfg_no_chop = ExecutionPolicyConfig(apply_chop_block=False, apply_dual_chop_block=False)
 
     # Replay each candidate under each scenario
-    results = {"engine_only": [], "production": [], "no_stop_redesign": [], "no_chop_block": []}
+    results = {
+        "engine_only": [], "production": [], "no_stop_redesign": [], "no_chop_block": [],
+        "session_filtered": [],
+    }
 
     for c in v3_candidates:
         try:
@@ -271,6 +329,12 @@ def main():
             if r_prod is not None:
                 results["production"].append({**c, "exit_r": round(r_prod, 4),
                                               "reject_reason": ""})
+                # Session-restricted variant: same production policy, plus an
+                # additional session allow-list gate on top — tests whether
+                # trading only the strongest session(s) beats the full mix.
+                if session_allowlist and str(c.get("session", "")).strip().lower() in session_allowlist:
+                    results["session_filtered"].append({**c, "exit_r": round(r_prod, 4),
+                                                        "reject_reason": ""})
         else:
             if r_raw is not None:
                 results["production"].append({**c, "exit_r": round(r_raw, 4),
@@ -302,12 +366,17 @@ def main():
     print(f"  {len(v3_candidates)} V3-eligible | {nd} days | {dates[0] if dates else '?'} → {dates[-1] if dates else '?'}")
     print(f"{'='*80}")
 
+    scenario_labels = ["engine_only", "production", "no_stop_redesign", "no_chop_block"]
+    if session_allowlist:
+        scenario_labels.append("session_filtered")
+
     scenario_stats = {}
-    for label in ["engine_only", "production", "no_stop_redesign", "no_chop_block"]:
+    for label in scenario_labels:
         accepted = [r for r in results[label] if not r.get("_rejected")]
         rs = [r["exit_r"] for r in accepted]
         print(f"\n{'─'*80}")
-        s = _print_stats(label.upper(), rs)
+        title = label.upper() if label != "session_filtered" else f"SESSION_FILTERED ({','.join(sorted(session_allowlist))})"
+        s = _print_stats(title, rs)
         scenario_stats[label] = s
 
     # ── Breakdowns for production ────────────────────────────────────
@@ -318,6 +387,17 @@ def main():
         _breakdown("Family", prod_accepted, lambda r: r["family"])
         _breakdown("Side", prod_accepted, lambda r: r["side"])
         _breakdown("Date", prod_accepted, lambda r: r["ts"][:10])
+
+    # ── Breakdowns for session-filtered variant ───────────────────────
+    sess_accepted = results["session_filtered"]
+    if session_allowlist and sess_accepted:
+        print(f"\n{'─'*80}")
+        print(f"  SESSION_FILTERED breakdown ({','.join(sorted(session_allowlist))})")
+        print(f"{'─'*80}")
+        _breakdown("Symbol", sess_accepted, lambda r: r["sym"])
+        _breakdown("Family", sess_accepted, lambda r: r["family"])
+        _breakdown("Side", sess_accepted, lambda r: r["side"])
+        _breakdown("Date", sess_accepted, lambda r: r["ts"][:10])
 
     # ── Reject reason attribution ────────────────────────────────────
     prod_rejected = [r for r in results["production"] if r.get("_rejected")]
@@ -351,40 +431,46 @@ def main():
         print(f"    The edge exists in research but is destroyed by executor gates.")
 
     # ── Promotion criteria ───────────────────────────────────────────
-    prod_rs = [r["exit_r"] for r in prod_accepted]
-    prod_s = _stats(prod_rs)
-    prod_by_sym = defaultdict(list)
-    prod_by_day = defaultdict(list)
-    for r in prod_accepted:
-        prod_by_sym[r["sym"]].append(r["exit_r"])
-        prod_by_day[r["ts"][:10]].append(r["exit_r"])
+    def _promotion_report(label, accepted_rows):
+        rs = [r["exit_r"] for r in accepted_rows]
+        s = _stats(rs)
+        by_sym = defaultdict(list)
+        by_day = defaultdict(list)
+        for r in accepted_rows:
+            by_sym[r["sym"]].append(r["exit_r"])
+            by_day[r["ts"][:10]].append(r["exit_r"])
 
-    prof_syms = sum(1 for vals in prod_by_sym.values() if sum(vals) > 0)
-    max_sym_pct = (max(sum(v) for v in prod_by_sym.values()) / prod_s["total"] * 100
-                   if prod_s["total"] > 0 and prod_by_sym else 0)
-    max_day_pct = (max(sum(v) for v in prod_by_day.values()) / prod_s["total"] * 100
-                   if prod_s["total"] > 0 and prod_by_day else 0)
-    days_pos = sum(1 for v in prod_by_day.values() if sum(v) > 0)
+        prof_syms = sum(1 for vals in by_sym.values() if sum(vals) > 0)
+        max_sym_pct = (max(sum(v) for v in by_sym.values()) / s["total"] * 100
+                       if s["total"] > 0 and by_sym else 0)
+        max_day_pct = (max(sum(v) for v in by_day.values()) / s["total"] * 100
+                       if s["total"] > 0 and by_day else 0)
+        days_pos = sum(1 for v in by_day.values() if sum(v) > 0)
 
-    print(f"\n{'─'*80}")
-    print(f"  PROMOTION CRITERIA (production_executor)")
-    print(f"{'─'*80}")
-    criteria = {
-        f"trades >= 100 (have {prod_s['n']})": prod_s["n"] >= 100,
-        f"PF > 1.50 (have {prod_s['pf']:.2f})": prod_s["pf"] > 1.50,
-        f"Avg R > +0.20 (have {prod_s['avg']:+.3f})": prod_s["avg"] > 0.20,
-        f"max DD acceptable ({prod_s['mdd']:.1f}R)": prod_s["mdd"] < 15,
-        f"profitable symbols >= 3 (have {prof_syms})": prof_syms >= 3,
-        f"max symbol <= 40% (have {max_sym_pct:.0f}%)": max_sym_pct <= 40,
-        f"max day <= 35% (have {max_day_pct:.0f}%)": max_day_pct <= 35,
-        f"days positive >= 60% ({days_pos}/{len(prod_by_day)})": (
-            days_pos / max(1, len(prod_by_day)) >= 0.60 if prod_by_day else False
-        ),
-    }
-    all_pass = all(criteria.values())
-    for c, passed in criteria.items():
-        print(f"  [{'PASS' if passed else 'FAIL'}] {c}")
-    print(f"\n  PROMOTE_V3_LIVE = {'YES' if all_pass else 'NO'}")
+        print(f"\n{'─'*80}")
+        print(f"  PROMOTION CRITERIA ({label})")
+        print(f"{'─'*80}")
+        criteria = {
+            f"trades >= 100 (have {s['n']})": s["n"] >= 100,
+            f"PF > 1.50 (have {s['pf']:.2f})": s["pf"] > 1.50,
+            f"Avg R > +0.20 (have {s['avg']:+.3f})": s["avg"] > 0.20,
+            f"max DD acceptable ({s['mdd']:.1f}R)": s["mdd"] < 15,
+            f"profitable symbols >= 3 (have {prof_syms})": prof_syms >= 3,
+            f"max symbol <= 40% (have {max_sym_pct:.0f}%)": max_sym_pct <= 40,
+            f"max day <= 35% (have {max_day_pct:.0f}%)": max_day_pct <= 35,
+            f"days positive >= 60% ({days_pos}/{len(by_day)})": (
+                days_pos / max(1, len(by_day)) >= 0.60 if by_day else False
+            ),
+        }
+        all_pass = all(criteria.values())
+        for c, passed in criteria.items():
+            print(f"  [{'PASS' if passed else 'FAIL'}] {c}")
+        print(f"\n  PROMOTE_V3_LIVE = {'YES' if all_pass else 'NO'}")
+        return all_pass
+
+    _promotion_report("production_executor", prod_accepted)
+    if session_allowlist:
+        _promotion_report(f"session_filtered:{','.join(sorted(session_allowlist))}", sess_accepted)
 
 
 if __name__ == "__main__":

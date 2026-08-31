@@ -198,7 +198,16 @@ class TestExecutionPolicyParity(unittest.TestCase):
         self.assertEqual(no_stop_result.redesigned_stop, trade["stop"])
         self.assertEqual(no_stop_result.final_tp, trade["tp"])
 
-    def test_chop_hard_block_removed_from_production_executor_policy(self):
+    def test_chop_hard_block_active_in_production_executor_policy(self):
+        # HARD_BLOCK_CHOP flipped false->true on 2026-08-25 (real
+        # full-pipeline replay: chop-regime reversals showed n=94,
+        # WR=23.4%, PF=0.678 -- worse than weak_trend, which was already
+        # hard-blocked). This test previously asserted the opposite
+        # (chop NOT blocked) because that used to be true; it no longer
+        # is, by design. The chop block has no exception path (the old
+        # CHOP_REVERSAL_EXCEPTION carve-out was removed 2026-08-28 as
+        # dead code -- htf==up is unconditionally blocked upstream at the
+        # signal_engine eligibility gate, so it could never fire).
         trade = _base_trade(
             stop=96.0,
             tp=108.0,
@@ -210,8 +219,8 @@ class TestExecutionPolicyParity(unittest.TestCase):
 
         result = apply_replay_policy(trade, "production_executor")
 
-        self.assertTrue(result.approved)
-        self.assertNotEqual(result.reject_reason, "market_regime_block:chop")
+        self.assertFalse(result.approved)
+        self.assertEqual(result.reject_reason, "market_regime_block:chop")
 
     def test_chop_block_does_not_apply_in_no_chop_block_policy(self):
         trade = _base_trade(

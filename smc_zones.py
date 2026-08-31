@@ -29,7 +29,9 @@ import pandas as pd
 def _ensure_atr(df: pd.DataFrame, atr_col: str = "atr_14", period: int = 14) -> pd.DataFrame:
     """
     Ensure ATR column exists.
-    Uses EMA-smoothed ATR for consistency with features.py.
+    Uses Wilder-smoothed ATR (alpha=1/period) for consistency with
+    features.py's atr() (2026-08-25: both previously used
+    ewm(span=period), which is not actually Wilder's method).
     """
     if atr_col in df.columns:
         return df
@@ -49,7 +51,7 @@ def _ensure_atr(df: pd.DataFrame, atr_col: str = "atr_14", period: int = 14) -> 
         axis=1,
     ).max(axis=1)
 
-    df[atr_col] = tr.ewm(span=period, adjust=False).mean()
+    df[atr_col] = tr.ewm(alpha=1.0 / period, adjust=False).mean()
     return df
 
 
@@ -173,6 +175,21 @@ def add_smc_zones(
         if last_bear_ob is not None and i - last_bear_ob[2] > max_zone_age_bars:
             last_bear_ob = None
 
+        # Invalidate broken OB zones (2026-08-25 fix): standard SMC rule
+        # is a zone dies the moment price CLOSES beyond its far edge, not
+        # just after max_zone_age_bars. Previously only aging/overwrite
+        # cleared a zone, so a broken OB could keep firing in_bull_ob/
+        # ob_bull confluence flags for up to max_zone_age_bars (80) bars
+        # after real price action had already invalidated it.
+        if last_bull_ob is not None:
+            ob_l, _, ob_born = last_bull_ob
+            if i != ob_born and close < ob_l:
+                last_bull_ob = None
+        if last_bear_ob is not None:
+            _, ob_h, ob_born = last_bear_ob
+            if i != ob_born and close > ob_h:
+                last_bear_ob = None
+
         price = close
 
         if last_bull_ob is not None:
@@ -221,6 +238,18 @@ def add_smc_zones(
             last_bull_fvg = None
         if last_bear_fvg is not None and i - last_bear_fvg[2] > max_zone_age_bars:
             last_bear_fvg = None
+
+        # Invalidate fully-filled FVG zones (2026-08-25 fix): same rule as
+        # OBs above -- a gap that price has fully traded back through is
+        # mitigated and dead, not just aged out.
+        if last_bull_fvg is not None:
+            f_l, _, fvg_born = last_bull_fvg
+            if i != fvg_born and close < f_l:
+                last_bull_fvg = None
+        if last_bear_fvg is not None:
+            _, f_h, fvg_born = last_bear_fvg
+            if i != fvg_born and close > f_h:
+                last_bear_fvg = None
 
         if last_bull_fvg is not None:
             f_l, f_h, _ = last_bull_fvg

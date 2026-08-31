@@ -58,10 +58,6 @@ class ExecutionPolicyConfig:
         default_factory=lambda: float(os.getenv("REGIME_TP_CAP_R", "1.75"))
     )
     hard_block_chop: bool = field(default_factory=lambda: _env_bool("HARD_BLOCK_CHOP", "false"))
-    chop_reversal_exception: bool = field(default_factory=lambda: _env_bool("CHOP_REVERSAL_EXCEPTION", "false"))
-    chop_reversal_min_confidence: float = field(
-        default_factory=lambda: float(os.getenv("CHOP_REVERSAL_MIN_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90")))
-    )
     block_continuation_in_chop: bool = field(
         default_factory=lambda: _env_bool("BLOCK_CONTINUATION_IN_CHOP", "true")
     )
@@ -157,23 +153,11 @@ def _reject(result: ExecutionPolicyResult, reason: str) -> ExecutionPolicyResult
 def _is_chop_blocked(
     *,
     market_regime: str,
-    htf_regime: str,
-    setup_family: str,
-    confidence: float,
     config: ExecutionPolicyConfig,
 ) -> bool:
     if not (config.apply_chop_block and config.hard_block_chop):
         return False
-    if market_regime != "chop":
-        return False
-    if (
-        config.chop_reversal_exception
-        and setup_family == "reversal"
-        and htf_regime == "up"
-        and confidence >= config.chop_reversal_min_confidence
-    ):
-        return False
-    return True
+    return market_regime == "chop"
 
 
 def _cap_tp_if_needed(
@@ -263,13 +247,7 @@ def evaluate_execution_policy(
     result.metadata["session"] = session
     result.metadata["stop_track"] = track
 
-    if _is_chop_blocked(
-        market_regime=market_regime,
-        htf_regime=htf_regime,
-        setup_family=setup_family,
-        confidence=confidence,
-        config=config,
-    ):
+    if _is_chop_blocked(market_regime=market_regime, config=config):
         return _reject(result, "market_regime_block:chop")
 
     if (

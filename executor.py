@@ -173,8 +173,6 @@ from executor_modules.session_filters import (
     HARD_BLOCKED_COINS,
     HARD_BLOCK_CONTINUATION,
     HARD_BLOCK_CHOP,
-    CHOP_REVERSAL_EXCEPTION,
-    CHOP_REVERSAL_MIN_CONFIDENCE,
     HARD_BLOCK_UNKNOWN_SESSION,
     HARD_BLOCKED_TIMEFRAMES,
     BLOCK_CONTINUATION_IN_CHOP,
@@ -438,8 +436,13 @@ class Executor:
             self.risk.ledger_balance = boot.realized_balance
         if self._live_mode:
             self.risk.balance = 0.0
-            self.risk.high_water_mark = 0.0
-            self._venue_equity_hwm = 0.0
+            # HWM must survive a restart — seed it from the CSV-reconstructed
+            # peak (bootstrap.py replays trades.csv from STARTING_BALANCE), not
+            # from 0.0. Zeroing it here made the drawdown circuit breaker blind
+            # to any real drawdown on every boot (it always saw "0% DD" right
+            # after startup, however deep the account actually was).
+            self.risk.high_water_mark = boot.high_water_mark
+            self._venue_equity_hwm = boot.high_water_mark
         else:
             self.risk.balance = boot.realized_balance
             self.risk.high_water_mark = boot.high_water_mark
@@ -940,47 +943,9 @@ class Executor:
                 setup_family=setup_family, market_regime=market_regime,
                 timeframe=_telemetry_tf,
             )
-            return ExecutorResult(traded=False, reason=reason)
-
-        if HARD_BLOCK_CONTINUATION and setup_family == "continuation":
-            reason = "hard_blocked_setup_family:continuation"
-            print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
-            self._log_missed(signal, sig_id, reason)
-            log_executor_reject(
-                symbol=coin, side=signal_side,
-                confidence=_telemetry_conf, rr=_telemetry_rr,
-                reject_reason=reason, session=session,
-                setup_family=setup_family, market_regime=market_regime,
-                timeframe=_telemetry_tf,
-            )
-            return ExecutorResult(traded=False, reason=reason)
-
-        if HARD_BLOCK_CHOP and market_regime == "chop":
-            _chop_conf = float(getattr(signal, "confidence", 0.0))
-            _chop_htf  = str(market_meta.get("regime_htf_1h", "")).strip().lower()
-            if (
-                CHOP_REVERSAL_EXCEPTION
-                and setup_family == "reversal"
-                and _chop_htf == "up"
-                and _chop_conf >= CHOP_REVERSAL_MIN_CONFIDENCE
-            ):
-                print(
-                    f"[EXECUTOR] {coin} {signal_side} chop_reversal_exception:"
-                    f" htf={_chop_htf} conf={_chop_conf:.2f}>={CHOP_REVERSAL_MIN_CONFIDENCE}"
-                )
-            else:
-                reason = "market_regime_block:chop"
-                print(f"[EXECUTOR] {coin} {signal_side} REJECTED — {reason}")
-                self._log_missed(signal, sig_id, reason)
-                log_executor_reject(
-                    symbol=coin, side=signal_side,
-                    confidence=_telemetry_conf, rr=_telemetry_rr,
-                    reject_reason=reason, session=session,
-                    setup_family=setup_family, market_regime=market_regime,
-                    timeframe=_telemetry_tf,
-                )
+            if reason == "market_regime_block:chop":
                 self._log_chop_shadow_lanes(signal, reason)
-                return ExecutorResult(traded=False, reason=reason)
+            return ExecutorResult(traded=False, reason=reason)
 
         if (
             SWING_MIN_CONFIDENCE > 0
@@ -3344,10 +3309,13 @@ class Executor:
         runtime_balance = float(venue_equity)
         self.risk.balance = runtime_balance
 
+        # HWM only ever rises to meet current equity, never resets to it —
+        # including on boot, where it's pre-seeded from the CSV-reconstructed
+        # peak (see __init__). A "boot always adopts current equity" special
+        # case here previously wiped out that seed on the very first venue
+        # sync, defeating the drawdown breaker after every restart.
         venue_hwm = float(getattr(self, "_venue_equity_hwm", 0.0) or 0.0)
-        if source == "boot" or venue_hwm <= 0:
-            venue_hwm = runtime_balance
-        elif runtime_balance > venue_hwm:
+        if venue_hwm <= 0 or runtime_balance > venue_hwm:
             venue_hwm = runtime_balance
         self._venue_equity_hwm = venue_hwm
         self.risk.high_water_mark = venue_hwm

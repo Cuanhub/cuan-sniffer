@@ -209,7 +209,6 @@ def validate_thresholds() -> bool:
         "SWING_MIN_CONFIDENCE":        float(os.getenv("SWING_MIN_CONFIDENCE", str(universal))),
         "SMC_4H_MIN_CONFIDENCE":       float(os.getenv("SMC_4H_MIN_CONFIDENCE", str(universal))),
         "WEAK_TREND_MIN_CONFIDENCE":   float(os.getenv("WEAK_TREND_MIN_CONFIDENCE", str(universal))),
-        "CHOP_REVERSAL_MIN_CONFIDENCE":float(os.getenv("CHOP_REVERSAL_MIN_CONFIDENCE", str(universal))),
         "MIN_SIGNAL_CONFIDENCE":       float(os.getenv("MIN_SIGNAL_CONFIDENCE", str(universal))),
     }
 
@@ -282,8 +281,8 @@ def validate_thresholds() -> bool:
     print("  FEATURE FLAGS:")
     for name, val in feature_flags.items():
         marker = ""
-        if name == "LIVE_ELIGIBILITY_MODEL" and str(val).strip().lower() not in {"v1", "v3"}:
-            marker = "  ← [THRESHOLD WARNING] supported values: v1, v3"
+        if name == "LIVE_ELIGIBILITY_MODEL" and str(val).strip().lower() not in {"v1", "v3", "v3c"}:
+            marker = "  ← [THRESHOLD WARNING] supported values: v1, v3, v3c"
             all_aligned = False
         print(f"    {name:<36} = {val}{marker}")
 
@@ -1174,10 +1173,10 @@ def build_states(session_factory) -> tuple[Dict[str, CoinState], AdaptiveSignalE
     on-chain wallet tracking is scoped to the correct coin's FlowEvents.
 
     SOL  → FlowContext(coin="SOL")  — native SOL flow from tracked wallets
-    JTO/WIF/FARTCOIN → FlowContext(coin=X) — SPL token flow from same wallets
-    HYPE → no flow context (HL EVM chain, tracked in a future sprint)
+    JTO/WIF/PENGU → FlowContext(coin=X) — SPL token flow from same wallets
+    HYPE/TAO/NEAR/SUI → no flow context (not Solana SPL tokens tracked here)
     """
-    _FLOW_TRACKED_COINS = {"SOL", "JTO", "WIF", "FARTCOIN"}
+    _FLOW_TRACKED_COINS = {"SOL", "JTO", "WIF", "PENGU"}
 
     states: Dict[str, CoinState] = {}
     shared_engine = _build_signal_engine()

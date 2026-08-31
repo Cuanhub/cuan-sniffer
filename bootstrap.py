@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
-from position import Position, PositionState
+from position import CloseReason, Position, PositionState
 
 TRADES_FILE = os.getenv("TRADES_FILE", "trades.csv")
 LIVE_BOOTSTRAP_STRICT_WALLET_CLOSE = (
@@ -114,6 +114,46 @@ def _is_wallet_authoritative_close_row(row: Dict) -> bool:
     if str(row.get("exit_order_ids", "")).strip():
         return True
     return False
+
+
+def _reconcile_venue_rejected_row(pos: Position) -> None:
+    """
+    Write a closed row for a position the venue disowns at boot time.
+
+    Without this, a position skipped here (venue says flat, CSV still says
+    open/partial) leaves a permanently stale "open" row in trades.csv forever
+    — nothing else ever revisits it, since it's dropped before ever being
+    registered with LivePositionMonitor's own reconciliation. The real exit
+    price/time/reason happened while this process wasn't running to observe
+    it, so realized_r/pnl_usd are left at 0.0 rather than guessed — this is
+    a hygiene fix (stop the CSV from lying about what's open), not an
+    attempt to reconstruct accurate P&L for the gap. Check the venue's own
+    trade history if the real fill matters for accounting.
+    """
+    try:
+        pos.state = PositionState.CLOSED
+        pos.close_reason = CloseReason.SYSTEM_EXIT_RECONCILE
+        pos.closed_at = datetime.now(timezone.utc)
+        pos.reconciled_from_venue = True
+        pos.allow_reconcile_close = False
+        pos.exit_trigger_source = "bootstrap_venue_reject"
+        if not pos.partial_closed:
+            pos.partial_r = 0.0
+        pos.runner_r = 0.0
+
+        from trade_log import upsert_trade_row
+        upsert_trade_row(pos.to_dict())
+        print(
+            f"[BOOTSTRAP] Reconciled {pos.coin} {pos.side} {pos.position_id} to "
+            f"closed in trades.csv (venue-rejected at boot; realized_r/pnl_usd "
+            f"left at 0.0 — unknown, not zero — check venue trade history for "
+            f"the real fill if it matters for accounting)"
+        )
+    except Exception as e:
+        print(
+            f"[BOOTSTRAP][WARNING] Failed to reconcile stale row for "
+            f"{pos.coin} {pos.side} {pos.position_id}: {e}"
+        )
 
 
 # ── Main bootstrap function ────────────────────────────────────────────────────
@@ -243,6 +283,7 @@ def bootstrap_state(
                         f"[BOOTSTRAP] {pos.coin} {pos.side} NOT found on venue "
                         f"— skipping (position may have been closed externally)"
                     )
+                    _reconcile_venue_rejected_row(pos)
                     continue
 
             open_positions.append(pos)

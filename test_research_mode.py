@@ -58,18 +58,29 @@ class TestResearchOnlyMode(unittest.TestCase):
         self.assertFalse(mod.Executor._RESEARCH_ONLY_MODE)
 
     def test_research_mode_reason_in_result(self):
-        mod = _reload_executor({"RESEARCH_ONLY_MODE": "true", "STARTING_BALANCE": "10000"})
+        # _on_signal_inner logs to EXECUTOR_REJECTS_PATH as a side effect —
+        # must redirect it or this test writes synthetic rows into the real
+        # project-root executor_rejects.csv on every test run.
+        reject_path = tempfile.mktemp(suffix=".csv")
+        mod = _reload_executor({
+            "RESEARCH_ONLY_MODE": "true", "STARTING_BALANCE": "10000",
+            "EXECUTOR_REJECTS_PATH": reject_path,
+        })
         ex = object.__new__(mod.Executor)
         ex._live_mode = False
         ex.notify = MagicMock()
         ex.backend = MagicMock()
         ex.signal_engine = None
 
-        sig = FakeSignal(meta={"session": "ny_open", "setup_family": "continuation",
-                               "market_regime": "chop", "timeframe": "1h"})
-        result = ex._on_signal_inner(sig, sig_id=0)
-        self.assertFalse(result.traded)
-        self.assertEqual(result.reason, "research_only_mode")
+        try:
+            sig = FakeSignal(meta={"session": "ny_open", "setup_family": "continuation",
+                                   "market_regime": "chop", "timeframe": "1h"})
+            result = ex._on_signal_inner(sig, sig_id=0)
+            self.assertFalse(result.traded)
+            self.assertEqual(result.reason, "research_only_mode")
+        finally:
+            if os.path.exists(reject_path):
+                os.unlink(reject_path)
 
     def test_telemetry_still_runs_in_research_mode(self):
         """The executor reject telemetry should still log in research mode."""
@@ -87,11 +98,13 @@ class TestResearchOnlyMode(unittest.TestCase):
 
     def test_research_mode_logs_broad_chop_lane_before_blocking_order(self):
         path = tempfile.mktemp(suffix=".csv")
+        reject_path = tempfile.mktemp(suffix=".csv")
         mod = _reload_executor({
             "RESEARCH_ONLY_MODE": "true",
             "STARTING_BALANCE": "10000",
             "HARD_BLOCK_CHOP": "true",
             "SHADOW_CHOP_LANE_PATH": path,
+            "EXECUTOR_REJECTS_PATH": reject_path,
         })
         ex = object.__new__(mod.Executor)
         ex._live_mode = False
@@ -130,6 +143,8 @@ class TestResearchOnlyMode(unittest.TestCase):
         finally:
             if os.path.exists(path):
                 os.unlink(path)
+            if os.path.exists(reject_path):
+                os.unlink(reject_path)
 
     def test_soft_block_override_path_uses_signal_track_without_crashing(self):
         mod = _reload_executor({

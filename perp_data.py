@@ -287,7 +287,17 @@ class PerpDataFeed:
         start = now - timedelta(minutes=lookback_minutes)
 
         start_ms = int(start.timestamp() * 1000)
-        end_ms = int(now.timestamp() * 1000)
+        # endTime must NOT be derived from local now() — Hyperliquid truncates
+        # its response to whatever endTime is requested (verified directly:
+        # a request with endTime=X returns nothing after X, even though real
+        # market data exists beyond it). A wrong/drifted local system clock
+        # therefore silently and permanently caps every fetch at however far
+        # behind real time the local clock is — discovered 2026-08-22 when
+        # the local clock was found ~11h behind real UTC, meaning every live
+        # candle fetch had been missing the most recent ~11h of real price
+        # action on every single request. Use a generous future bound instead
+        # so the exchange's own clock (not ours) determines the true cutoff.
+        end_ms = int((now + timedelta(days=30)).timestamp() * 1000)
 
         payload = {
             "type": "candleSnapshot",

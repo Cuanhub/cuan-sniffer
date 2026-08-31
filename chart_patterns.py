@@ -74,6 +74,18 @@ def _as_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _is_monotonic(prices: List[float], direction: str) -> bool:
+    """True only if every consecutive pair moves in `direction` ("up" or
+    "down") -- a real converging trendline, not just endpoints that
+    happen to land the right way with a reversal in between."""
+    if len(prices) < 2:
+        return False
+    pairs = list(zip(prices, prices[1:]))
+    if direction == "up":
+        return all(b > a for a, b in pairs)
+    return all(b < a for a, b in pairs)
+
+
 def _linear_slope(values: pd.Series) -> float:
     if len(values) < 2:
         return 0.0
@@ -180,14 +192,36 @@ def _prior_trend(hist: pd.DataFrame, direction: str) -> bool:
     return pct >= threshold if direction == "up" else pct <= -threshold
 
 
-def _fallback_pivots(hist: pd.DataFrame, kind: str, lookback: int) -> List[Tuple[int, float]]:
+def _fallback_pivots(
+    hist: pd.DataFrame, kind: str, lookback: int, atr_amp_mult: float = 0.5
+) -> List[Tuple[int, float]]:
+    """
+    Local-extreme pivots, used only when smc_structure.py's flag-based
+    detect_swings() found fewer than 2 real pivots. Must apply the same
+    ATR-based amplitude filter detect_swings() does (atr_amp_mult=0.5,
+    matching its default) -- otherwise this fallback systematically
+    re-admits noise exactly when the stricter primary method correctly
+    judged there wasn't a real pivot (most likely in low-volatility
+    regimes), which is the opposite of what a fallback should do.
+    """
     pivots: List[Tuple[int, float]] = []
     start = max(3, len(hist) - lookback)
     end = len(hist) - 3
     column = "high" if kind == "high" else "low"
+    has_atr = "atr_14" in hist.columns
     for i in range(start, end):
         window = hist[column].iloc[i - 3:i + 4].astype(float)
         value = _as_float(hist[column].iloc[i])
+
+        if has_atr and not pd.isna(hist["atr_14"].iloc[i]):
+            atr_val = float(hist["atr_14"].iloc[i])
+            amplitude = float(
+                hist["high"].iloc[i - 3:i + 4].astype(float).max()
+                - hist["low"].iloc[i - 3:i + 4].astype(float).min()
+            )
+            if amplitude < atr_amp_mult * atr_val:
+                continue
+
         if kind == "high" and value >= float(window.max()):
             pivots.append((i, value))
         elif kind == "low" and value <= float(window.min()):
@@ -324,8 +358,21 @@ def _detect_triangles(hist: pd.DataFrame, row: pd.Series) -> List[PatternCandida
 
     flat_highs = (max(high_prices) - min(high_prices)) / max(np.mean(high_prices), 1e-9) <= tol
     flat_lows = (max(low_prices) - min(low_prices)) / max(np.mean(low_prices), 1e-9) <= tol
-    lows_ascending = low_prices[-1] > low_prices[0] + 0.15 * max(_as_float(row.get("atr_14")), 0.0)
-    highs_descending = high_prices[-1] < high_prices[0] - 0.15 * max(_as_float(row.get("atr_14")), 0.0)
+    # Convergence requires a genuinely monotonic trendline across every
+    # sampled pivot, not just first-vs-last -- comparing only the
+    # endpoints let a dip-then-recover (or spike-then-fade) sequence pass
+    # as "ascending"/"descending" despite never forming a real converging
+    # line (e.g. lows of 100 -> 80 -> 105 previously passed "ascending"
+    # since 105 > 100 + threshold, even though the middle point breaks it).
+    min_move = 0.15 * max(_as_float(row.get("atr_14")), 0.0)
+    lows_ascending = (
+        _is_monotonic(low_prices, "up")
+        and low_prices[-1] > low_prices[0] + min_move
+    )
+    highs_descending = (
+        _is_monotonic(high_prices, "down")
+        and high_prices[-1] < high_prices[0] - min_move
+    )
 
     resistance = max(high_prices)
     support = min(low_prices)

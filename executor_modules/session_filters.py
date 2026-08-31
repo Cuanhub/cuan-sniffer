@@ -62,10 +62,6 @@ HARD_BLOCK_CONTINUATION = (
     os.getenv("HARD_BLOCK_CONTINUATION", "false").lower() == "true"
 )
 HARD_BLOCK_CHOP = os.getenv("HARD_BLOCK_CHOP", "false").lower() == "true"
-CHOP_REVERSAL_EXCEPTION = os.getenv("CHOP_REVERSAL_EXCEPTION", "false").lower() == "true"
-CHOP_REVERSAL_MIN_CONFIDENCE = float(
-    os.getenv("CHOP_REVERSAL_MIN_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
-)
 HARD_BLOCK_UNKNOWN_SESSION = (
     os.getenv("HARD_BLOCK_UNKNOWN_SESSION", "true").lower() == "true"
 )
@@ -219,15 +215,7 @@ def evaluate_regime_block(
         return True, "hard_blocked_setup_family:continuation"
 
     if HARD_BLOCK_CHOP and market_regime == "chop":
-        if (
-            CHOP_REVERSAL_EXCEPTION
-            and setup_family == "reversal"
-            and htf_regime == "up"
-            and confidence >= CHOP_REVERSAL_MIN_CONFIDENCE
-        ):
-            pass  # exception
-        else:
-            return True, "market_regime_block:chop"
+        return True, "market_regime_block:chop"
 
     if (
         BLOCK_CONTINUATION_IN_WEAK_TREND

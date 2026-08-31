@@ -32,7 +32,9 @@ EQ_CLUSTER_WINDOW = 4      # bars used to detect equal highs/lows clusters
 
 def _ensure_atr(df: pd.DataFrame, atr_col: str = "atr_14", period: int = 14) -> pd.DataFrame:
     """
-    Ensure ATR exists. Uses EMA smoothing for consistency with features.py.
+    Ensure ATR exists. Uses Wilder smoothing (alpha=1/period) for
+    consistency with features.py's atr() (2026-08-25: both previously
+    used ewm(span=period), which is not actually Wilder's method).
     """
     if atr_col in df.columns:
         return df
@@ -52,7 +54,7 @@ def _ensure_atr(df: pd.DataFrame, atr_col: str = "atr_14", period: int = 14) -> 
         axis=1,
     ).max(axis=1)
 
-    df[atr_col] = tr.ewm(span=period, adjust=False).mean()
+    df[atr_col] = tr.ewm(alpha=1.0 / period, adjust=False).mean()
     return df
 
 

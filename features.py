@@ -12,16 +12,20 @@ def ema(series: pd.Series, period: int) -> pd.Series:
 
 def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     """
-    RSI with EMA/Wilder-style smoothing.
-    More responsive and more standard for live trading than simple rolling mean.
+    RSI with true Wilder smoothing (alpha=1/period), matching the
+    original formula and every standard charting tool. Previously used
+    ewm(span=period) instead, which is alpha=2/(period+1) -- roughly
+    1.9x more reactive than real Wilder's RSI for period=14 (alpha
+    0.133 vs 0.071), giving materially different values than anything
+    computed the standard way (fixed 2026-08-25).
     """
     delta = series.diff()
 
     up = delta.clip(lower=0.0)
     down = -delta.clip(upper=0.0)
 
-    roll_up = up.ewm(span=period, adjust=False).mean()
-    roll_down = down.ewm(span=period, adjust=False).mean()
+    roll_up = up.ewm(alpha=1.0 / period, adjust=False).mean()
+    roll_down = down.ewm(alpha=1.0 / period, adjust=False).mean()
 
     rs = roll_up / (roll_down + 1e-9)
     return 100.0 - (100.0 / (1.0 + rs))
@@ -29,15 +33,16 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """
-    ATR with EMA smoothing.
-    Better suited for live systems than simple rolling mean ATR.
+    ATR with true Wilder smoothing (alpha=1/period) -- same fix as rsi()
+    above, for the same reason: ewm(span=period) is not Wilder's method
+    despite being commonly mislabeled as such.
     """
     high_low = df["high"] - df["low"]
     high_close = (df["high"] - df["close"].shift()).abs()
     low_close = (df["low"] - df["close"].shift()).abs()
 
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    return tr.ewm(span=period, adjust=False).mean()
+    return tr.ewm(alpha=1.0 / period, adjust=False).mean()
 
 
 # Session open hours in UTC — configurable via VWAP_SESSION_OPENS env var.
@@ -60,9 +65,16 @@ def _resolve_times_utc(df: pd.DataFrame) -> pd.Series | None:
     return None
 
 
+def _typical_price(df: pd.DataFrame) -> pd.Series:
+    """(H+L+C)/3 — the textbook VWAP price input. All four vwap_* functions
+    below previously used close alone, which is not standard VWAP (fixed
+    2026-08-25)."""
+    return (df["high"] + df["low"] + df["close"]) / 3.0
+
+
 def _cumulative_vwap(df: pd.DataFrame) -> pd.Series:
     """Full-history VWAP — fallback when timestamps cannot be resolved."""
-    pv = (df["close"] * df["volume"]).cumsum()
+    pv = (_typical_price(df) * df["volume"]).cumsum()
     return pv / (df["volume"].cumsum() + 1e-9)
 
 
@@ -98,7 +110,7 @@ def vwap_session(df: pd.DataFrame) -> pd.Series:
     session_open_hour = hours.map(_session_open_hour)
     session_key = dates + "_" + session_open_hour.astype(str).str.zfill(2)
 
-    pv = df["close"] * df["volume"]
+    pv = _typical_price(df) * df["volume"]
     cum_pv = pv.groupby(session_key).cumsum()
     cum_v = df["volume"].groupby(session_key).cumsum() + 1e-9
     return cum_pv / cum_v
@@ -115,7 +127,7 @@ def vwap_daily(df: pd.DataFrame) -> pd.Series:
         return _cumulative_vwap(df)
 
     dates = times.dt.date
-    pv = df["close"] * df["volume"]
+    pv = _typical_price(df) * df["volume"]
     cum_pv = pv.groupby(dates).cumsum()
     cum_v = df["volume"].groupby(dates).cumsum() + 1e-9
     return cum_pv / cum_v
@@ -137,7 +149,7 @@ def vwap_weekly(df: pd.DataFrame) -> pd.Series:
     # ISO week period — resets Monday.
     # Strip timezone before to_period() to avoid pandas UserWarning about tz drop.
     week_key = times.dt.tz_localize(None).dt.to_period("W").astype(str)
-    pv = df["close"] * df["volume"]
+    pv = _typical_price(df) * df["volume"]
     cum_pv = pv.groupby(week_key).cumsum()
     cum_v = df["volume"].groupby(week_key).cumsum() + 1e-9
     return cum_pv / cum_v

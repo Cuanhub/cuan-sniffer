@@ -113,7 +113,10 @@ def score_flow_context(flow_snapshot: Dict[str, Any]) -> Tuple[float, List[str]]
     score = 0.0
     notes: List[str] = []
     if not flow_snapshot:
-        return score, notes
+        # Coin has no on-chain flow tracking at all (not in TOKEN_MINTS) —
+        # tagged distinctly from a tracked coin reading genuinely calm, so
+        # telemetry/analysis doesn't conflate "no data" with "confirmed quiet".
+        return score, ["flow_untracked"]
     whale_pressure = max(-2.0, min(2.0, float(flow_snapshot.get("whale_pressure", 0.0))))
     flow_momentum = max(-2.0, min(2.0, float(flow_snapshot.get("flow_momentum", 0.0))))
     if whale_pressure > 0.7:
@@ -157,16 +160,30 @@ def score_flow_dead_calm(flow_snapshot: Dict[str, Any]) -> Tuple[float, List[str
     return 0.0, []
 
 
+# Thresholds recalibrated 2026-08-25 against real Hyperliquid funding-rate
+# history (fundingHistory endpoint, 30 days, all 8 currently-traded coins,
+# 4,000 hourly readings): median=0.0013%, p95=0.0017%, p99=0.0040%,
+# max observed=0.0085%. The previous thresholds (mild=0.1%, high=0.5%,
+# extreme=1%) were 12-100x higher than anything actually observed in a
+# month across the whole traded universe -- this function had never fired
+# even its lowest tier in practice, not just "rarely". New thresholds are
+# real percentile cutoffs, not round numbers picked from BTC/ETH funding
+# lore that doesn't apply to these lower-cap alts on Hyperliquid.
+FUNDING_MILD_THRESHOLD = float(os.getenv("FUNDING_MILD_THRESHOLD", "0.00002"))       # ~p93
+FUNDING_HIGH_THRESHOLD = float(os.getenv("FUNDING_HIGH_THRESHOLD", "0.00004"))       # ~p99
+FUNDING_EXTREME_THRESHOLD = float(os.getenv("FUNDING_EXTREME_THRESHOLD", "0.00008"))  # ~observed 30d max
+
+
 def score_funding_context(funding_rate: float) -> Tuple[float, List[str]]:
     score = 0.0
     notes: List[str] = []
     fr = float(funding_rate)
     abs_fr = abs(fr)
-    if abs_fr > 0.01:
+    if abs_fr > FUNDING_EXTREME_THRESHOLD:
         bump, tier = 0.15, "extreme"
-    elif abs_fr > 0.005:
+    elif abs_fr > FUNDING_HIGH_THRESHOLD:
         bump, tier = 0.08, "high"
-    elif abs_fr > 0.001:
+    elif abs_fr > FUNDING_MILD_THRESHOLD:
         bump, tier = 0.05, "mild"
     else:
         bump, tier = 0.0, ""

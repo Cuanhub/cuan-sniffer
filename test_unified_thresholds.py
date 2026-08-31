@@ -31,7 +31,6 @@ def _is_threshold_key(k: str) -> bool:
         "SWING_MIN_CONFIDENCE",
         "SMC_4H_MIN_CONFIDENCE",
         "WEAK_TREND_MIN_CONFIDENCE",
-        "CHOP_REVERSAL_MIN_CONFIDENCE",
         "MIN_SIGNAL_CONFIDENCE",
         "MIN_SIGNAL_SCORE",
         "REGIME_SCORE_THRESHOLD_STRONG",
@@ -118,9 +117,6 @@ class TestConfidenceGateDefaults(unittest.TestCase):
     def test_weak_trend_min_confidence_defaults_to_universal(self):
         self.assertAlmostEqual(self.executor.WEAK_TREND_MIN_CONFIDENCE, 0.90, places=4)
 
-    def test_chop_reversal_min_confidence_defaults_to_universal(self):
-        self.assertAlmostEqual(self.executor.CHOP_REVERSAL_MIN_CONFIDENCE, 0.90, places=4)
-
     def test_min_signal_confidence_defaults_to_universal(self):
         self.assertAlmostEqual(self.risk.MIN_SIGNAL_CONFIDENCE, 0.90, places=4)
 
@@ -140,7 +136,6 @@ class TestConfidenceGateDefaults(unittest.TestCase):
         )
         self.assertAlmostEqual(mod.SWING_MIN_CONFIDENCE, 0.93, places=4)
         self.assertAlmostEqual(mod.WEAK_TREND_MIN_CONFIDENCE, 0.93, places=4)
-        self.assertAlmostEqual(mod.CHOP_REVERSAL_MIN_CONFIDENCE, 0.93, places=4)
 
 
 # ── Score pre-filter thresholds ───────────────────────────────────────────────
@@ -219,6 +214,10 @@ class TestFeatureFlags(unittest.TestCase):
         mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="bad"))
         self.assertEqual(mod.LIVE_ELIGIBILITY_MODEL, "v3")
 
+    def test_live_eligibility_model_can_select_v3c(self):
+        mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="v3c"))
+        self.assertEqual(mod.LIVE_ELIGIBILITY_MODEL, "v3c")
+
     def test_v3_eligibility_threshold_and_htf_guard(self):
         engine = self.engine.AdaptiveSignalEngine(debug=False)
         self.assertEqual(engine._v3_eligibility_reject_reason(0.80, "down"), "")
@@ -226,6 +225,18 @@ class TestFeatureFlags(unittest.TestCase):
         self.assertEqual(engine._v3_eligibility_reject_reason(0.95, "up"), "v3_htf_up_block")
         self.assertEqual(engine._v3_eligibility_reject_reason(None, "down"), "v3_score_missing_for_live_model")
         self.assertEqual(engine._v3_eligibility_reject_reason("bad", "down"), "v3_score_missing_for_live_model")
+
+    def test_v3_htf_up_block_applies_to_long_too(self):
+        # Reverted 2026-08-25: a carve-out here used to let LONG-in-htf=up
+        # signals through (justified by a 249-signal/5-day shadow sample
+        # claiming PF 1.5-3.4). A real full-pipeline replay (real
+        # generate_signal(), 60 days, all 8 traded coins) showed the 60
+        # LONG signals that carve-out admitted had WR=10.0%, PF=0.163,
+        # TotalR=-44.69R. htf==up must block BOTH sides, not just SHORT.
+        engine = self.engine.AdaptiveSignalEngine(debug=False)
+        self.assertEqual(engine._v3_eligibility_reject_reason(0.95, "up", "LONG"), "v3_htf_up_block")
+        self.assertEqual(engine._v3_eligibility_reject_reason(0.95, "up", "SHORT"), "v3_htf_up_block")
+        self.assertEqual(engine._v3_eligibility_reject_reason(0.95, "down", "LONG"), "")
 
     def test_active_quality_stamp_defaults_to_v3(self):
         engine = self.engine.AdaptiveSignalEngine(debug=False)
@@ -240,6 +251,33 @@ class TestFeatureFlags(unittest.TestCase):
         self.assertEqual(meta["active_quality_model"], "v3")
         self.assertAlmostEqual(meta["active_quality_score"], 0.83)
         self.assertAlmostEqual(meta["confidence_v1"], 0.66)
+
+    def test_v3c_eligibility_threshold_and_htf_guard(self):
+        mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="v3c"))
+        engine = mod.AdaptiveSignalEngine(debug=False)
+        thresh = mod.LIVE_V3C_ELIGIBILITY_THRESHOLD
+        self.assertEqual(engine._v3_eligibility_reject_reason(thresh, "down", threshold=thresh), "")
+        self.assertIn(
+            "v3_score_below_threshold",
+            engine._v3_eligibility_reject_reason(thresh - 0.01, "down", threshold=thresh),
+        )
+        # htf=up block is model-independent -- applies under v3c too.
+        self.assertEqual(engine._v3_eligibility_reject_reason(0.95, "up", "LONG", threshold=thresh), "v3_htf_up_block")
+
+    def test_active_quality_stamp_rolls_to_v3c(self):
+        mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="v3c"))
+        engine = mod.AdaptiveSignalEngine(debug=False)
+        meta = {"score_v3c": 0.62}
+        confidence = engine._stamp_active_quality(
+            meta,
+            score_v1=0.66,
+            confidence_v1=0.66,
+            threshold_v1=0.64,
+        )
+        self.assertAlmostEqual(confidence, 0.62)
+        self.assertEqual(meta["active_quality_model"], "v3c")
+        self.assertAlmostEqual(meta["active_quality_score"], 0.62)
+        self.assertEqual(meta["active_quality_score_source"], "score_v3c")
 
     def test_active_quality_stamp_rolls_back_to_v1(self):
         mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="v1"))
@@ -496,7 +534,12 @@ class TestValidateThresholds(unittest.TestCase):
         ok, output = self._run_validate({"LIVE_ELIGIBILITY_MODEL": "v2"})
         self.assertFalse(ok)
         self.assertIn("LIVE_ELIGIBILITY_MODEL", output)
-        self.assertIn("supported values: v1, v3", output)
+        self.assertIn("supported values: v1, v3, v3c", output)
+
+    def test_live_eligibility_model_v3c_not_warned(self):
+        ok, output = self._run_validate({"LIVE_ELIGIBILITY_MODEL": "v3c"})
+        self.assertTrue(ok)
+        self.assertNotIn("supported values", output)
 
 
 # ── Consistency: engine RR floor == executor redesign RR ──────────────────────

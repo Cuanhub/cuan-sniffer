@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from chart_patterns import add_chart_pattern_features
+from chart_patterns import add_chart_pattern_features, _fallback_pivots, _is_monotonic
 from signal_engine import AdaptiveSignalEngine
 
 
@@ -158,6 +158,148 @@ class TestSignalEngineChartPatternScoring(unittest.TestCase):
         self.assertTrue(reason.startswith("signal_governance_block:thin_independent_thesis"))
         self.assertEqual(summary["independent_bucket_count"], 1)
         self.assertIn(reason, notes)
+
+
+class TestFallbackPivotAmplitudeFilter(unittest.TestCase):
+    """_fallback_pivots must apply the same ATR amplitude filter
+    detect_swings() uses (2026-08-25 fix) -- otherwise it re-admits noise
+    exactly when the stricter primary method correctly found nothing."""
+
+    def test_low_amplitude_noise_filtered_out(self):
+        # Flat, low-amplitude wiggle: high/low swing of ~0.2 against
+        # atr_14=1.0 (min required amplitude = 0.5*1.0 = 0.5) -- should be
+        # filtered out entirely, not treated as real pivots.
+        n = 20
+        rows = []
+        for i in range(n):
+            wiggle = 0.1 if i % 2 == 0 else -0.1
+            rows.append({"high": 100.0 + wiggle + 0.05, "low": 100.0 + wiggle - 0.05,
+                         "close": 100.0 + wiggle, "atr_14": 1.0})
+        df = pd.DataFrame(rows)
+        pivots = _fallback_pivots(df, "high", lookback=20)
+        self.assertEqual(pivots, [])
+
+    def test_real_amplitude_swing_still_detected(self):
+        # A genuine swing high with amplitude well above 0.5*ATR must
+        # still be found.
+        n = 20
+        rows = []
+        for i in range(n):
+            if i == 10:
+                price = 110.0  # clear spike
+            else:
+                price = 100.0 - abs(i - 10) * 0.05
+            rows.append({"high": price + 0.2, "low": price - 0.2, "close": price, "atr_14": 1.0})
+        df = pd.DataFrame(rows)
+        pivots = _fallback_pivots(df, "high", lookback=20)
+        self.assertTrue(any(idx == 10 for idx, _ in pivots))
+
+    def test_missing_atr_column_no_filter_no_crash(self):
+        # Graceful degradation matches detect_swings()'s has_atr behavior:
+        # no ATR column means no amplitude filter, not a crash.
+        n = 10
+        rows = [{"high": 100.0 + (0.1 if i == 5 else 0.0), "low": 99.9, "close": 100.0} for i in range(n)]
+        df = pd.DataFrame(rows)
+        pivots = _fallback_pivots(df, "high", lookback=10)
+        self.assertIsInstance(pivots, list)
+
+
+class TestTriangleMonotonicityFix(unittest.TestCase):
+    """Triangle convergence must require every pivot to move the right
+    way, not just the first-vs-last endpoints (2026-08-25 fix)."""
+
+    def test_dip_then_recover_is_not_ascending(self):
+        # 100 -> 80 -> 105: endpoints look "ascending" (105 > 100) but the
+        # middle point breaks it -- must NOT count as a real trendline.
+        self.assertFalse(_is_monotonic([100.0, 80.0, 105.0], "up"))
+
+    def test_spike_then_fade_is_not_descending(self):
+        self.assertFalse(_is_monotonic([100.0, 120.0, 95.0], "down"))
+
+    def test_genuine_ascending_sequence_passes(self):
+        self.assertTrue(_is_monotonic([90.0, 95.0, 100.0], "up"))
+
+    def test_genuine_descending_sequence_passes(self):
+        self.assertTrue(_is_monotonic([110.0, 105.0, 100.0], "down"))
+
+    def test_flat_sequence_fails_both_directions(self):
+        self.assertFalse(_is_monotonic([100.0, 100.0, 100.0], "up"))
+        self.assertFalse(_is_monotonic([100.0, 100.0, 100.0], "down"))
+
+
+class TestChartPatternPerfGate(unittest.TestCase):
+    """CHART_PATTERN_SCORING_ENABLED=false previously did not skip the
+    expensive computation (~94% of generate_signal's runtime) -- it only
+    discarded the resulting score afterward via _score_chart_pattern's own
+    guard. Fixed 2026-08-28: _build_feature_frame now skips the call
+    entirely when disabled, relying on its existing default-column
+    fill-in (flag_cols/text_cols_defaults) to keep the frame valid."""
+
+    @staticmethod
+    def _synthetic_ohlcv(n=260):
+        base = pd.Timestamp("2026-01-01", tz="UTC")
+        rows = []
+        for i in range(n):
+            price = 100.0 + (i % 20) * 0.3
+            rows.append({
+                "time": base + pd.Timedelta(hours=i),
+                "open": price - 0.1, "high": price + 0.6,
+                "low": price - 0.6, "close": price,
+                "volume": 1000.0 + i,
+            })
+        return pd.DataFrame(rows)
+
+    def test_disabled_skips_computation_entirely(self):
+        import signal_engine
+        call_count = {"n": 0}
+        original = signal_engine.add_chart_pattern_features
+
+        def counting_wrapper(df):
+            call_count["n"] += 1
+            return original(df)
+
+        signal_engine.add_chart_pattern_features = counting_wrapper
+        signal_engine.CHART_PATTERN_SCORING_ENABLED = False
+        try:
+            engine = AdaptiveSignalEngine(debug=False)
+            feat = engine._build_feature_frame(self._synthetic_ohlcv(), min_len=200)
+            self.assertFalse(feat.empty)
+            self.assertEqual(call_count["n"], 0)
+        finally:
+            signal_engine.add_chart_pattern_features = original
+            signal_engine.CHART_PATTERN_SCORING_ENABLED = True
+
+    def test_disabled_still_fills_valid_default_columns(self):
+        import signal_engine
+        signal_engine.CHART_PATTERN_SCORING_ENABLED = False
+        try:
+            engine = AdaptiveSignalEngine(debug=False)
+            feat = engine._build_feature_frame(self._synthetic_ohlcv(), min_len=200)
+            self.assertFalse(feat.empty)
+            row = feat.iloc[-1]
+            self.assertEqual(row["chart_pattern"], "")
+            self.assertEqual(float(row["chart_pattern_score"]), 0.0)
+            self.assertFalse(bool(row["chart_pattern_confirmed"]))
+        finally:
+            signal_engine.CHART_PATTERN_SCORING_ENABLED = True
+
+    def test_enabled_still_calls_computation(self):
+        import signal_engine
+        call_count = {"n": 0}
+        original = signal_engine.add_chart_pattern_features
+
+        def counting_wrapper(df):
+            call_count["n"] += 1
+            return original(df)
+
+        signal_engine.add_chart_pattern_features = counting_wrapper
+        signal_engine.CHART_PATTERN_SCORING_ENABLED = True
+        try:
+            engine = AdaptiveSignalEngine(debug=False)
+            engine._build_feature_frame(self._synthetic_ohlcv(), min_len=200)
+            self.assertEqual(call_count["n"], 1)
+        finally:
+            signal_engine.add_chart_pattern_features = original
 
 
 if __name__ == "__main__":

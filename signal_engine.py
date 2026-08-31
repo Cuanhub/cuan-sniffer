@@ -140,10 +140,16 @@ REGIME_SCORE_THRESHOLD_CHOP = float(os.getenv("REGIME_SCORE_THRESHOLD_CHOP", "0.
 _LIVE_ELIGIBILITY_MODEL_RAW = os.getenv("LIVE_ELIGIBILITY_MODEL", "v3").strip().lower()
 LIVE_ELIGIBILITY_MODEL = (
     _LIVE_ELIGIBILITY_MODEL_RAW
-    if _LIVE_ELIGIBILITY_MODEL_RAW in {"v1", "v3"}
+    if _LIVE_ELIGIBILITY_MODEL_RAW in {"v1", "v3", "v3c"}
     else "v3"
 )
 LIVE_V3_ELIGIBILITY_THRESHOLD = 0.80
+# score_v3c uses a different scale than score_v3 (side-conditioned rescore,
+# see score_v3c.py) -- 0.80 does not carry over. 0.58 is the in-sample
+# threshold-sweep elbow balancing volume (n=91/45d) against quality
+# (PF=1.38, AvgR=+0.205) -- see score_v3c.py docstring. In-sample only;
+# revisit once genuine forward data accumulates.
+LIVE_V3C_ELIGIBILITY_THRESHOLD = float(os.getenv("LIVE_V3C_ELIGIBILITY_THRESHOLD", "0.58"))
 
 DEDUP_ANTI_SPAM_FLOOR_SEC = int(os.getenv("DEDUP_ANTI_SPAM_FLOOR_SEC", "60"))
 DEDUP_PRICE_MOVE_ATR_MULT = float(os.getenv("DEDUP_PRICE_MOVE_ATR_MULT", "0.50"))
@@ -246,19 +252,35 @@ class AdaptiveSignalEngine:
         )
 
     @staticmethod
-    def _v3_eligibility_reject_reason(score_v3: float, htf_regime: str) -> str:
+    def _v3_eligibility_reject_reason(
+        score_v3: float,
+        htf_regime: str,
+        side: str = "",
+        threshold: float = LIVE_V3_ELIGIBILITY_THRESHOLD,
+    ) -> str:
         if score_v3 is None or str(score_v3).strip() == "":
             return "v3_score_missing_for_live_model"
         try:
             score_value = float(score_v3)
         except (TypeError, ValueError):
             return "v3_score_missing_for_live_model"
+        # htf=up blocks ALL sides, including LONG (reverted 2026-08-25).
+        # A carve-out here previously let LONG-in-htf=up signals through,
+        # justified by a shadow sample (249 signals, 5 days) claiming
+        # PF 1.5-3.4 for that sub-cohort. Tested directly with a full
+        # real-pipeline replay (real generate_signal(), 60 days, all 8
+        # traded coins, real price outcomes): the 60 LONG signals that
+        # carve-out specifically admitted showed WR=10.0%, PF=0.163,
+        # TotalR=-44.69R -- a severe net loser, the opposite of the
+        # shadow claim. Reverting to the original unconditional block.
+        # This applies regardless of which score model (v3 or v3c) is
+        # active -- it's a validated, model-independent eligibility gate.
         if str(htf_regime or "").strip().lower() == "up":
             return "v3_htf_up_block"
-        if score_value < LIVE_V3_ELIGIBILITY_THRESHOLD:
+        if score_value < threshold:
             return (
                 f"v3_score_below_threshold:"
-                f"{score_value:.3f}<{LIVE_V3_ELIGIBILITY_THRESHOLD:.3f}"
+                f"{score_value:.3f}<{threshold:.3f}"
             )
         return ""
 
@@ -280,6 +302,16 @@ class AdaptiveSignalEngine:
             meta["active_quality_threshold"] = LIVE_V3_ELIGIBILITY_THRESHOLD
             meta["active_quality_score_source"] = "score_v3"
             return round(score_v3, 4)
+        if LIVE_ELIGIBILITY_MODEL == "v3c":
+            try:
+                score_v3c = float(meta.get("score_v3c", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                score_v3c = 0.0
+            meta["active_quality_model"] = "v3c"
+            meta["active_quality_score"] = round(score_v3c, 4)
+            meta["active_quality_threshold"] = LIVE_V3C_ELIGIBILITY_THRESHOLD
+            meta["active_quality_score_source"] = "score_v3c"
+            return round(score_v3c, 4)
 
         score_v1_value = float(score_v1 or 0.0)
         meta["active_quality_model"] = "v1"
@@ -319,7 +351,8 @@ class AdaptiveSignalEngine:
             df = build_structure(df, lookback=5)
             df = add_smc_zones(df)
             df = add_sweep_features(df)
-            df = add_chart_pattern_features(df)
+            if CHART_PATTERN_SCORING_ENABLED:
+                df = add_chart_pattern_features(df)
         except Exception as e:
             if self.debug:
                 print("[FEATURE_FRAME_DEBUG] Pipeline build failed: " + str(e))
@@ -1207,6 +1240,8 @@ class AdaptiveSignalEngine:
 
             from score_v2 import compute_shadow_score_v2
             from score_v3 import compute_shadow_score_v3
+            from score_v3b import compute_shadow_score_v3b
+            from score_v3c import compute_shadow_score_v3c
             v2_ctx = dict(meta)
             v2_ctx.update({
                 "symbol": coin,
@@ -1227,6 +1262,8 @@ class AdaptiveSignalEngine:
             v2_ctx.update(triggers or {})
             v2 = compute_shadow_score_v2(v2_ctx)
             v3 = compute_shadow_score_v3(v2_ctx)
+            v3b = compute_shadow_score_v3b(v2_ctx)
+            v3c = compute_shadow_score_v3c(v2_ctx)
             confidence_v1_value = float(
                 meta.get(
                     "confidence_v1",
@@ -1254,6 +1291,14 @@ class AdaptiveSignalEngine:
                 score_v3_version=v3.get("score_v3_version", ""),
                 score_v3_tags=v3.get("score_v3_tags", []),
                 score_v3_reason=v3.get("score_v3_reason", ""),
+                score_v3b=v3b.get("score_v3b", 0.0),
+                score_v3b_version=v3b.get("score_v3b_version", ""),
+                score_v3b_tags=v3b.get("score_v3b_tags", []),
+                score_v3b_reason=v3b.get("score_v3b_reason", ""),
+                score_v3c=v3c.get("score_v3c", 0.0),
+                score_v3c_version=v3c.get("score_v3c_version", ""),
+                score_v3c_tags=v3c.get("score_v3c_tags", []),
+                score_v3c_reason=v3c.get("score_v3c_reason", ""),
                 active_quality_model=meta.get("active_quality_model", ""),
                 active_quality_score=meta.get("active_quality_score", ""),
                 signal_confidence=confidence_value,
@@ -2137,10 +2182,17 @@ class AdaptiveSignalEngine:
             score += dz_score
             score += funding_score
             oi_score, oi_notes = self._score_oi_directional(sentiment, side)
-            if oi_score > 0:
-                score += min(0.10, oi_score + 0.02); notes.append("oi_supports_reversal")
+            # Falling OI = short-covering fueling the bounce = genuine
+            # reversal confirmation (standard institutional OI framework).
+            # Rising OI here means fresh shorts are still piling into the
+            # prior downtrend -- evidence AGAINST this being a real
+            # reversal, not for it. (Was previously inverted: bonused
+            # rising OI as "oi_supports_reversal", which rewarded continued
+            # bearish conviction as if it confirmed a bullish reversal.)
+            if oi_score < 0:
+                score += min(0.10, -oi_score + 0.02); notes.append("oi_supports_reversal")
             else:
-                score += oi_score
+                score -= oi_score
             notes.extend(flow_notes); notes.extend(dc_notes); notes.extend(dz_notes); notes.extend(funding_notes); notes.extend(oi_notes)
 
         elif bearish_trigger and bearish_context and allow_bear:
@@ -2159,10 +2211,15 @@ class AdaptiveSignalEngine:
             score += dz_score
             score += -funding_score
             oi_score, oi_notes = self._score_oi_directional(sentiment, side)
-            if oi_score > 0:
-                score += min(0.10, oi_score + 0.02); notes.append("oi_supports_reversal")
+            # Falling OI = long-liquidation fueling the drop = genuine
+            # bearish reversal confirmation. Rising OI here means fresh
+            # longs are still piling into the prior uptrend -- evidence
+            # against this being a real reversal. (Same inversion fix as
+            # the LONG branch above.)
+            if oi_score < 0:
+                score += min(0.10, -oi_score + 0.02); notes.append("oi_supports_reversal")
             else:
-                score += oi_score
+                score -= oi_score
             notes.extend(flow_notes); notes.extend(dc_notes); notes.extend(dz_notes); notes.extend(funding_notes); notes.extend(oi_notes)
 
         if side is not None:
@@ -2971,8 +3028,16 @@ class AdaptiveSignalEngine:
             active_quality_score_source=meta.get("active_quality_score_source", ""),
         )
 
-        if LIVE_ELIGIBILITY_MODEL == "v3":
-            v3_reject_reason = self._v3_eligibility_reject_reason(meta.get("score_v3"), htf_regime)
+        if LIVE_ELIGIBILITY_MODEL in ("v3", "v3c"):
+            _elig_field = "score_v3" if LIVE_ELIGIBILITY_MODEL == "v3" else "score_v3c"
+            _elig_threshold = (
+                LIVE_V3_ELIGIBILITY_THRESHOLD
+                if LIVE_ELIGIBILITY_MODEL == "v3"
+                else LIVE_V3C_ELIGIBILITY_THRESHOLD
+            )
+            v3_reject_reason = self._v3_eligibility_reject_reason(
+                meta.get(_elig_field), htf_regime, chosen_side, threshold=_elig_threshold
+            )
             if v3_reject_reason:
                 score_v3 = float(meta.get("active_quality_score", 0.0) or 0.0)
                 self._log_smc_candidate(
@@ -3004,18 +3069,18 @@ class AdaptiveSignalEngine:
                 if self.debug:
                     print(
                         f"[SIGNAL_DEBUG] {coin} {chosen_side} rejected by "
-                        f"LIVE_ELIGIBILITY_MODEL=v3 reason={v3_reject_reason}"
+                        f"LIVE_ELIGIBILITY_MODEL={LIVE_ELIGIBILITY_MODEL} reason={v3_reject_reason}"
                     )
                 log_gate_reject(
                     symbol=coin, timeframe="1h", side=chosen_side,
                     reject_reason=v3_reject_reason,
                     raw_score=chosen_score, confidence=confidence,
-                    threshold=LIVE_V3_ELIGIBILITY_THRESHOLD,
+                    threshold=_elig_threshold,
                     rr=rr, price=price, atr=atr_val,
                     market_regime=market_regime, htf_regime=htf_regime,
                     macro_regime=macro_regime, session=session_label,
                     setup_family=setup_family,
-                    metadata=f"live_model=v3|score_v3={score_v3:.3f}",
+                    metadata=f"live_model={LIVE_ELIGIBILITY_MODEL}|{_elig_field}={score_v3:.3f}",
                     active_quality_model=meta.get("active_quality_model", ""),
                     active_quality_score=meta.get("active_quality_score", 0.0),
                     signal_confidence=confidence,
@@ -3319,6 +3384,12 @@ class AdaptiveSignalEngine:
             vol_s, vol_n = self._score_volume_context(row)
             body_s, body_n = self._score_trigger_quality(row)
             oi_s, oi_n = self._score_oi_directional(sentiment, candidate_side)
+            if swing_family == "reversal":
+                # Same fix as the 1h reversal builder: falling OI (short
+                # covering / long liquidation from the prior trend) confirms
+                # a reversal; rising OI means fresh positions still piling
+                # into the prior trend, which argues against one.
+                oi_s = -oi_s
             candidate_score += rsi_s + vwap_s + vol_s + body_s + oi_s
             candidate_reasons.extend(flow_notes)
             candidate_reasons.extend(funding_notes)
@@ -3787,8 +3858,16 @@ class AdaptiveSignalEngine:
             active_quality_score_source=meta.get("active_quality_score_source", ""),
         )
 
-        if LIVE_ELIGIBILITY_MODEL == "v3":
-            v3_reject_reason = self._v3_eligibility_reject_reason(meta.get("score_v3"), htf_regime)
+        if LIVE_ELIGIBILITY_MODEL in ("v3", "v3c"):
+            _elig_field = "score_v3" if LIVE_ELIGIBILITY_MODEL == "v3" else "score_v3c"
+            _elig_threshold = (
+                LIVE_V3_ELIGIBILITY_THRESHOLD
+                if LIVE_ELIGIBILITY_MODEL == "v3"
+                else LIVE_V3C_ELIGIBILITY_THRESHOLD
+            )
+            v3_reject_reason = self._v3_eligibility_reject_reason(
+                meta.get(_elig_field), htf_regime, side, threshold=_elig_threshold
+            )
             if v3_reject_reason:
                 score_v3 = float(meta.get("active_quality_score", 0.0) or 0.0)
                 self._log_smc_candidate(
@@ -3820,18 +3899,18 @@ class AdaptiveSignalEngine:
                 if self.debug:
                     print(
                         f"[SWING_DEBUG] {coin} {side} rejected by "
-                        f"LIVE_ELIGIBILITY_MODEL=v3 reason={v3_reject_reason}"
+                        f"LIVE_ELIGIBILITY_MODEL={LIVE_ELIGIBILITY_MODEL} reason={v3_reject_reason}"
                     )
                 log_gate_reject(
                     symbol=coin, timeframe=swing_tf, side=side,
                     reject_reason=v3_reject_reason,
                     raw_score=score, confidence=confidence,
-                    threshold=LIVE_V3_ELIGIBILITY_THRESHOLD,
+                    threshold=_elig_threshold,
                     rr=rr, price=price, atr=atr_val,
                     market_regime=market_regime, htf_regime=htf_regime,
                     macro_regime=macro_regime, session=session_label,
                     setup_family=swing_family,
-                    metadata=f"live_model=v3|score_v3={score_v3:.3f}",
+                    metadata=f"live_model={LIVE_ELIGIBILITY_MODEL}|{_elig_field}={score_v3:.3f}",
                     active_quality_model=meta.get("active_quality_model", ""),
                     active_quality_score=meta.get("active_quality_score", 0.0),
                     signal_confidence=confidence,

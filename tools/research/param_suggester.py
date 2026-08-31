@@ -39,7 +39,6 @@ OUTPUT_PATH     = os.getenv("PARAM_SUGGESTION_OUTPUT",   "suggested_params.json"
 
 # ── Gate thresholds (read from env so they match the live system) ──────────────
 SWING_MIN_CONFIDENCE        = float(os.getenv("SWING_MIN_CONFIDENCE",          "0.90"))
-CHOP_REVERSAL_MIN_CONF      = float(os.getenv("CHOP_REVERSAL_MIN_CONFIDENCE",  "0.90"))
 REVERSAL_CHOP_MIN_SCORE     = float(os.getenv("REVERSAL_CHOP_MIN_SCORE",       "0.78"))
 WEAK_TREND_MIN_CONFIDENCE   = float(os.getenv("WEAK_TREND_MIN_CONFIDENCE",     "0.80"))
 
@@ -162,40 +161,6 @@ def analyze_swing_conf_gate(df: pd.DataFrame) -> Dict[str, Any]:
 
     return {
         "checked": len(blocked),
-        "scan_band": band_stats,
-        "suggestion": suggestion,
-    }
-
-
-def analyze_chop_reversal_gate(df: pd.DataFrame) -> Dict[str, Any]:
-    """Signals blocked by chop gate (market_regime_block:chop)."""
-    blocked = df[df["reject_reason"] == "market_regime_block:chop"].copy()
-    if blocked.empty:
-        return {"checked": 0, "suggestion": None, "note": "no chop-blocked rejections in window"}
-
-    all_stats = _stats(blocked)
-
-    band = blocked[
-        (blocked["confidence"] >= CHOP_REVERSAL_MIN_CONF - SCAN_BAND) &
-        (blocked["confidence"] < CHOP_REVERSAL_MIN_CONF)
-    ]
-    band_stats = _stats(band)
-
-    suggestion = None
-    if _has_edge(band_stats):
-        new_floor, evidence = _find_optimal_threshold(blocked, CHOP_REVERSAL_MIN_CONF, "confidence", "lower")
-        if new_floor < CHOP_REVERSAL_MIN_CONF:
-            suggestion = {
-                "param": "CHOP_REVERSAL_MIN_CONFIDENCE",
-                "current": CHOP_REVERSAL_MIN_CONF,
-                "suggested": new_floor,
-                "evidence": evidence or band_stats,
-                "warning": "Chop reversals are high-noise. Validate with tools/research/backtest_missed.py first.",
-            }
-
-    return {
-        "checked": len(blocked),
-        "all_chop_stats": all_stats,
         "scan_band": band_stats,
         "suggestion": suggestion,
     }
@@ -384,7 +349,6 @@ def run(days: int = ANALYSIS_DAYS, output: str = OUTPUT_PATH, verbose: bool = Fa
           f"{df['reject_reason'].nunique()} unique reject reasons")
 
     swing_conf   = analyze_swing_conf_gate(df)
-    chop_rev     = analyze_chop_reversal_gate(df)
     rev_score    = analyze_reversal_score_gate(df)
     continuation = analyze_continuation_gate(df)
     per_coin     = analyze_per_coin(df, verbose=verbose)
@@ -402,7 +366,6 @@ def run(days: int = ANALYSIS_DAYS, output: str = OUTPUT_PATH, verbose: bool = Fa
     all_suggestions: List[Dict] = [
         s for s in [
             swing_conf.get("suggestion"),
-            chop_rev.get("suggestion"),
             rev_score.get("suggestion"),
             continuation.get("suggestion"),
         ]
@@ -421,7 +384,6 @@ def run(days: int = ANALYSIS_DAYS, output: str = OUTPUT_PATH, verbose: bool = Fa
         ),
         "gate_thresholds_used": {
             "SWING_MIN_CONFIDENCE": SWING_MIN_CONFIDENCE,
-            "CHOP_REVERSAL_MIN_CONFIDENCE": CHOP_REVERSAL_MIN_CONF,
             "REVERSAL_CHOP_MIN_SCORE": REVERSAL_CHOP_MIN_SCORE,
             "WEAK_TREND_MIN_CONFIDENCE": WEAK_TREND_MIN_CONFIDENCE,
         },
@@ -435,7 +397,6 @@ def run(days: int = ANALYSIS_DAYS, output: str = OUTPUT_PATH, verbose: bool = Fa
         "suggestions": all_suggestions,
         "gate_analysis": {
             "swing_conf_gate":      swing_conf,
-            "chop_reversal_gate":   chop_rev,
             "reversal_score_gate":  rev_score,
             "continuation_gate":    continuation,
         },

@@ -1,8 +1,10 @@
 """
 SPL token metadata for per-coin on-chain flow tracking.
 
-Tracked coins: JTO, WIF, FARTCOIN (all Solana SPL tokens).
-HYPE is on Hyperliquid EVM — tracked separately in a future sprint.
+Tracked coins: JTO, WIF, PENGU (all Solana SPL tokens).
+HYPE, TAO, NEAR, SUI are not tracked on-chain here (HYPE is on Hyperliquid
+EVM; the others aren't Solana-ecosystem tokens) — their whale_pressure/
+flow_imbalance scores read as untracked, not "confirmed calm".
 
 Price fetching reuses the Hyperliquid allMids endpoint (same source as
 config.get_sol_price) so no additional API credentials are needed.
@@ -17,9 +19,9 @@ from typing import Dict, Optional
 # ── Mint addresses ────────────────────────────────────────────────────────────
 # Maps coin symbol → SPL token metadata.
 TOKEN_MINTS: Dict[str, Dict] = {
-    "JTO":      {"mint": "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL", "decimals": 9},
-    "WIF":      {"mint": "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", "decimals": 6},
-    "FARTCOIN": {"mint": "9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump", "decimals": 6},
+    "JTO":   {"mint": "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL", "decimals": 9},
+    "WIF":   {"mint": "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", "decimals": 6},
+    "PENGU": {"mint": "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv", "decimals": 6},
 }
 
 # Reverse lookup: mint address → coin symbol

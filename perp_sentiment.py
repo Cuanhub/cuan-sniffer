@@ -1,3 +1,4 @@
+import json
 import os
 import threading
 import time
@@ -20,6 +21,13 @@ from live_data_guard import (
 _OI_HISTORY_MAXLEN: int = 350
 _OI_1H_SECS: int = 3600
 _OI_4H_SECS: int = 14400
+
+# OI history previously lived only in memory, so every restart threw it away
+# and oi_delta_1h/4h silently read 0.0 for the first 1-4h after every boot
+# with no flag distinguishing "warming up" from "genuinely flat OI". Persist
+# it across restarts so a restart doesn't blind this factor.
+_OI_HISTORY_STATE_PATH = os.getenv("OI_HISTORY_STATE_PATH", "oi_history_state.json")
+_OI_HISTORY_STATE_LOCK = threading.Lock()
 
 # Env-tunable thresholds for the two OI delta tiers (fraction, not percent).
 OI_STRONG_1H = float(os.getenv("OI_STRONG_1H_THRESHOLD", "0.05"))  # 5 % in 1H
@@ -88,7 +96,46 @@ class PerpSentimentFeed:
         self._stop_flag = False
         self._thread: Optional[threading.Thread] = None
         # Ring buffer of (epoch_seconds, oi_value) — retained up to 4H+
-        self._oi_history: deque = deque(maxlen=_OI_HISTORY_MAXLEN)
+        self._oi_history: deque = deque(
+            self._load_persisted_oi_history(self.coin), maxlen=_OI_HISTORY_MAXLEN
+        )
+
+    @staticmethod
+    def _load_persisted_oi_history(coin: str) -> List[Tuple[float, float]]:
+        """Load this coin's OI ring buffer from disk, dropping stale entries."""
+        cutoff = time.time() - (_OI_4H_SECS + _OI_1H_SECS)
+        try:
+            with _OI_HISTORY_STATE_LOCK:
+                if not os.path.exists(_OI_HISTORY_STATE_PATH):
+                    return []
+                with open(_OI_HISTORY_STATE_PATH, "r") as f:
+                    state = json.load(f)
+            entries = state.get(coin.upper(), [])
+            return [
+                (float(ts), float(oi)) for ts, oi in entries
+                if float(ts) >= cutoff
+            ]
+        except Exception:
+            return []
+
+    def _persist_oi_history(self) -> None:
+        """Write this coin's current OI ring buffer back to the shared state file."""
+        try:
+            with _OI_HISTORY_STATE_LOCK:
+                state = {}
+                if os.path.exists(_OI_HISTORY_STATE_PATH):
+                    try:
+                        with open(_OI_HISTORY_STATE_PATH, "r") as f:
+                            state = json.load(f)
+                    except Exception:
+                        state = {}
+                state[self.coin] = [[ts, oi] for ts, oi in self._oi_history]
+                tmp_path = f"{_OI_HISTORY_STATE_PATH}.tmp"
+                with open(tmp_path, "w") as f:
+                    json.dump(state, f)
+                os.replace(tmp_path, _OI_HISTORY_STATE_PATH)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Public API
@@ -368,6 +415,7 @@ class PerpSentimentFeed:
         # enough for append/iteration at this frequency, and we avoid holding the lock longer).
         now_ts = time.time()
         self._oi_history.append((now_ts, open_interest))
+        self._persist_oi_history()
 
         # Compute real timeframe deltas now that history is updated.
         oi_delta_1h = self._oi_delta_pct(open_interest, _OI_1H_SECS)
