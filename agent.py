@@ -230,7 +230,7 @@ def validate_thresholds() -> bool:
         "HARD_BLOCK_CHOP":         os.getenv("HARD_BLOCK_CHOP",         "false"),
         "BLOCK_CONTINUATION_IN_WEAK_TREND": os.getenv("BLOCK_CONTINUATION_IN_WEAK_TREND", "true"),
         "BLOCK_REVERSAL_IN_WEAK_TREND":     os.getenv("BLOCK_REVERSAL_IN_WEAK_TREND",     "true"),
-        "LIVE_ELIGIBILITY_MODEL":  os.getenv("LIVE_ELIGIBILITY_MODEL",  "v3"),
+        "LIVE_ELIGIBILITY_MODEL":  os.getenv("LIVE_ELIGIBILITY_MODEL",  "v3c"),
     }
 
     sep = "─" * 58
@@ -281,8 +281,8 @@ def validate_thresholds() -> bool:
     print("  FEATURE FLAGS:")
     for name, val in feature_flags.items():
         marker = ""
-        if name == "LIVE_ELIGIBILITY_MODEL" and str(val).strip().lower() not in {"v1", "v3", "v3c"}:
-            marker = "  ← [THRESHOLD WARNING] supported values: v1, v3, v3c"
+        if name == "LIVE_ELIGIBILITY_MODEL" and str(val).strip().lower() not in {"v1", "v3c"}:
+            marker = "  ← [THRESHOLD WARNING] supported values: v1, v3c"
             all_aligned = False
         print(f"    {name:<36} = {val}{marker}")
 

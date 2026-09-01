@@ -203,16 +203,23 @@ class TestFeatureFlags(unittest.TestCase):
         """SMC_ENABLE_4H_LIVE must default to True post-candle-fix."""
         self.assertTrue(self.engine.SMC_ENABLE_4H_LIVE)
 
-    def test_live_eligibility_model_defaults_to_v3(self):
-        self.assertEqual(self.engine.LIVE_ELIGIBILITY_MODEL, "v3")
+    def test_live_eligibility_model_defaults_to_v3c(self):
+        self.assertEqual(self.engine.LIVE_ELIGIBILITY_MODEL, "v3c")
 
     def test_live_eligibility_model_can_rollback_to_v1(self):
         mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="v1"))
         self.assertEqual(mod.LIVE_ELIGIBILITY_MODEL, "v1")
 
-    def test_live_eligibility_model_invalid_falls_back_to_v3(self):
+    def test_live_eligibility_model_invalid_falls_back_to_v3c(self):
         mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="bad"))
-        self.assertEqual(mod.LIVE_ELIGIBILITY_MODEL, "v3")
+        self.assertEqual(mod.LIVE_ELIGIBILITY_MODEL, "v3c")
+
+    def test_live_eligibility_model_v3_no_longer_selectable(self):
+        # "v3" removed 2026-09-01 -- score_v3 showed no real predictive edge
+        # and is being decommissioned. Must fall back exactly like any other
+        # invalid value, not be silently honored.
+        mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="v3"))
+        self.assertEqual(mod.LIVE_ELIGIBILITY_MODEL, "v3c")
 
     def test_live_eligibility_model_can_select_v3c(self):
         mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="v3c"))
@@ -237,20 +244,6 @@ class TestFeatureFlags(unittest.TestCase):
         self.assertEqual(engine._v3_eligibility_reject_reason(0.95, "up", "LONG"), "v3_htf_up_block")
         self.assertEqual(engine._v3_eligibility_reject_reason(0.95, "up", "SHORT"), "v3_htf_up_block")
         self.assertEqual(engine._v3_eligibility_reject_reason(0.95, "down", "LONG"), "")
-
-    def test_active_quality_stamp_defaults_to_v3(self):
-        engine = self.engine.AdaptiveSignalEngine(debug=False)
-        meta = {"score_v3": 0.83}
-        confidence = engine._stamp_active_quality(
-            meta,
-            score_v1=0.66,
-            confidence_v1=0.66,
-            threshold_v1=0.64,
-        )
-        self.assertAlmostEqual(confidence, 0.83)
-        self.assertEqual(meta["active_quality_model"], "v3")
-        self.assertAlmostEqual(meta["active_quality_score"], 0.83)
-        self.assertAlmostEqual(meta["confidence_v1"], 0.66)
 
     def test_v3c_eligibility_threshold_and_htf_guard(self):
         mod = _reload_module("signal_engine", _clean_env(LIVE_ELIGIBILITY_MODEL="v3c"))
@@ -350,27 +343,32 @@ class TestFeatureFlags(unittest.TestCase):
         """HARD_BLOCKED_TIMEFRAMES must default to empty set (4h no longer blocked)."""
         self.assertEqual(self.executor.HARD_BLOCKED_TIMEFRAMES, set())
 
-    def test_executor_quality_score_resolves_to_active_v3(self):
-        sig = types.SimpleNamespace(
-            confidence=0.86,
-            meta={
-                "active_quality_model": "v3",
-                "active_quality_score": 0.86,
-                "total_score": 0.10,
-            },
-        )
-        self.assertAlmostEqual(self.executor.Executor._signal_total_score(sig), 0.86)
+    def test_executor_quality_score_always_uses_total_score(self):
+        # Simplified 2026-09-01 alongside removing "v3" as a selectable
+        # LIVE_ELIGIBILITY_MODEL value: _signal_total_score used to branch
+        # on active_quality_model=="v3" to prefer active_quality_score
+        # instead -- that branch is gone, so total_score is used regardless
+        # of which model tagged the signal (v1 or v3c).
+        for model in ("v1", "v3c", "anything_else"):
+            sig = types.SimpleNamespace(
+                confidence=0.86,
+                meta={
+                    "active_quality_model": model,
+                    "active_quality_score": 0.86,
+                    "total_score": 0.10,
+                },
+            )
+            self.assertAlmostEqual(
+                self.executor.Executor._signal_total_score(sig), 0.10, msg=model
+            )
 
-    def test_executor_quality_score_rolls_back_to_v1_total_score(self):
-        sig = types.SimpleNamespace(
-            confidence=0.86,
-            meta={
-                "active_quality_model": "v1",
-                "active_quality_score": 0.86,
-                "total_score": 0.10,
-            },
-        )
-        self.assertAlmostEqual(self.executor.Executor._signal_total_score(sig), 0.10)
+    def test_executor_no_longer_has_v3_quality_bypass(self):
+        # Regression guard for the removed gate-bypass landmine: these two
+        # helpers used to let a signal skip the swing confidence gate,
+        # weak-trend gate, and Gates 4/5 whenever active_quality_model==
+        # "v3" exactly. Both are gone now that "v3" can never be selected.
+        self.assertFalse(hasattr(self.executor.Executor, "_is_v3_quality_active"))
+        self.assertFalse(hasattr(self.executor.Executor, "_active_quality_model"))
 
     def test_4h_can_be_disabled_via_env(self):
         mod = _reload_module("signal_engine", _clean_env(SMC_ENABLE_4H_LIVE="false"))
@@ -534,7 +532,14 @@ class TestValidateThresholds(unittest.TestCase):
         ok, output = self._run_validate({"LIVE_ELIGIBILITY_MODEL": "v2"})
         self.assertFalse(ok)
         self.assertIn("LIVE_ELIGIBILITY_MODEL", output)
-        self.assertIn("supported values: v1, v3, v3c", output)
+        self.assertIn("supported values: v1, v3c", output)
+
+    def test_live_eligibility_model_v3_now_warns(self):
+        # "v3" removed 2026-09-01 -- must warn like any other unsupported
+        # value now, not be silently accepted.
+        ok, output = self._run_validate({"LIVE_ELIGIBILITY_MODEL": "v3"})
+        self.assertFalse(ok)
+        self.assertIn("supported values: v1, v3c", output)
 
     def test_live_eligibility_model_v3c_not_warned(self):
         ok, output = self._run_validate({"LIVE_ELIGIBILITY_MODEL": "v3c"})
@@ -577,13 +582,19 @@ class TestCrossLayerConsistency(unittest.TestCase):
         self.assertAlmostEqual(executor.UNIVERSAL_MIN_CONFIDENCE, 0.91, places=4)
         self.assertAlmostEqual(risk.UNIVERSAL_MIN_CONFIDENCE, 0.91, places=4)
 
-    def test_risk_manager_v3_does_not_reject_legacy_total_score(self):
+    def test_risk_manager_no_longer_special_cases_v3_confidence_floor(self):
+        # Regression guard for the removed C4 defect: confidence_floor used
+        # to be read from the signal's own meta["active_quality_threshold"]
+        # whenever active_quality_model=="v3" exactly. That override is
+        # gone -- confidence_floor is now always MIN_SIGNAL_CONFIDENCE,
+        # config-only, regardless of what a signal's meta claims.
         env = _clean_env(
             UNIVERSAL_MIN_CONFIDENCE="0.90",
             MIN_SIGNAL_CONFIDENCE="0.90",
             MIN_SIGNAL_SCORE="0.90",
         )
         risk_mod = _reload_module("risk_manager", env)
+        self.assertFalse(hasattr(risk_mod, "V3_ACTIVE_QUALITY_FLOOR"))
         risk = risk_mod.RiskManager(strategy_filter=None)
         sig = types.SimpleNamespace(
             coin="SUI",
@@ -594,16 +605,20 @@ class TestCrossLayerConsistency(unittest.TestCase):
                 "timeframe": "15m",
                 "setup_family": "continuation",
                 "market_regime": "weak_trend",
-                "total_score": 0.10,
+                "total_score": 0.95,
                 "effective_threshold": 0.90,
+                # Even if a signal's own meta still claims "v3" and a low
+                # threshold, it must not be trusted -- confidence 0.85 is
+                # now rejected against the real 0.90 floor, not the
+                # signal-supplied 0.80 one.
                 "active_quality_model": "v3",
                 "active_quality_score": 0.85,
                 "active_quality_threshold": 0.80,
             },
         )
         decision = risk.check_signal(sig)
-        self.assertTrue(decision.approved, decision.reason)
-        self.assertIn("quality=v3:0.85", decision.reason)
+        self.assertFalse(decision.approved)
+        self.assertIn("confidence 0.85 < min 0.90", decision.reason)
 
     def test_risk_manager_v1_keeps_legacy_score_floor(self):
         env = _clean_env(

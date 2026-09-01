@@ -137,12 +137,16 @@ LOW_VOL_SCORE_PENALTY = -abs(float(os.getenv("LOW_VOL_SCORE_PENALTY", "-0.05")))
 REGIME_SCORE_THRESHOLD_STRONG = float(os.getenv("REGIME_SCORE_THRESHOLD_STRONG", "0.64"))
 REGIME_SCORE_THRESHOLD_WEAK = float(os.getenv("REGIME_SCORE_THRESHOLD_WEAK", "0.64"))
 REGIME_SCORE_THRESHOLD_CHOP = float(os.getenv("REGIME_SCORE_THRESHOLD_CHOP", "0.64"))
-_LIVE_ELIGIBILITY_MODEL_RAW = os.getenv("LIVE_ELIGIBILITY_MODEL", "v3").strip().lower()
+_LIVE_ELIGIBILITY_MODEL_RAW = os.getenv("LIVE_ELIGIBILITY_MODEL", "v3c").strip().lower()
 LIVE_ELIGIBILITY_MODEL = (
     _LIVE_ELIGIBILITY_MODEL_RAW
-    if _LIVE_ELIGIBILITY_MODEL_RAW in {"v1", "v3", "v3c"}
-    else "v3"
+    if _LIVE_ELIGIBILITY_MODEL_RAW in {"v1", "v3c"}
+    else "v3c"
 )
+# "v3" removed as a selectable value 2026-09-01 -- score_v3 showed no real
+# predictive edge (Pearson r=-0.008, 503 candidates) and is being
+# decommissioned. Any prior LIVE_ELIGIBILITY_MODEL=v3 config now falls
+# back to v3c, same as any other invalid value.
 LIVE_V3_ELIGIBILITY_THRESHOLD = 0.80
 # score_v3c uses a different scale than score_v3 (side-conditioned rescore,
 # see score_v3c.py) -- 0.80 does not carry over. 0.58 is the in-sample
@@ -292,16 +296,6 @@ class AdaptiveSignalEngine:
         threshold_v1: float,
     ) -> float:
         meta["confidence_v1"] = round(float(confidence_v1 or 0.0), 4)
-        if LIVE_ELIGIBILITY_MODEL == "v3":
-            try:
-                score_v3 = float(meta.get("score_v3", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                score_v3 = 0.0
-            meta["active_quality_model"] = "v3"
-            meta["active_quality_score"] = round(score_v3, 4)
-            meta["active_quality_threshold"] = LIVE_V3_ELIGIBILITY_THRESHOLD
-            meta["active_quality_score_source"] = "score_v3"
-            return round(score_v3, 4)
         if LIVE_ELIGIBILITY_MODEL == "v3c":
             try:
                 score_v3c = float(meta.get("score_v3c", 0.0) or 0.0)

@@ -42,19 +42,22 @@ re-flag them as live defects without re-verifying against current code.
     whoever next touches partial-close accounting.
 
   C4 (risk_manager reads its own confidence floor from the signal's own
-    meta["active_quality_threshold"]) — REAL, CURRENTLY DORMANT.
-    risk_manager.py only reads it back when active_quality_model=="v3"
-    exactly (see risk_manager.py's own docstring block). LIVE_ELIGIBILITY_
-    MODEL has been "v3c" since 2026-08-27, so this branch does not fire
-    today — but it reactivates unmodified if LIVE_ELIGIBILITY_MODEL is
-    ever set back to "v3". Config-only risk thresholds, never signal-
-    supplied, is the fix — not applied here since this pivot is decommis-
-    sioning the model that arms it, not patching it.
+    meta["active_quality_threshold"]) — REAL, FIXED 2026-09-01. Was
+    verified dormant (only fired when active_quality_model=="v3" exactly,
+    and live model has been "v3c" since 2026-08-27) before being removed
+    outright, alongside removing "v3" as a selectable LIVE_ELIGIBILITY_
+    MODEL value entirely — see risk_manager.py's docstring for the removed
+    code. This also closed a related gate-bypass landmine here:
+    _is_v3_quality_active and _active_quality_model (formerly used to
+    bypass the swing confidence gate, weak-trend gate, and Gates 4/5
+    whenever a signal's model was exactly "v3") are removed. They were
+    verified NOT currently bypassing anything (v3c never matched the "v3"
+    check, so all 4 gates were already active) — removal is a no-op today
+    and permanently closes the landmine for good, rather than leaving it
+    dependent on "v3" never being reselected.
 
 DO NOT ENABLE LIVE UNTIL: C3 is fixed (or partial-close is redesigned
-entirely, which is likely given the broader pivot), and C4 is either fixed
-or "v3" is removed as a selectable LIVE_ELIGIBILITY_MODEL value so it can
-never reactivate silently.
+entirely, which is likely given the broader pivot).
 """
 
 import csv
@@ -857,15 +860,6 @@ class Executor:
         return None
 
     @staticmethod
-    def _active_quality_model(signal) -> str:
-        meta = getattr(signal, "meta", None) or {}
-        return str(meta.get("active_quality_model", "v1") or "v1").strip().lower()
-
-    @staticmethod
-    def _is_v3_quality_active(signal) -> bool:
-        return Executor._active_quality_model(signal) == "v3"
-
-    @staticmethod
     def _log_chop_shadow_lanes(signal, reason: str) -> None:
         try:
             from executor_modules.chop_exception_shadow import (
@@ -1008,7 +1002,6 @@ class Executor:
         if (
             SWING_MIN_CONFIDENCE > 0
             and track == "swing"
-            and not self._is_v3_quality_active(signal)
         ):
             sig_conf = float(getattr(signal, "confidence", 0.0))
             _floor = self.strategy_filter.coin_confidence_floor(coin, SWING_MIN_CONFIDENCE)
@@ -1303,7 +1296,6 @@ class Executor:
             if (
                 market_regime == "weak_trend"
                 and WEAK_TREND_MIN_CONFIDENCE > 0
-                and not self._is_v3_quality_active(signal)
             ):
                 _sig_conf = float(getattr(signal, "confidence", 0.0))
                 if _sig_conf < WEAK_TREND_MIN_CONFIDENCE:
@@ -1331,7 +1323,6 @@ class Executor:
             if (
                 setup_family == "continuation"
                 and market_regime == "weak_trend"
-                and not self._is_v3_quality_active(signal)
                 and _gate_score < WEAK_CONTINUATION_MIN_SCORE
             ):
                 reason = "blocked_weak_continuation_low_score"
@@ -1354,7 +1345,6 @@ class Executor:
             if (
                 setup_family == "reversal"
                 and market_regime in ("chop", "weak_trend")
-                and not self._is_v3_quality_active(signal)
                 and _gate_score < REVERSAL_CHOP_MIN_SCORE
             ):
                 reason = "blocked_low_quality_reversal_in_chop"
@@ -2249,10 +2239,7 @@ class Executor:
     @staticmethod
     def _signal_total_score(signal) -> float:
         meta = getattr(signal, "meta", None) or {}
-        if Executor._active_quality_model(signal) == "v3":
-            value = meta.get("active_quality_score", getattr(signal, "confidence", 0.0))
-        else:
-            value = meta.get("total_score", getattr(signal, "confidence", 0.0))
+        value = meta.get("total_score", getattr(signal, "confidence", 0.0))
         try:
             return float(value or 0.0)
         except (TypeError, ValueError):

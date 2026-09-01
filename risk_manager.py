@@ -17,26 +17,21 @@ Active-path accounting (unchanged):
 - exit fee handling on partial / close / full loss
 - all balance effects reflected in daily_r using fee/funding translated to R
 
-KNOWN DEFECT (2026-09-01 data-only pivot audit) — see executor.py's module
-docstring for the full C1-C4 reconciliation; this is the one that lives
-here:
+KNOWN DEFECT, FIXED 2026-09-01 (see executor.py's module docstring for the
+full C1-C4 reconciliation) — this is the one that lived here:
 
-  C4 — check_signal's confidence_floor is read from the signal's OWN
-    meta["active_quality_threshold"] (line ~208) whenever
-    active_quality_model=="v3" exactly, falling back to V3_ACTIVE_QUALITY_
-    FLOOR only if that key is absent. A signal is not an independent check
-    on itself — this should be a config-only value, never signal-supplied,
-    regardless of which model is active. CURRENTLY DORMANT: the live model
-    has been "v3c" since 2026-08-27, which does not match the "v3" string
-    check, so confidence_floor stays at the safe MIN_SIGNAL_CONFIDENCE
-    default for live trades today. It reactivates unmodified the moment
-    LIVE_ELIGIBILITY_MODEL is set back to "v3". DO NOT ENABLE LIVE MODEL
-    "v3" UNTIL this is fixed or that branch is removed entirely.
-
-Not fixed in this pivot: risk_manager.py is being carried forward as
-reusable infra (its accounting methods are correct and out of scope to
-edit), but the model-specific gating logic that arms C4 belongs to the
-model being decommissioned, not to this file's core responsibility.
+  C4 — check_signal's confidence_floor used to be read from the signal's
+    OWN meta["active_quality_threshold"] whenever active_quality_model==
+    "v3" exactly, falling back to a V3_ACTIVE_QUALITY_FLOOR constant only
+    if that key was absent. A signal is not an independent check on
+    itself — this should be a config-only value, never signal-supplied,
+    regardless of which model is active. It was verified dormant (live
+    model has been "v3c" since 2026-08-27, which never matched the exact
+    "v3" string check) before being removed outright as part of removing
+    "v3" as a selectable LIVE_ELIGIBILITY_MODEL value entirely — the
+    override block and the now-unused V3_ACTIVE_QUALITY_FLOOR constant
+    are both gone, not just unreachable. confidence_floor is now always
+    MIN_SIGNAL_CONFIDENCE, config-only, for every model.
 """
 
 import os
@@ -66,7 +61,6 @@ MIN_SIGNAL_CONFIDENCE = float(
     os.getenv("MIN_SIGNAL_CONFIDENCE", os.getenv("UNIVERSAL_MIN_CONFIDENCE", "0.90"))
 )
 MIN_SIGNAL_SCORE = float(os.getenv("MIN_SIGNAL_SCORE", "0.68"))
-V3_ACTIVE_QUALITY_FLOOR = 0.80
 
 STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "1000.0"))
 MAX_FULL_LOSS_R = float(os.getenv("MAX_FULL_LOSS_R", "-1.5"))
@@ -223,14 +217,6 @@ class RiskManager:
             )
 
         confidence_floor = MIN_SIGNAL_CONFIDENCE
-        if active_quality_model == "v3":
-            try:
-                confidence_floor = float(
-                    meta.get("active_quality_threshold", V3_ACTIVE_QUALITY_FLOOR)
-                    or V3_ACTIVE_QUALITY_FLOOR
-                )
-            except (TypeError, ValueError):
-                confidence_floor = V3_ACTIVE_QUALITY_FLOOR
 
         if confidence < confidence_floor:
             return RiskDecision(
