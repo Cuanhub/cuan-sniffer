@@ -49,3 +49,32 @@ real, re-derived set can be reinstated there directly.
 **Not touched:** `score_v3.py`'s own copies of these constants are
 untouched. It's being archived as evidence of the model that was
 decommissioned, not edited.
+
+---
+
+## 2026-09-01 — Funding collector universe: volume-filtered top-30, not 8 or 233
+
+**Decision:** `research/funding/`'s collector tracks the top `N` (default
+30, `FUNDING_UNIVERSE_TOP_N`) perps by 24h notional volume (`dayNtlVlm`),
+refreshed daily — not the 8 currently-traded coins, and not the full
+~233-perp Hyperliquid listing.
+
+**Why:** The directional-signal side of this pivot already has more
+throughput than it needs (measured ~1,141 eligible signals/day on the
+8-coin universe, 2026-09-01 restart) — sample size was never the
+constraint there, and this collector doesn't compete with it for anything
+(it's a passive read-only feed, gated by nothing).
+
+The funding-carry question is a different one entirely: it needs
+cross-sectional breadth to make `HYPOTHESES.md`'s eventual "does not
+depend on any single symbol for more than X%" check meaningful, which 8
+symbols can't really support. But the full venue listing is mostly
+illiquid tail — thin OI, wide spreads, no realistic path to a deployable
+carry position — and would dominate storage/API load with assets that
+were never real candidates. Top-30-by-volume is the middle ground: real
+breadth, filtered to symbols that could actually support a position if
+Phase 2 ever finds something.
+
+**How to apply going forward:** if 30 turns out too narrow or too wide
+once real data accumulates, `FUNDING_UNIVERSE_TOP_N` is an env-tunable
+constant, not a hardcoded assumption — change it and note why here.
