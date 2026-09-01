@@ -40,7 +40,7 @@ class TestScoreV3cBounds(unittest.TestCase):
 
     def test_version_string(self):
         r = compute_shadow_score_v3c({})
-        self.assertEqual(r["score_v3c_version"], "v3c_2026_08_29_eqh_eql_only")
+        self.assertEqual(r["score_v3c_version"], "v3c_2026_09_01_no_symbol_terms")
 
 
 class TestSideConditionedContext(unittest.TestCase):
@@ -161,6 +161,38 @@ class TestStructureReweighted(unittest.TestCase):
         # Confirmed correctly signed in the diagnosis -- unchanged.
         r = compute_shadow_score_v3c({"side": "LONG", "choch_bull": True})
         self.assertIn("-choch", r["score_v3c_tags"])
+
+
+class TestSymbolTermsZeroed(unittest.TestCase):
+    """Zeroed 2026-09-01 (data-only pivot) -- PREFERRED_SYMBOLS/
+    NEGATIVE_SYMBOLS were inherited from score_v3 and never re-validated
+    for the current 8-coin universe (only 4 of 8 coins overlapped the
+    preferred set, and the negative set was entirely inert). Locks in
+    that former score_v3 preferred/negative symbols now score identically
+    to any other symbol -- no adjustment, no cap."""
+
+    def test_former_preferred_symbols_no_longer_scored(self):
+        base = compute_shadow_score_v3c({"side": "LONG", "symbol": "UNKNOWN"})
+        for sym in ("FARTCOIN", "JTO", "SOL", "WIF", "SUI"):
+            r = compute_shadow_score_v3c({"side": "LONG", "symbol": sym})
+            self.assertEqual(r["score_v3c"], base["score_v3c"], msg=sym)
+            self.assertNotIn("+preferred_symbol", r["score_v3c_tags"], msg=sym)
+
+    def test_former_negative_symbols_no_longer_scored(self):
+        base = compute_shadow_score_v3c({"side": "LONG", "symbol": "UNKNOWN"})
+        for sym in ("ETH", "ZEC", "BNB"):
+            r = compute_shadow_score_v3c({"side": "LONG", "symbol": sym})
+            self.assertEqual(r["score_v3c"], base["score_v3c"], msg=sym)
+            self.assertNotIn("-negative_symbol", r["score_v3c_tags"], msg=sym)
+
+    def test_negative_symbol_cap_never_triggers(self):
+        # cap_negative_sym_065 depended on -negative_symbol firing first --
+        # with NEGATIVE_SYMBOLS empty it can never trigger, even at a high
+        # raw score.
+        r = compute_shadow_score_v3c({
+            "side": "SHORT", "symbol": "ETH", "macro_regime": "chop",
+        })
+        self.assertNotIn("cap_negative_sym_065", r["score_v3c_tags"])
 
 
 class TestLiveGatingWiring(unittest.TestCase):

@@ -31,13 +31,29 @@ factor; all n>=59 unless noted):
     a near-zero/slightly-negative real edge (PF 0.86 vs 0.90, n=215/290)
     and is cut to +0.02. fvg presence showed no edge either way (0.883 vs
     0.871, n=392/113) and is cut to +0.02.
-  - SESSION/SYMBOL/CAPS: left unchanged. ny_open and preferred_symbol
-    confirmed correctly signed; choch, strong_trend, london_late confirmed
-    correctly signed. ny_pm and asia_late showed inverted signs too
-    (PF 1.37/1.16 while currently penalized) but both sessions are also
-    hard-blocked at the executor session gate -- fixing the score alone
-    has no live effect, so that's left for a dedicated follow-up rather
-    than bundled in here.
+  - SESSION/SYMBOL/CAPS: left unchanged at the time. ny_open and
+    preferred_symbol confirmed correctly signed; choch, strong_trend,
+    london_late confirmed correctly signed. ny_pm and asia_late showed
+    inverted signs too (PF 1.37/1.16 while currently penalized) but both
+    sessions are also hard-blocked at the executor session gate -- fixing
+    the score alone has no live effect, so that's left for a dedicated
+    follow-up rather than bundled in here. SYMBOL specifically was
+    revisited and zeroed 2026-09-01 -- see below.
+
+Update 2026-09-01 -- symbol terms zeroed (data-only pivot): PREFERRED_
+SYMBOLS/NEGATIVE_SYMBOLS were inherited from score_v3 without being
+re-validated against the current 8-coin universe. Concretely: the
+preferred set {FARTCOIN, JTO, SOL, WIF, SUI} only overlaps 4 of the 8
+currently-traded coins (HYPE, PENGU, TAO, NEAR get no adjustment -- by
+omission from an old list, not because they were evaluated and found
+neutral); the negative set {ETH, ZEC, BNB} is entirely inert since none
+of its members are in TRACKED_COINS at all. That's a systematic,
+unvalidated confound on every future research record, not a real,
+measured effect -- exactly the kind of thing this pivot is trying to stop
+doing. Both sets are now empty for v3c's scoring path (score_v3.py's own
+copies are untouched -- it's archived, not edited, per the postmortem
+discipline). If a real symbol effect exists, the research pipeline will
+surface it as a measurable residual; an inherited dummy is not that.
 
 In-sample validation (same 505 candidates the diagnosis was run on,
 recomputing this formula from the same already-resolved outcomes):
@@ -108,12 +124,21 @@ from score_v3 import (
     _safe_str,
     _safe_bool,
     _has_trigger,
-    PREFERRED_SYMBOLS,
-    NEGATIVE_SYMBOLS,
     NEGATIVE_SESSIONS,
 )
 
-VERSION = "v3c_2026_08_29_eqh_eql_only"
+VERSION = "v3c_2026_09_01_no_symbol_terms"
+
+# Symbol terms zeroed 2026-09-01 -- see DECISIONS.md. PREFERRED_SYMBOLS/
+# NEGATIVE_SYMBOLS were inherited from score_v3 (measured r=-0.008) and
+# never re-validated for the current 8-coin universe: they handed a bonus
+# to 4 of 8 coins by omission (not evaluation) and the negative set was
+# entirely inert since none of its members are traded. v3c scores on
+# structure, context, and session only. Kept as empty sets (not deleted)
+# so a real, re-derived symbol effect can be reinstated here if the
+# research pipeline finds one -- an inherited dummy is not a finding.
+PREFERRED_SYMBOLS: set = set()
+NEGATIVE_SYMBOLS: set = set()
 
 
 def compute_shadow_score_v3c(signal_context: Dict[str, Any]) -> Dict[str, Any]:
@@ -247,7 +272,9 @@ def compute_shadow_score_v3c(signal_context: Dict[str, Any]) -> Dict[str, Any]:
         score -= 0.08
         tags.append("-asia_late")
 
-    # ── SYMBOL (unchanged from score_v3) ───────────────────────────
+    # ── SYMBOL (zeroed 2026-09-01 -- both sets are empty, see module
+    # docstring; these branches are inert until a real, re-derived
+    # symbol effect is found and reinstated) ────────────────────────
     if symbol in PREFERRED_SYMBOLS:
         score += 0.06
         tags.append("+preferred_symbol")
