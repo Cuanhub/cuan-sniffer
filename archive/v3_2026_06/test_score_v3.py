@@ -1,5 +1,8 @@
 """
-Tests for score_v3 shadow scoring model.
+Tests for score_v3 shadow scoring model. ARCHIVED 2026-09-01 (see
+POSTMORTEM.md in this directory) -- score_v3 is fully decommissioned,
+these tests exist only to prove the archived module's behavior is
+unchanged from before the move (evidence, not a maintained model).
 
 Covers: bounds, factor weights, caps, missing fields, recipe tag,
 live execution isolation, and analyzer robustness.
@@ -9,7 +12,7 @@ import os
 import sys
 import unittest
 
-from score_v3 import compute_shadow_score_v3
+from archive.v3_2026_06.score_v3 import compute_shadow_score_v3
 
 
 class TestScoreV3Bounds(unittest.TestCase):

@@ -1233,7 +1233,7 @@ class AdaptiveSignalEngine:
             edge_buckets = governance.get("edge_buckets", meta.get("edge_buckets", ""))
 
             from score_v2 import compute_shadow_score_v2
-            from score_v3 import compute_shadow_score_v3
+            from archive.v3_2026_06.score_v3 import compute_shadow_score_v3
             from score_v3b import compute_shadow_score_v3b
             from score_v3c import compute_shadow_score_v3c
             v2_ctx = dict(meta)

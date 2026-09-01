@@ -1,9 +1,10 @@
 """
-Shadow score adapter — glue between signal_engine and score_v2/v3.
+Shadow score adapter — glue between signal_engine and score_v2/v3/v3b/v3c.
 
 Handles safe import, context construction, failure handling, and result
-packaging for score telemetry. The signal engine may use score_v3 for live
-eligibility when LIVE_ELIGIBILITY_MODEL=v3.
+packaging for score telemetry. score_v3 is archived (archive/v3_2026_06/,
+2026-09-01) and no longer selectable as LIVE_ELIGIBILITY_MODEL -- it's
+still computed here purely for shadow-research comparison against v3c.
 """
 
 from typing import Any, Dict
@@ -47,7 +48,7 @@ def compute_score_v3_for_signal(
     On failure, returns empty dict (never raises).
     """
     try:
-        from score_v3 import compute_shadow_score_v3
+        from archive.v3_2026_06.score_v3 import compute_shadow_score_v3
         v3_ctx = dict(meta)
         v3_ctx.update({"symbol": coin, "side": side, "coin": coin})
         v3 = compute_shadow_score_v3(v3_ctx)

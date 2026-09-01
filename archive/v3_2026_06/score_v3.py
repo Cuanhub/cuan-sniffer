@@ -1,6 +1,13 @@
 """
 Shadow score v3 — expectancy-grounded factor model.
 
+ARCHIVED 2026-09-01 -- fully decommissioned, no longer selectable as
+LIVE_ELIGIBILITY_MODEL. See POSTMORTEM.md in this directory for why.
+Moved here as-is (not rewritten) to preserve it as evidence; the only
+change from its pre-archive form is importing shared helpers from
+score_shared.py instead of defining them locally, so this file's own
+compute_shadow_score_v3() behavior is bit-for-bit unchanged.
+
 Research-only. Does NOT affect live execution. Derived from post-candle-fix
 factor decomposition (249 replayed signals, 2026-06-16 to 2026-06-20).
 
@@ -13,7 +20,7 @@ Key differences from v2:
     v3 treats it as neutral since all signals in sample are continuation)
 
 Usage:
-    from score_v3 import compute_shadow_score_v3
+    from archive.v3_2026_06.score_v3 import compute_shadow_score_v3
     result = compute_shadow_score_v3(signal_context)
 """
 
