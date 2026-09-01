@@ -16,6 +16,27 @@ Active-path accounting (unchanged):
 - funding debit/credit while open
 - exit fee handling on partial / close / full loss
 - all balance effects reflected in daily_r using fee/funding translated to R
+
+KNOWN DEFECT (2026-09-01 data-only pivot audit) — see executor.py's module
+docstring for the full C1-C4 reconciliation; this is the one that lives
+here:
+
+  C4 — check_signal's confidence_floor is read from the signal's OWN
+    meta["active_quality_threshold"] (line ~208) whenever
+    active_quality_model=="v3" exactly, falling back to V3_ACTIVE_QUALITY_
+    FLOOR only if that key is absent. A signal is not an independent check
+    on itself — this should be a config-only value, never signal-supplied,
+    regardless of which model is active. CURRENTLY DORMANT: the live model
+    has been "v3c" since 2026-08-27, which does not match the "v3" string
+    check, so confidence_floor stays at the safe MIN_SIGNAL_CONFIDENCE
+    default for live trades today. It reactivates unmodified the moment
+    LIVE_ELIGIBILITY_MODEL is set back to "v3". DO NOT ENABLE LIVE MODEL
+    "v3" UNTIL this is fixed or that branch is removed entirely.
+
+Not fixed in this pivot: risk_manager.py is being carried forward as
+reusable infra (its accounting methods are correct and out of scope to
+edit), but the model-specific gating logic that arms C4 belongs to the
+model being decommissioned, not to this file's core responsibility.
 """
 
 import os

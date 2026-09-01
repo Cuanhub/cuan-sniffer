@@ -12,6 +12,49 @@ Notes:
 - Live backend only
 - Explicit per-cycle live exit loop
 - All live closes require wallet confirmation
+
+KNOWN DEFECTS (2026-09-01 data-only pivot audit) — reconciled against an
+external brief's C1-C4 table by reading the actual current code, not by
+transcribing the brief. Two of its four claims did not hold up; do not
+re-flag them as live defects without re-verifying against current code.
+
+  C1 (score overlay inflates risk up to 1.875% vs 1.00% configured) —
+    CLAIMED, NOT REPRODUCED. The only call site (_on_signal_inner, via
+    _apply_score_size_overlay_reduce_only) clamps at
+    `overlay_mult = min(1.0, max(0.0, raw_overlay_mult))` — this can only
+    ever shrink size/risk below the risk-manager-approved amount, never
+    inflate it. The existing [STRESS] banner already prints both the
+    unclamped config max and the actually-enforced applied max side by
+    side, labeled "reduce_only" — nothing here is understated.
+
+  C2 (equity HWM resets to current equity on every boot, escaping
+    MAX_DD_PCT) — CLAIMED, NOT REPRODUCED. _apply_runtime_balance_from_venue
+    only ever raises the HWM (`if venue_hwm <= 0 or runtime_balance >
+    venue_hwm`), never resets it down; the comment there documents this
+    exact failure mode as already fixed.
+
+  C3 (runner closes to ~50% of a never-partialed position when venue size
+    lookup returns None) — REAL, CURRENTLY ACTIVE.
+    _expected_remaining_size_after_partial's "legacy fallback" (intended
+    for pre-fractional-accounting rows) fires whenever remaining_coin
+    resolves to 0, which also includes a position that was genuinely never
+    partialed, not just old rows. Not fixed in this pivot — flagged for
+    whoever next touches partial-close accounting.
+
+  C4 (risk_manager reads its own confidence floor from the signal's own
+    meta["active_quality_threshold"]) — REAL, CURRENTLY DORMANT.
+    risk_manager.py only reads it back when active_quality_model=="v3"
+    exactly (see risk_manager.py's own docstring block). LIVE_ELIGIBILITY_
+    MODEL has been "v3c" since 2026-08-27, so this branch does not fire
+    today — but it reactivates unmodified if LIVE_ELIGIBILITY_MODEL is
+    ever set back to "v3". Config-only risk thresholds, never signal-
+    supplied, is the fix — not applied here since this pivot is decommis-
+    sioning the model that arms it, not patching it.
+
+DO NOT ENABLE LIVE UNTIL: C3 is fixed (or partial-close is redesigned
+entirely, which is likely given the broader pivot), and C4 is either fixed
+or "v3" is removed as a selectable LIVE_ELIGIBILITY_MODEL value so it can
+never reactivate silently.
 """
 
 import csv
@@ -376,12 +419,27 @@ class ExecutorResult:
 
 
 class Executor:
+    # Independent, redundant hard-stop -- deliberately NOT merged with
+    # RESEARCH_ONLY_MODE (defense in depth, one flag per layer). Defaults to
+    # disabled-by-default (fail safe) if the env var is absent entirely.
+    # Read at class-definition time, same as _RESEARCH_ONLY_MODE below --
+    # a .env change requires a process restart to take effect.
+    _TRADING_DISABLED = os.getenv("TRADING_DISABLED", "true").lower() in ("true", "1", "yes")
+
     def __init__(
         self,
         notify_fn: Optional[Callable[[str], None]] = None,
         backend: Optional[ExecutionBackend] = None,
         signal_engine=None,
     ):
+        if self._TRADING_DISABLED:
+            raise RuntimeError(
+                "TRADING_DISABLED=true -- refusing to construct Executor. "
+                "No write-capable execution backend will be created. This "
+                "check is independent of RESEARCH_ONLY_MODE; both gate live "
+                "trading separately and both must be explicitly addressed "
+                "to resume it."
+            )
         self._live_mode = True
         self.venue_sync_unhealthy: bool = False
         self.notify = notify_fn or print
