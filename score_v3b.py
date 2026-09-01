@@ -57,7 +57,7 @@ Usage:
 
 from typing import Any, Dict, List
 
-from score_v3 import (
+from score_shared import (
     _safe_str,
     _has_trigger,
     PREFERRED_SYMBOLS,

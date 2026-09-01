@@ -19,22 +19,16 @@ Usage:
 
 from typing import Any, Dict, List
 
+from score_shared import (
+    _safe_str,
+    _safe_bool,
+    _has_trigger,
+    PREFERRED_SYMBOLS,
+    NEGATIVE_SYMBOLS,
+    NEGATIVE_SESSIONS,
+)
+
 VERSION = "v3_2026_06_factor_shadow"
-
-PREFERRED_SYMBOLS = {"FARTCOIN", "JTO", "SOL", "WIF", "SUI"}
-NEGATIVE_SYMBOLS = {"ETH", "ZEC", "BNB"}
-NEGATIVE_SESSIONS = {"ny_pm", "london_late", "asia_late"}
-
-
-def _safe_str(ctx: Dict[str, Any], *keys: str, default: str = "") -> str:
-    for key in keys:
-        val = ctx.get(key)
-        if val is not None:
-            try:
-                return str(val).strip()
-            except Exception:
-                pass
-    return default
 
 
 def _safe_float(ctx: Dict[str, Any], *keys: str, default: float = 0.0) -> float:
@@ -46,39 +40,6 @@ def _safe_float(ctx: Dict[str, Any], *keys: str, default: float = 0.0) -> float:
             except (TypeError, ValueError):
                 pass
     return default
-
-
-def _safe_bool(ctx: Dict[str, Any], key: str) -> bool:
-    val = ctx.get(key)
-    if val is None:
-        return False
-    if isinstance(val, bool):
-        return val
-    return str(val).strip().lower() == "true"
-
-
-def _has_trigger(ctx: Dict[str, Any], trigger_name: str) -> bool:
-    for key in ("triggers", "trigger", "trigger_type", "setup_trigger", "reason", "reasons"):
-        val = ctx.get(key)
-        if val and trigger_name.lower() in str(val).lower():
-            return True
-    if trigger_name == "fvg":
-        if _safe_bool(ctx, "fvg_bull") or _safe_bool(ctx, "fvg_bear"):
-            return True
-        if _safe_bool(ctx, "in_bull_fvg") or _safe_bool(ctx, "in_bear_fvg"):
-            return True
-    if trigger_name == "ob":
-        if _safe_bool(ctx, "ob_bull") or _safe_bool(ctx, "ob_bear"):
-            return True
-        if _safe_bool(ctx, "in_bull_ob") or _safe_bool(ctx, "in_bear_ob"):
-            return True
-    if trigger_name == "choch":
-        if _safe_bool(ctx, "choch_bull") or _safe_bool(ctx, "choch_bear"):
-            return True
-    if trigger_name == "sweep":
-        if _safe_bool(ctx, "sweep_bull") or _safe_bool(ctx, "sweep_bear"):
-            return True
-    return False
 
 
 def compute_shadow_score_v3(signal_context: Dict[str, Any]) -> Dict[str, Any]:

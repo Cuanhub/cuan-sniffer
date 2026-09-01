@@ -120,12 +120,7 @@ Usage:
 
 from typing import Any, Dict, List
 
-from score_v3 import (
-    _safe_str,
-    _safe_bool,
-    _has_trigger,
-    NEGATIVE_SESSIONS,
-)
+from score_shared import _safe_str, _safe_bool, _has_trigger
 
 VERSION = "v3c_2026_09_01_no_symbol_terms"
 
