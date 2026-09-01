@@ -104,7 +104,10 @@ def _build_row(symbol: str, ctx: dict, book: dict, realized_funding_rate) -> dic
         "mid": mid,
         "spread_bps": spread_bps,
         "volume_24h_usd": volume_24h_usd,
-        "raw_response_json": json.dumps({"ctx": ctx, "book_top": levels[:1] if isinstance(levels, list) else None}),
+        "raw_response_json": json.dumps({
+            "ctx": ctx,
+            "book_top": [levels[0][:1], levels[1][:1]] if isinstance(levels, list) and len(levels) == 2 else None,
+        }),
     }
 
 
