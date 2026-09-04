@@ -39,3 +39,4 @@ build/
 last_recap.txt
 strategy_filter_state.json
 oi_history_state.json
+research/cascade/data/_pending_state.json
