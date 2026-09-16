@@ -84,9 +84,54 @@ def append_event(row: Dict[str, Any], date_str: str = None) -> bool:
     return True
 
 
+def widen_header_if_needed(path: Path, fieldnames: list) -> bool:
+    """Bring an existing CSV up to the current schema before appending to it.
+
+    append_* only writes a header when it creates the file, so a schema that
+    grows mid-day leaves the day's file with the old, narrower header while
+    new, wider rows get appended under it -- ragged CSV that DictReader
+    silently misreads. That happened on 2026-09-16 when resolutions went
+    multi-arm: five files ended up with an 11-column header over a mix of
+    11- and 17-field rows.
+
+    The new columns are appended to the end of the schema, so an older header
+    is a strict prefix of the current one and the fix is positional: rewrite
+    the header, pad short rows with empty values, leave already-wide rows
+    alone. Anything that is not a prefix is not a schema we grew into, so it
+    raises rather than guessing. Returns True if the file was rewritten."""
+    if not path.exists():
+        return False
+    with open(path, "r", newline="") as f:
+        rows = list(csv.reader(f))
+    if not rows:
+        return False
+    header, body = rows[0], rows[1:]
+    if header == list(fieldnames):
+        return False
+    if header != list(fieldnames[:len(header)]):
+        raise ValueError(
+            f"{path.name}: header is not a prefix of the current schema "
+            f"({header!r}); refusing to migrate automatically"
+        )
+    width = len(fieldnames)
+    fixed = [r + [""] * (width - len(r)) if len(r) < width else r for r in body]
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(fieldnames)
+        w.writerows(fixed)
+    tmp.replace(path)
+    return True
+
+
 def append_resolution(row: Dict[str, Any], date_str: str = None) -> bool:
     date_str = date_str or _today_str()
     path = _resolution_path(row["symbol"], date_str)
+    # Widen first, then dedupe. Order matters: the dedupe check below reads
+    # this file by column name, and under a stale narrow header resolution_id
+    # does not exist as a column -- every lookup would miss and an already
+    # written arm could be appended twice.
+    widen_header_if_needed(path, RESOLUTION_FIELDNAMES)
     # Dedupe per arm, since an event now writes one row per arm. The key is
     # chosen from the ROW, not the file: a row carrying a resolution_id is a
     # multi-arm row and must be matched on it (matching on event_id would

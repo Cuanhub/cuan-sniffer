@@ -4,6 +4,7 @@ resolution, and storage idempotency. No real network calls: candles are
 synthetic so the suite stays deterministic and offline.
 """
 
+import csv
 import shutil
 import unittest
 from pathlib import Path
@@ -90,6 +91,75 @@ class TestResolution(unittest.TestCase):
         self.assertTrue(result["filled"])
         self.assertIn(result["exit_reason"], ("stop", "tp1+stop"))
         self.assertLess(result["net_pnl_pct"], 0)
+
+
+class TestSchemaWidening(unittest.TestCase):
+    """Regression: on 2026-09-16 the resolution schema grew from 11 to 17
+    columns mid-day. append_* only writes a header when it creates the file,
+    so that day's already-open files kept an 11-column header while 17-field
+    rows were appended under it -- ragged CSV that DictReader misreads
+    silently. Five files were damaged before it was caught."""
+
+    def setUp(self):
+        self._orig = storage.DATA_DIR
+        self._tmp = Path("/tmp/_test_cascade_widen")
+        if self._tmp.exists():
+            shutil.rmtree(self._tmp)
+        self._tmp.mkdir(parents=True)
+        storage.DATA_DIR = self._tmp
+
+    def tearDown(self):
+        storage.DATA_DIR = self._orig
+        if self._tmp.exists():
+            shutil.rmtree(self._tmp)
+
+    def _narrow_file(self):
+        """A file as the pre-change collector would have left it."""
+        old_fields = storage.RESOLUTION_FIELDNAMES[:11]
+        path = self._tmp / "SOL_2026-09-16_resolutions.csv"
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(old_fields)
+            w.writerow(["SOL_1", "SOL", "t", "True", "stop", "1.0", "-0.5", "0.09", "-0.59", "-1.0", "4"])
+        return path
+
+    def test_widening_preserves_every_original_value(self):
+        path = self._narrow_file()
+        self.assertTrue(storage.widen_header_if_needed(path, storage.RESOLUTION_FIELDNAMES))
+        with open(path, newline="") as f:
+            rows = list(csv.reader(f))
+        self.assertEqual(rows[0], list(storage.RESOLUTION_FIELDNAMES))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1][:11],
+                         ["SOL_1", "SOL", "t", "True", "stop", "1.0", "-0.5", "0.09", "-0.59", "-1.0", "4"])
+        self.assertTrue(all(v == "" for v in rows[1][11:]))
+
+    def test_widening_is_idempotent(self):
+        path = self._narrow_file()
+        self.assertTrue(storage.widen_header_if_needed(path, storage.RESOLUTION_FIELDNAMES))
+        self.assertFalse(storage.widen_header_if_needed(path, storage.RESOLUTION_FIELDNAMES))
+
+    def test_append_to_narrow_file_does_not_produce_ragged_rows(self):
+        """The actual failure: a wide row appended to a narrow file."""
+        self._narrow_file()
+        wide = {k: "" for k in storage.RESOLUTION_FIELDNAMES} | {
+            "event_id": "SOL_2", "symbol": "SOL",
+            "resolution_id": storage.make_resolution_id("SOL_2", 0.005),
+            "arm_stop_pct": 0.005,
+        }
+        self.assertTrue(storage.append_resolution(wide, date_str="2026-09-16"))
+        with open(self._tmp / "SOL_2026-09-16_resolutions.csv", newline="") as f:
+            rows = list(csv.reader(f))
+        width = len(storage.RESOLUTION_FIELDNAMES)
+        self.assertTrue(all(len(r) == width for r in rows),
+                        f"ragged rows: {[len(r) for r in rows]}")
+
+    def test_unknown_header_is_refused_not_guessed(self):
+        path = self._tmp / "SOL_2026-09-16_resolutions.csv"
+        with open(path, "w", newline="") as f:
+            csv.writer(f).writerow(["totally", "different", "header"])
+        with self.assertRaises(ValueError):
+            storage.widen_header_if_needed(path, storage.RESOLUTION_FIELDNAMES)
 
 
 class TestStorageIdempotency(unittest.TestCase):
