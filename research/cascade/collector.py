@@ -39,7 +39,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from research.cascade import storage
-from research.cascade.detector import detect_cascade, try_fill_and_resolve, VOL_LOOKBACK_BARS, FILL_WINDOW_BARS, TIME_STOP_BARS
+from research.cascade.detector import (
+    detect_cascade, try_fill_and_resolve, STOP_ARMS,
+    VOL_LOOKBACK_BARS, FILL_WINDOW_BARS, TIME_STOP_BARS,
+)
 from research.cascade.venue_client import HyperliquidReadOnlyClient, VenueFetchError
 from research.funding.universe import select_universe
 
@@ -146,16 +149,30 @@ def run_cycle(client, universe, pending: dict, dry_run: bool = False):
                 stop_price=float(event_row["stop_price"]), tp1_price=float(event_row["tp1_price"]),
                 tp2_price=float(event_row["tp2_price"]),
             )
-            resolution = try_fill_and_resolve(ev, after)
-            if resolution is None:
+            # Resolve every arm from this one candle fetch. The fill test is
+            # arm-independent, so the arms are all decidable at the same
+            # moment: if the first returns None the rest would too, and the
+            # event stays pending as a unit rather than half-written.
+            resolutions = []
+            for arm in STOP_ARMS:
+                r = try_fill_and_resolve(ev, after, stop_pct=arm)
+                if r is None:
+                    break
+                resolutions.append((arm, r))
+            if len(resolutions) != len(STOP_ARMS):
                 continue  # not enough elapsed time yet
-            res_row = {
-                "event_id": event_id, "symbol": symbol, "resolved_at_utc": storage.now_iso(),
-                **{k: resolution.get(k, "") for k in
-                   ("filled", "exit_reason", "avg_exit_price", "gross_pnl_pct",
-                    "fees_pct", "net_pnl_pct", "pnl_r", "bars_held")},
-            }
-            storage.append_resolution(res_row)
+
+            for arm, resolution in resolutions:
+                res_row = {
+                    "event_id": event_id, "symbol": symbol, "resolved_at_utc": storage.now_iso(),
+                    "resolution_id": storage.make_resolution_id(event_id, arm),
+                    **{k: resolution.get(k, "") for k in
+                       ("filled", "exit_reason", "avg_exit_price", "gross_pnl_pct",
+                        "fees_pct", "net_pnl_pct", "pnl_r", "bars_held",
+                        "arm_stop_pct", "net_pnl_r", "entry_fee_pct", "exit_fee_pct",
+                        "fill_penetration_pct")},
+                }
+                storage.append_resolution(res_row)
             resolved_ids.append(event_id)
 
     for eid in resolved_ids:
@@ -190,6 +207,8 @@ def main():
     last_universe_refresh_date = datetime.now(timezone.utc).date()
     print(f"[CASCADE_COLLECTOR] starting long-lived collection, poll_interval={POLL_INTERVAL_SEC}s, "
           f"universe_size={len(universe)}, resuming {len(pending)} pending event(s)")
+    print(f"[CASCADE_COLLECTOR] stop arms: {', '.join(f'{a:g}' for a in STOP_ARMS)} "
+          f"(arm 0 = pre-registered rule); order-type-aware fees, maker entry")
 
     while not _stop_requested:
         cycle_start = time.time()

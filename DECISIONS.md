@@ -78,3 +78,117 @@ Phase 2 ever finds something.
 **How to apply going forward:** if 30 turns out too narrow or too wide
 once real data accumulates, `FUNDING_UNIVERSE_TOP_N` is an env-tunable
 constant, not a hardcoded assumption — change it and note why here.
+
+---
+
+## 2026-09-16 — KPEPE excluded from the research universe as unservable
+
+**Decision:** `select_universe()` now drops symbols in `UNIVERSE_EXCLUDE`
+(env `FUNDING_UNIVERSE_EXCLUDE`, default `KPEPE`) *before* truncating to
+`top_n`, so the universe stays 30 wide and the freed slot goes to the
+next genuinely-liquid symbol. On the 2026-09-16 refresh that was XLM,
+verified serving `candleSnapshot`, `fundingHistory` and `l2Book`.
+
+**Why:** Hyperliquid ranks KPEPE inside the top-30 by 24h notional volume,
+so it kept entering the universe, but the venue 500s on every per-symbol
+endpoint either collector needs for it — `candleSnapshot` (cascade),
+`fundingHistory` (realized funding, the field `SCHEMA.md` calls ground
+truth) and the L2 book. Only the bulk `metaAndAssetCtxs` snapshot works,
+which is why partly-filled rows existed at all and why this went
+unnoticed: across 2,088 collected rows KPEPE carried **zero** realized
+funding values and **zero** spread values, versus 208 and 2,368 for BTC
+over the same span. It produced no cascade events, ever.
+
+The cost was not just empty columns. Each failed fetch retries 5 times
+with backoff: ~16s per 300s funding cycle and ~32s of every 60s cascade
+cycle, one symbol consuming over half the cascade poll interval. It also
+generated 33,165 of the 34,700 lines (96%) in
+`research/cascade/data/_fetch_failures.log`, which made that log useless
+for spotting real, transient venue failures on the other 29 symbols.
+
+**Honesty note:** this changes a pre-registered universe mid-study, which
+`CASCADE_HYPOTHESES.md` otherwise guards against. It is defensible only
+because KPEPE contributed no observations to drop — no cascade events, no
+realized funding, no spreads — so no result can shift as a consequence.
+Recorded here rather than left silent precisely because "it couldn't have
+mattered" is the kind of claim that should be checkable, not asserted.
+The exclusion is a data-availability fact about the venue, not a view on
+the asset; if those endpoints start working, remove it and note that here.
+
+**How to apply going forward:** exclusions belong in
+`FUNDING_UNIVERSE_EXCLUDE`, not hardcoded at a call site, and each one
+needs an entry here saying which endpoint failed and what was verified
+before the symbol was dropped.
+
+---
+
+## 2026-09-16 — Cascade collector: order-type-aware fees + multi-arm stop widths
+
+**Decision:** two changes to `research/cascade/`, both landed before the
+2026-09-16 forward run accumulated meaningful data:
+
+1. **Fees are now attributed by how the order actually executed.** Entry is
+   a resting limit 0.3% beyond the cascade close that only fills if price
+   returns to it, and TP1/TP2 are limits — all maker. Only stops and
+   time-stops cross the spread. Previously `FEE_PER_SIDE * 2` charged taker
+   on both sides unconditionally.
+2. **Every detected event is resolved at each of `STOP_ARMS`**
+   (`CASCADE_STOP_ARMS`, default 0.005/0.0075/0.01) from the same candle
+   fetch. Arm 0 is `STOP_PCT`, the pre-registered rule, unchanged.
+
+**Why:** measured on the 1,771 filled trades collected 2026-09-04..10, the
+flat-taker model charged 0.0900%/trade against a gross edge of 0.0751%,
+giving −0.0298R. Order-type-aware fees cost 0.0497%, giving **+0.0507R** —
+the fee model, not the strategy, carried the sign of the result. Venue
+rates confirmed from `userFees` for this account: taker 0.045%, maker
+0.015%. The corrected figure survives dropping LIT (+0.0292R, n=1,696),
+the symbol that carried most of the gross edge.
+
+Stop width is the only lever that attacks the underlying arithmetic rather
+than nibbling at it: fees are a fixed fraction of notional while R is
+defined by the stop, so drag in R terms is `2*fee/stop` — 0.18R at the 0.5%
+baseline under the old model. It also cannot be tested retroactively:
+resolutions store outcomes, not the post-entry path, and this venue drops
+1m candles after ~3–4 days (verified — T-3d returns candles, T-4d returns
+none). Collecting the arms in parallel measures the trade-off prospectively
+at zero extra API cost, instead of fitting a stop width to a sample after
+seeing it.
+
+**Honesty note:** the +0.0507R above is an upper bound, and the reason is
+recorded here so it is not quoted later without it. The fill model counts a
+trade as filled when price *touches* the entry, but a resting limit needs
+price to trade *through* it to clear the queue — and the trades most often
+missed are the good ones, where price tags the level and reverses. The fee
+correction and this bias push in opposite directions. Rather than invent a
+haircut, resolutions now record `fill_penetration_pct` (how far past entry
+the filling bar actually traded), so the forward sample can be re-read
+under a minimum-penetration filter as a measurement. Stop fills are
+likewise still modelled at exactly `stop_price` with no slippage, on
+symbols selected for violent moves — untouched, and still optimistic.
+
+**Also fixed:** the `tp1+time` exit label was unreachable. `exit_reason` is
+only non-empty when a `break` set `remaining = 0`, so the old
+`if not exit_reason` test could never select it and a TP1 that later timed
+out was recorded as `time_stop`. Now keyed off `tp1_hit`. This is not
+cosmetic: that exit leaves 60% as a resting limit and 40% as a market
+order, so the mislabel also mis-priced its fee.
+
+**Schema:** `resolutions.csv` gains `resolution_id`, `arm_stop_pct`,
+`net_pnl_r`, `entry_fee_pct`, `exit_fee_pct`, `fill_penetration_pct`.
+Original columns keep their order and meaning, so older files stay readable.
+**Row counts changed** — one row per (event, arm), so any analysis counting
+rows must filter `arm_stop_pct == 0.005` to reproduce pre-change semantics.
+Dedupe is keyed on `resolution_id` when a row carries one and on `event_id`
+when it does not, so pre-change files remain idempotent on restart.
+
+**Verification:** arm 0 was diffed against the committed detector over
+4,000 randomised synthetic resolutions — zero mismatches on `exit_reason`,
+`avg_exit_price`, `gross_pnl_pct`, `pnl_r`, `bars_held`, `fill_ts_ms`. The
+forward sample's baseline arm therefore stays directly comparable to
+everything collected before this change.
+
+**How to apply going forward:** arms are for *measuring* the stop-width
+trade-off, not for picking a winner post hoc. Choosing an arm because it
+scored best on this sample is the same error as re-tuning thresholds on it;
+`CASCADE_HYPOTHESES.md`'s minimum-sample and weekly-window bars apply per
+arm, independently.
