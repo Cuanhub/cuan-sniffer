@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keeps research/funding/collector.py running across logout and reboot.
+  Canonical copy lives here in the repo; ~/Library/LaunchAgents holds the
+  deployed copy. See deploy/launchd/README.md before installing -- this
+  project sits under ~/Documents and that has a known TCC consequence.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuansniffer.funding</string>
+
+  <!-- The venv's own python3, NOT its resolved real path. CPython only adds
+       the venv's site-packages when invoked through the venv directory,
+       because that is where it looks for pyvenv.cfg. .venv/bin/python here
+       is a symlink to homebrew's python3.13; invoking the resolved target
+       would import a bare interpreter with no hyperliquid package. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/myair/Documents/PROJECTS 2025/Sol Flow/Cuan_Sniffer/.venv/bin/python</string>
+    <string>-u</string>
+    <string>-m</string>
+    <string>research.funding.collector</string>
+  </array>
+
+  <!-- -m needs the project root on sys.path, which python takes from cwd. -->
+  <key>WorkingDirectory</key>
+  <string>/Users/myair/Documents/PROJECTS 2025/Sol Flow/Cuan_Sniffer</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart on abnormal exit only. The collector traps SIGTERM/SIGINT,
+       finishes its cycle and returns 0, so exit 0 means somebody stopped it
+       deliberately (launchctl unload, or a kill) and it should stay stopped.
+       Any other exit is a crash and should come back. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <!-- A crash loop (bad venv, venue down at boot) otherwise retries tight. -->
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <!-- ~/Library/Logs, not /tmp: macOS clears /tmp on reboot and this run is
+       meant to last two weeks. Neither path is rotated by launchd; the
+       collector prints one line per 300s cycle, so expect a few hundred KB
+       over the collection window. The install step creates this directory --
+       launchd will NOT create it, and a missing directory means the job
+       starts and silently logs nothing. -->
+  <key>StandardOutPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/funding.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/funding.err.log</string>
+</dict>
+</plist>

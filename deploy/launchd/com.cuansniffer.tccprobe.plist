@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  One-shot diagnostic, not a service. Run this BEFORE installing the two
+  collector jobs: it answers whether a launchd job can read and write this
+  project at all from under ~/Documents. Results land in
+  /tmp/cuan_tcc_probe.out. Unload it once you have read them.
+
+  The script is run from /tmp, not from the repo, on purpose. If TCC blocks
+  reads under ~/Documents then launchd cannot read a probe stored there
+  either -- the probe would fail to start for exactly the reason it exists
+  to measure, and an empty output file looks identical to a probe that never
+  ran. Copying it to /tmp first keeps the probe readable no matter what the
+  answer turns out to be, so a FAIL line is a real result. The install step
+  in README.md does that copy.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuansniffer.tccprobe</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/tmp/cuan_tcc_probe.sh</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- One shot. No KeepAlive: it must run once and stay stopped. -->
+  <key>StandardOutPath</key>
+  <string>/tmp/cuan_tcc_probe.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/cuan_tcc_probe.err</string>
+</dict>
+</plist>
