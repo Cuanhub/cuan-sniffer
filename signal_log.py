@@ -54,6 +54,20 @@ HEADER = [
     "fill_price",
     "fill_slippage_bps",
     "fill_ratio",
+    # Chart-pattern provenance (2026-09-17). These already rode in signal.meta
+    # via `**triggers` in signal_engine's meta dicts, but HEADER did not list
+    # them and DictWriter's extrasaction="ignore" dropped them on the floor --
+    # so smc_live_log.csv held 3,802 double tops and 3,497 double bottoms with
+    # no way to join any of them to a trade outcome. Appended at the end so
+    # existing column positions are untouched; init_signal_log() migrates the
+    # existing file by rewriting it with empty values for these.
+    "chart_pattern",
+    "chart_pattern_family",
+    "chart_pattern_side",
+    "chart_pattern_score",
+    "chart_pattern_confirmed",
+    "chart_pattern_volume_confirmed",
+    "chart_pattern_candle_confirmed",
 ]
 
 
@@ -211,6 +225,13 @@ def append_signal(
             round(fill_price, 8),
             round(fill_slippage_bps, 2),
             round(fill_ratio, 4),
+            str(meta.get("chart_pattern", "") or ""),
+            str(meta.get("chart_pattern_family", "") or ""),
+            str(meta.get("chart_pattern_side", "") or ""),
+            float(meta.get("chart_pattern_score", 0.0) or 0.0),
+            bool(meta.get("chart_pattern_confirmed", False)),
+            bool(meta.get("chart_pattern_volume_confirmed", False)),
+            bool(meta.get("chart_pattern_candle_confirmed", False)),
         ]
 
         if not os.path.exists(LOG_PATH):
