@@ -272,6 +272,9 @@ def main():
     ap.add_argument("--top", type=int, default=8)
     ap.add_argument("--take", metavar="ID")
     ap.add_argument("--skip", metavar="ID")
+    ap.add_argument("--maybe", metavar="ID",
+                    help="valid level, setup not confirmed yet -- e.g. price is still "
+                         "sitting on it and the user wants to see it hold first")
     ap.add_argument("--note", default="")
     ap.add_argument("--progress", action="store_true")
     a = ap.parse_args()
@@ -281,6 +284,8 @@ def main():
         return cmd_label(a.take, "take", a.note)
     if a.skip:
         return cmd_label(a.skip, "skip", a.note)
+    if a.maybe:
+        return cmd_label(a.maybe, "maybe", a.note)
     return cmd_list(a)
 
 
