@@ -327,6 +327,13 @@ def main():
             ms = backend.get_margin_summary()
             if ms:
                 equity, _used, available = ms
+            bad = venue_sanity(backend, state, equity)
+            if bad:
+                state["halted"] = True
+                state["halt_reason"] = bad
+                save_state(state)
+                print(f"[LEVELS_LIVE] !! HALT before trading -- {bad}")
+                return 1
         intents, rejected = build_intents(ro, universe)
         print(f"\n[LEVELS_LIVE] {len(intents)} setup(s) cleared the quality bar, "
               f"{len(rejected)} rejected")
@@ -359,6 +366,16 @@ def main():
                 print("[LEVELS_LIVE] concurrency cap reached, stopping this pass")
                 break
             execute_one(backend, ep, equity, available, armed, state)
+            # Re-checked after EVERY entry, not once per pass. The runaway
+            # opened twelve positions inside a single pass, so a per-pass
+            # check would have reported the damage rather than prevented it.
+            bad = venue_sanity(backend, state, equity)
+            if bad:
+                state["halted"] = True
+                state["halt_reason"] = bad
+                save_state(state)
+                print(f"[LEVELS_LIVE] !! HALT after entry -- {bad}")
+                break
         if args.once:
             return 0
         for _ in range(POLL_SEC):
@@ -397,15 +414,53 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         log_trade(row)
         return False
 
+    # Claim the slot BEFORE sending the order, not after parsing the reply.
+    # On 2026-09-18 this recorded the position only after a fill it believed
+    # in, and it read success from a "filled_size_coin" attribute FillResult
+    # has never had -- so getattr returned 0, every real fill was scored as a
+    # rejection, state["owned"] stayed empty, MAX_CONCURRENT never engaged and
+    # the pass opened 12 positions across $5,454 of notional on $775 of equity
+    # with no stops on any of them. Counting what was SENT means a parsing bug
+    # can no longer uncap the loop; the worst case becomes a phantom slot,
+    # which reconcile() clears on the next pass.
+    state.setdefault("owned", {})[coin] = {
+        "episode_id": ep.get("episode_id", ""), "entry": entry, "stop": stop,
+        "tp": tp, "size_usd": size_usd, "opened_at": now_iso(), "confirmed": False}
+    save_state(state)
+
     fill = backend.execute_entry(coin=coin, side="LONG", price=entry,
                                  size_usd=size_usd, confidence=0.5)
-    fill_px = float(getattr(fill, "fill_price", 0) or 0)
-    size_coin = float(getattr(fill, "filled_size_coin", 0) or 0)
-    if fill_px <= 0 or size_coin <= 0:
+
+    # FillResult's own flag, which is what executor.py used for months of live
+    # trading. Do not re-derive success from prices or sizes.
+    if not getattr(fill, "filled", False):
+        state["owned"].pop(coin, None)
+        save_state(state)
         row.update({"action": "entry", "result": "rejected",
                     "detail": str(getattr(fill, "reject_reason", ""))[:120]})
         log_trade(row)
         return False
+
+    fill_px = float(getattr(fill, "fill_price", 0) or 0)
+    filled_usd = float(getattr(fill, "fill_size_usd", 0) or 0) or size_usd
+    size_coin = (filled_usd / fill_px) if fill_px > 0 else 0.0
+    if fill_px <= 0 or size_coin <= 0:
+        # filled=True but unusable numbers: the position may well exist at the
+        # venue, so halt rather than guess. Leaving the slot claimed is
+        # deliberate.
+        state["halted"] = True
+        state["halt_reason"] = f"{coin}: filled=True but fill_price={fill_px} size={size_coin}"
+        save_state(state)
+        row.update({"action": "entry", "result": "unparseable_fill",
+                    "detail": state["halt_reason"]})
+        log_trade(row)
+        print(f"[LEVELS_LIVE] !! HALT -- {state['halt_reason']}")
+        return False
+
+    state["owned"][coin].update({"entry": fill_px, "size_coin": size_coin,
+                                 "confirmed": True})
+    state["opened_today"] = state.get("opened_today", 0) + 1
+    save_state(state)
     row.update({"action": "entry", "result": "filled", "size_coin": size_coin,
                 "detail": f"fill {fill_px:.8g}"})
     log_trade(row)
@@ -424,17 +479,43 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
               f"an unprotected position is not the trade")
         backend.execute_exit(coin=coin, side="LONG", price=fill_px,
                              size_usd=size_usd, reason="protection_failed")
+        state["owned"].pop(coin, None)
+        save_state(state)
         log_trade({**row, "action": "emergency_exit", "result": "closed"})
         return False
 
-    state.setdefault("owned", {})[coin] = {
-        "episode_id": ep.get("episode_id", ""), "entry": fill_px, "stop": stop,
-        "tp": tp, "size_coin": size_coin, "opened_at": now_iso()}
-    state["opened_today"] = state.get("opened_today", 0) + 1
-    save_state(state)
     print(f"[LEVELS_LIVE] OPENED {coin} {size_coin} @ {fill_px:.6g} "
           f"stop {stop:.6g} tp {tp:.6g}")
     return True
+
+
+def venue_sanity(backend, state: Dict[str, Any], equity: float):
+    """Compare the venue against what this module believes, and halt on any
+    disagreement. Returns a halt reason, or None.
+
+    This is the backstop the 2026-09-18 runaway needed and did not have. Every
+    in-process guard shared one assumption -- that state["owned"] reflects
+    reality -- so a single bad attribute name defeated all of them at once. A
+    check against the venue does not share that assumption.
+    """
+    try:
+        st = backend.info.user_state(backend._get_user_state_address())
+    except Exception as e:
+        return f"venue query failed: {str(e)[:80]}"
+    positions = [p["position"] for p in st.get("assetPositions", [])]
+    live = {p["coin"].upper() for p in positions if abs(float(p.get("szi", 0) or 0)) > 0}
+    known = {c.upper() for c in state.get("owned", {})}
+    unknown = live - known
+    if unknown:
+        return (f"venue holds {sorted(unknown)} which this module did not open "
+                f"(knows: {sorted(known) or 'nothing'})")
+    if len(live) > MAX_CONCURRENT:
+        return f"venue holds {len(live)} positions, cap is {MAX_CONCURRENT}"
+    notional = sum(abs(float(p.get("positionValue", 0) or 0)) for p in positions)
+    ceiling = equity * MAX_LEVERAGE
+    if notional > ceiling:
+        return f"notional ${notional:,.0f} exceeds {MAX_LEVERAGE}x equity (${ceiling:,.0f})"
+    return None
 
 
 def reconcile(backend, state: Dict[str, Any]) -> None:
