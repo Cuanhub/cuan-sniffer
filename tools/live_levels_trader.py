@@ -661,9 +661,11 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
             print(f"[LEVELS_LIVE] !! HALT -- {state['halt_reason']}")
             return False
 
+        note = accrue_close(backend, state, coin, state["owned"].get(coin, {}))
         state["owned"].pop(coin, None)
         save_state(state)
-        log_trade({**row, "action": "emergency_exit", "result": "closed"})
+        log_trade({**row, "action": "emergency_exit", "result": "closed",
+                   "detail": note})
         return False
 
     print(f"[LEVELS_LIVE] OPENED {coin} {size_coin} @ {fill_px:.6g} "
@@ -725,6 +727,38 @@ def assumed_loss(info: Dict[str, Any]) -> float:
     return -abs(entry - stop) * size_coin
 
 
+def accrue_close(backend, state: Dict[str, Any], coin: str,
+                 info: Dict[str, Any]) -> str:
+    """Add what a closed position realised to the day's running total.
+
+    EVERY path that closes a position must come through here. A close that
+    does not reach realised_today is invisible to the daily loss stop, and the
+    emergency-exit path is the one most able to exploit that: it can fire on
+    every pass, paying a full round trip in fees and spread each time, while
+    realising too little PnL to ever trip a stop it is not reported to.
+
+    When the venue will not say, the close is charged as a stop-out. For an
+    emergency exit that overstates the cost -- it closed near the fill price,
+    so the true cost is fees and spread -- and that is the direction to be
+    wrong in. Halting a strategy with no measured edge one trade early costs
+    less than failing to halt it at all.
+    """
+    since = iso_to_ms(info.get("opened_at", ""))
+    pnl = None
+    if since is not None:
+        try:
+            pnl = backend.get_realised_pnl(coin, since)
+        except Exception as e:
+            print(f"[LEVELS_LIVE] realised PnL query failed for {coin}: {str(e)[:80]}")
+    if pnl is None:
+        pnl = assumed_loss(info)
+        note = f"pnl unavailable -- charged as a stop-out: {pnl:.2f}"
+    else:
+        note = f"realised {pnl:.2f}"
+    state["realised_today"] = state.get("realised_today", 0.0) + pnl
+    return note
+
+
 def reconcile(backend, state: Dict[str, Any]) -> None:
     """Release slots for positions no longer open at the venue -- stopped out,
     took profit, or closed by hand. Without this the module believes it still
@@ -745,25 +779,9 @@ def reconcile(backend, state: Dict[str, Any]) -> None:
             continue
         if sz is not None and abs(sz) < 1e-12:
             info = owned.pop(coin, {})
-
-            since = iso_to_ms(info.get("opened_at", ""))
-            pnl = None
-            if since is not None:
-                try:
-                    pnl = backend.get_realised_pnl(coin, since)
-                except Exception as e:
-                    print(f"[LEVELS_LIVE] realised PnL query failed for {coin}: "
-                          f"{str(e)[:80]}")
-            if pnl is None:
-                pnl = assumed_loss(info)
-                note = f"pnl unavailable -- charged as a stop-out: {pnl:.2f}"
-            else:
-                note = f"realised {pnl:.2f}"
-
-            state["realised_today"] = state.get("realised_today", 0.0) + pnl
+            note = accrue_close(backend, state, coin, info)
             log_trade({"ts_utc": now_iso(), "action": "closed", "coin": coin,
                        "episode_id": info.get("episode_id", ""), "result": "flat",
-                       "risk_usd": round(pnl, 2),
                        "detail": f"no longer open at venue; {note}"})
             print(f"[LEVELS_LIVE] {coin} closed at venue -- slot released, {note} "
                   f"(day {state['realised_today']:.2f})")

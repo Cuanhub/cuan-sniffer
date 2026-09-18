@@ -232,6 +232,14 @@ class ArmedPathTest(unittest.TestCase):
         self.assertFalse(self.state.get("halted", False))
         self.assertNotIn("AAA", self.state["owned"])
 
+    def test_emergency_exit_accrues_its_cost(self):
+        # An open/close round trip costs fees and spread. If that never
+        # reaches realised_today, a protection failure that repeats every
+        # pass can churn all day without the daily loss stop noticing.
+        b = FakeBackend(protection_ok=False, realised_pnl=-3.5)
+        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
+        self.assertAlmostEqual(self.state["realised_today"], -3.5)
+
     def test_dry_run_sends_nothing(self):
         b = FakeBackend()
         T.execute_one(b, episode("AAA"), 1000.0, 1000.0, False, self.state)
