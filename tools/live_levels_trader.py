@@ -50,6 +50,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
+import notify                                                        # noqa: E402
 from research.levels.call import find_candidates as _find_candidates  # noqa: E402
 from research.levels.venue_client import HyperliquidReadOnlyClient    # noqa: E402
 from research.levels.universe import select_universe                 # noqa: E402
@@ -307,6 +308,14 @@ def main():
     print(f"[LEVELS_LIVE] {config_summary()}")
     print("[LEVELS_LIVE] NOTE: this gate measured -0.0413R vs random entry "
           "(z=-0.93, n=688 backfill trades).")
+    if armed:
+        # launchd restarts this on any non-zero exit, so an unannounced
+        # restart is indistinguishable from a process that never came back.
+        notify.send(
+            f"▶️ *Level trader armed*\nrisk {RISK_PCT_PER_TRADE}%/trade, "
+            f"max {MAX_CONCURRENT} concurrent, {MAX_NEW_PER_DAY}/day, "
+            f"daily stop {DAILY_LOSS_STOP_PCT}%",
+            key="armed_start", cooldown_sec=300)
 
     ro = HyperliquidReadOnlyClient()
     universe = select_universe(ro)
@@ -353,10 +362,7 @@ def main():
                 equity, _used, available = ms
             bad, fatal = venue_sanity(backend, state, equity)
             if bad and fatal:
-                state["halted"] = True
-                state["halt_reason"] = bad
-                save_state(state)
-                print(f"[LEVELS_LIVE] !! HALT before trading -- {bad}")
+                halt(state, bad, "before trading")
                 return 1
             if bad:
                 print(f"[LEVELS_LIVE] skipping this pass (transient): {bad}")
@@ -404,10 +410,7 @@ def main():
             # check would have reported the damage rather than prevented it.
             bad, fatal = venue_sanity(backend, state, equity)
             if bad and fatal:
-                state["halted"] = True
-                state["halt_reason"] = bad
-                save_state(state)
-                print(f"[LEVELS_LIVE] !! HALT after entry -- {bad}")
+                halt(state, bad, "after entry")
                 break
             if bad:
                 # Cannot confirm what just happened at the venue, so stop
@@ -594,13 +597,10 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         # filled=True but unusable numbers: the position may well exist at the
         # venue, so halt rather than guess. Leaving the slot claimed is
         # deliberate.
-        state["halted"] = True
-        state["halt_reason"] = f"{coin}: filled=True but fill_price={fill_px} size={size_coin}"
-        save_state(state)
+        halt(state, f"{coin}: filled=True but fill_price={fill_px} size={size_coin}")
         row.update({"action": "entry", "result": "unparseable_fill",
                     "detail": state["halt_reason"]})
         log_trade(row)
-        print(f"[LEVELS_LIVE] !! HALT -- {state['halt_reason']}")
         return False
 
     state["owned"][coin].update({"entry": fill_px, "size_coin": size_coin,
@@ -659,14 +659,10 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
             # unknown position and halt, but not until the next entry, with
             # the rest of this pass still free to trade. Halt now and KEEP the
             # slot, so reconcile() can retire it once it is genuinely flat.
-            state["halted"] = True
-            state["halt_reason"] = (
-                f"{coin}: protection failed and the emergency exit did not fill "
-                f"-- position is open and unprotected")
-            save_state(state)
+            halt(state, f"{coin}: protection failed and the emergency exit did "
+                        f"not fill -- position is open and unprotected")
             log_trade({**row, "action": "emergency_exit", "result": "exit_failed",
                        "detail": state["halt_reason"]})
-            print(f"[LEVELS_LIVE] !! HALT -- {state['halt_reason']}")
             return False
 
         note = accrue_close(backend, state, coin, state["owned"].get(coin, {}))
@@ -674,6 +670,13 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         save_state(state)
         log_trade({**row, "action": "emergency_exit", "result": "closed",
                    "detail": note})
+        # Real money moved and the position existed unprotected, however
+        # briefly. MAX_NEW_PER_DAY bounds how often this can repeat, so it is
+        # sent every time rather than rate limited.
+        notify.send(
+            f"⚠️ *{coin}* opened and closed immediately\n"
+            f"protection came back `{prot.get('status', '?')}`\n"
+            f"{str(prot.get('error', ''))[:300]}\n{note}")
         return False
 
     print(f"[LEVELS_LIVE] OPENED {coin} {size_coin} @ {fill_px:.6g} "
@@ -733,6 +736,30 @@ def assumed_loss(info: Dict[str, Any]) -> float:
     if entry <= 0 or stop <= 0 or size_coin <= 0:
         return 0.0
     return -abs(entry - stop) * size_coin
+
+
+def halt(state: Dict[str, Any], reason: str, where: str = "") -> str:
+    """Stop trading and tell a human. Returns the reason, for the caller.
+
+    Every halt goes through here. A halt is the one condition this module
+    cannot resolve on its own -- preflight refuses on the persisted flag until
+    someone clears it with --resume -- so it is the one condition where
+    printing into an unwatched log file is not enough. It is also the only
+    alert that would repeat forever if left unkeyed: the flag persists, the
+    trader polls every 15 minutes, and the halt would be re-announced on every
+    pass until it stopped meaning anything.
+    """
+    already = bool(state.get("halted"))
+    state["halted"] = True
+    state["halt_reason"] = reason
+    save_state(state)
+    print(f"[LEVELS_LIVE] !! HALT{' ' + where if where else ''} -- {reason}")
+    if not already:
+        notify.send(
+            f"🛑 *Level trader halted*\n{reason}\n\n"
+            f"It will not open anything until it is cleared with --resume.",
+            key="halt", cooldown_sec=3600)
+    return reason
 
 
 def accrue_close(backend, state: Dict[str, Any], coin: str,
@@ -813,10 +840,8 @@ def preflight(backend, state: Dict[str, Any]):
         return f"equity {equity}"
     lost = state.get("realised_today", 0.0)
     if lost <= -abs(equity) * DAILY_LOSS_STOP_PCT / 100.0:
-        state["halted"] = True
-        state["halt_reason"] = f"daily loss stop: {lost:.2f} against {equity:.2f} equity"
-        save_state(state)
-        return state["halt_reason"]
+        return halt(state, f"daily loss stop: {lost:.2f} against "
+                           f"{equity:.2f} equity")
     return None
 
 

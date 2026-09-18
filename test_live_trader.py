@@ -529,6 +529,65 @@ class DailyCapTest(unittest.TestCase):
                                       self.state(T.MAX_NEW_PER_DAY - 1)))
 
 
+class HaltAlertTest(unittest.TestCase):
+    """A halt is the one condition this module cannot leave on its own.
+
+    preflight refuses on the persisted flag until a human clears it with
+    --resume, so a halt nobody is told about is a bot that has silently
+    stopped trading -- indistinguishable, from the outside, from a quiet
+    market.
+    """
+
+    def setUp(self):
+        self._tmp = Path("/tmp/_test_halt_alert")
+        if self._tmp.exists():
+            shutil.rmtree(self._tmp)
+        self._tmp.mkdir(parents=True)
+        self._orig_state = T.STATE_PATH
+        T.STATE_PATH = self._tmp / "state.json"
+        self.sent = []
+        self._orig_send = T.notify.send
+        T.notify.send = lambda text, **kw: (self.sent.append((text, kw)), True)[1]
+
+    def tearDown(self):
+        T.notify.send = self._orig_send
+        T.STATE_PATH = self._orig_state
+        if self._tmp.exists():
+            shutil.rmtree(self._tmp)
+
+    def state(self):
+        return {"owned": {}, "opened_today": 0, "day": "2026-09-18",
+                "realised_today": 0.0, "halted": False, "halt_reason": ""}
+
+    def test_halt_sets_the_flag_and_alerts(self):
+        st = self.state()
+        returned = T.halt(st, "venue holds ['UNI'] which this module did not open")
+        self.assertTrue(st["halted"])
+        self.assertIn("did not open", st["halt_reason"])
+        self.assertEqual(returned, st["halt_reason"])
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("did not open", self.sent[0][0])
+
+    def test_a_persisting_halt_is_announced_once(self):
+        # The flag persists and the trader polls every 15 minutes. Without the
+        # transition check this is 96 identical messages a day, which is the
+        # same as none.
+        st = self.state()
+        T.halt(st, "first reason")
+        T.halt(st, "second reason")
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(st["halt_reason"], "second reason")
+
+    def test_no_halt_path_bypasses_halt(self):
+        # Structural: the next person to add a halt should not have to know
+        # that alerting exists for their halt to be heard.
+        import inspect
+        body = inspect.getsource(T)
+        self.assertEqual(
+            body.count('state["halted"] = True'), 1,
+            "a halt that sets the flag directly is a halt nobody is told about")
+
+
 class ModuleShapeTest(unittest.TestCase):
     def test_every_function_main_calls_is_defined_before_the_guard(self):
         """Regression for the NameError on the first arming attempt: functions
