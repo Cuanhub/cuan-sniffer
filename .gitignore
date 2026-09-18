@@ -40,3 +40,6 @@ last_recap.txt
 strategy_filter_state.json
 oi_history_state.json
 research/cascade/data/_pending_state.json
+
+# Live trader runtime state (research/levels) -- machine-local, never shared
+research/levels/data/_live_state.json
