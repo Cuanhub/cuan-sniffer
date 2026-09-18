@@ -10,25 +10,31 @@
 #
 # Run it as a launchd job (not from a terminal -- a terminal inherits the very
 # access this is testing) and read /tmp/cuan_tcc_probe.out.
-P="/Users/myair/Documents/PROJECTS 2025/Sol Flow/Cuan_Sniffer"
+#
+# Paths were updated on 2026-09-18 when the project moved to ~/CuanSniffer and
+# the cascade and funding packages were retired. A probe pointed at files that
+# no longer exist reports FAIL for the wrong reason -- "No such file or
+# directory" rather than "Operation not permitted" -- which reads as a TCC
+# failure at a glance and is nothing of the kind.
+P="/Users/myair/CuanSniffer"
 echo "=== cuan-sniffer TCC probe $(date -u +%FT%TZ) ==="
 echo "uid=$(id -u) euid=$(id -un)"
 
-if head -c 60 "$P/research/cascade/detector.py" >/dev/null 2>/tmp/cuan_tcc_err.txt; then
+if head -c 60 "$P/research/levels/levels.py" >/dev/null 2>/tmp/cuan_tcc_err.txt; then
   echo "READ_SOURCE : OK"
 else
   echo "READ_SOURCE : FAIL -> $(cat /tmp/cuan_tcc_err.txt)"
 fi
 
-if ls "$P/research/funding/data" >/dev/null 2>&1; then
+if ls "$P/research/levels/data" >/dev/null 2>&1; then
   echo "LIST_DATA   : OK"
 else
   echo "LIST_DATA   : FAIL (cannot list the collector's output directory)"
 fi
 
-if touch "$P/research/funding/data/_tcc_probe.tmp" 2>/dev/null; then
+if touch "$P/research/levels/data/_tcc_probe.tmp" 2>/dev/null; then
   echo "WRITE_DATA  : OK"
-  rm -f "$P/research/funding/data/_tcc_probe.tmp"
+  rm -f "$P/research/levels/data/_tcc_probe.tmp"
 else
   echo "WRITE_DATA  : FAIL (collector could start but never persist a row)"
 fi
@@ -38,8 +44,8 @@ fi
 import sys
 sys.path.insert(0, '$P')
 try:
-    import research.cascade.detector as d
-    print('IMPORT      : OK  stop_arms=%s' % (d.STOP_ARMS,))
+    import research.levels.levels as m
+    print('IMPORT      : OK  vol_lookback=%s' % (m.VOL_LOOKBACK,))
 except Exception as e:
     print('IMPORT      : FAIL -> %s: %s' % (type(e).__name__, e))
 " 2>&1 | tail -3

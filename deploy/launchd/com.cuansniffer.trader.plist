@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keeps the level trader running across logout and reboot.
+
+  This is the only job here that PLACES REAL ORDERS. It is armed by the
+  LEVELS_LIVE_ARMED variable below plus the --arm flag; both are required, so
+  removing either one leaves the process running harmlessly in dry mode
+  rather than stopping it dead.
+
+  Installing this means the bot trades unattended. Read
+  tools/live_levels_trader.py's header first -- no edge has been measured for
+  this strategy, and the filter is fitted to 18 labels.
+
+  Install:
+    cp deploy/launchd/com.cuansniffer.trader.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.trader.plist
+  Stop:
+    launchctl unload ~/Library/LaunchAgents/com.cuansniffer.trader.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuansniffer.trader</string>
+
+  <!-- The venv's own python, NOT its resolved homebrew target. CPython only
+       adds the venv's site-packages when invoked through the venv directory,
+       because that is where it looks for pyvenv.cfg. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/myair/CuanSniffer/.venv/bin/python</string>
+    <string>-u</string>
+    <string>-m</string>
+    <string>tools.live_levels_trader</string>
+    <string>--arm</string>
+  </array>
+
+  <!-- -m needs the project root on sys.path, which python takes from cwd.
+       This path must stay OUT of ~/Documents, ~/Desktop and ~/Downloads: a
+       launchd job does not inherit Full Disk Access, and from those folders
+       it cannot even read pyvenv.cfg. Measured 2026-09-18, which is why the
+       project was moved here. -->
+  <key>WorkingDirectory</key>
+  <string>/Users/myair/CuanSniffer</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LEVELS_LIVE_ARMED</key>
+    <string>yes</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart on abnormal exit only. The trader traps SIGTERM, finishes its
+       pass and returns 0, so exit 0 means somebody stopped it deliberately.
+       It also returns 1 on a fatal venue-sanity halt -- that DOES restart,
+       and preflight immediately refuses again on the persisted halt flag, so
+       it idles loudly instead of trading. Clear it with --resume. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/trader.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/trader.err.log</string>
+</dict>
+</plist>

@@ -12,20 +12,26 @@ crash in one must not take the other's sample with it.
 
 ---
 
-## Read this first: this project is under `~/Documents`
+## Why this project lives at `~/CuanSniffer`
 
-A launchd-spawned job does **not** inherit Terminal's Full Disk Access. On
-this machine that was established on 2026-09-15 for `~/TrenchKit`: a probe
-job read a file under `~/` successfully and the identical read under
-`~/Documents` returned *"Operation not permitted"*, and a check-in agent had
-failed 46/46 times over six days for that reason. See the comment block in
-`~/Library/LaunchAgents/com.trenchkit.supervisor.plist`.
+A launchd-spawned job does **not** inherit Terminal's Full Disk Access. This
+was measured here on 2026-09-18, not assumed: with the project under
+`~/Documents`, a probe job could not read a single source file —
 
-Cuan_Sniffer lives at `~/Documents/PROJECTS 2025/Sol Flow/Cuan_Sniffer`, so
-the same wall is **expected** here. Expected is not measured, which is what
-step 1 is for. A job that hits this does not error visibly — it starts, fails
-to import, and leaves an empty log. Silent failure over two weeks is the
-single worst outcome for this run, so confirm before trusting it.
+    READ_SOURCE : FAIL -> Operation not permitted
+    LIST_DATA   : FAIL
+    IMPORT      : FAIL -> PermissionError: '.../.venv/pyvenv.cfg'
+
+The venv interpreter could not read its own `pyvenv.cfg`, so nothing could
+start. The same wall had already cost `~/TrenchKit` 46 consecutive check-in
+failures over six days before it was moved out.
+
+The project was moved to `~/CuanSniffer` on 2026-09-18 for exactly this
+reason. **If it is ever moved back under `~/Documents`, `~/Desktop` or
+`~/Downloads`, every launchd job here silently stops working** — it does not
+error visibly, it starts, fails to import, and leaves an empty log.
+
+Step 1 re-verifies this after any move.
 
 ### Step 1 — probe (do this before anything else)
 
