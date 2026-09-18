@@ -137,6 +137,19 @@ MAX_LEVERAGE = _f("LEVELS_MAX_LEVERAGE", 10.0)
 MIN_RR = _f("LEVELS_MIN_RR", 2.0)
 MIN_NOTIONAL_USD = _f("LEVELS_MIN_NOTIONAL", 12.0)
 
+# STRUCTURAL. execute_entry sends a marketable IOC at the CURRENT price and
+# ignores the limit price it is given, so a setup identified while price was
+# far away will fill nowhere near its planned entry. On 2026-09-18 that bought
+# UNI 17% above plan: stop distance 5.66% -> 19.7%, reward/risk 3.27 -> 0.04,
+# risk $23 -> $80 on a position sized for the plan. This is the rail that
+# would have refused it.
+MAX_ENTRY_DRIFT_PCT = _f("LEVELS_MAX_ENTRY_DRIFT_PCT", 1.5)
+
+# How close price must come before a watched setup is fired. The strategy
+# identifies levels while price is 5-10 sigma above them and waits; this is
+# the arrival condition, not a quality filter.
+TRIGGER_ZONE_SIGMA = _f("LEVELS_TRIGGER_ZONE_SIGMA", 1.0)
+
 # ---- operational rails ------------------------------------------------------
 MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 2)
 MAX_NEW_PER_DAY = _i("LEVELS_MAX_NEW_PER_DAY", 0)          # 0 = unlimited

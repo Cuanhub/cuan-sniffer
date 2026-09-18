@@ -41,8 +41,9 @@ class FakeFill:
 
 
 class FakeBackend:
-    def __init__(self, equity=1000.0, protection_ok=True, fill=True):
+    def __init__(self, equity=1000.0, protection_ok=True, fill=True, mid=None):
         self.equity = equity
+        self.mid = mid
         self.protection_ok = protection_ok
         self.fill = fill
         self.entries = []
@@ -57,6 +58,10 @@ class FakeBackend:
 
     def _get_user_state_address(self):
         return "0xfake"
+
+    def get_mid_price(self, coin):
+        # default: sitting right at the planned entry
+        return self.mid if self.mid is not None else 100.0
 
     def user_state(self, addr):
         return {"assetPositions": [
@@ -79,8 +84,10 @@ class FakeBackend:
     def place_native_protection(self, coin, side, size_coin, stop_price, tp_price):
         self.protections.append(coin)
         if not self.protection_ok:
-            return {"status": "failed", "error": "rejected"}
-        return {"status": "ok", "stop_order_id": "s1", "tp_order_id": "t1"}
+            return {"status": "missing", "error": "rejected"}
+        # The real backend returns "protected" on success, never "ok".
+        # The fake said "ok" and so agreed with the bug instead of catching it.
+        return {"status": "protected", "stop_order_id": "s1", "tp_order_id": "t1"}
 
     def execute_exit(self, coin, side, price, size_usd, reason):
         self.exits.append(coin)
@@ -154,6 +161,57 @@ class ArmedPathTest(unittest.TestCase):
         b = FakeBackend()
         T.execute_one(b, episode("AAA"), 1000.0, 1000.0, False, self.state)
         self.assertEqual(b.entries, [])
+
+
+class EntryDriftTest(unittest.TestCase):
+    """The UNI trade: planned entry 7.50, filled 8.8125, stop distance 5.66%
+    -> 19.7%, reward/risk 3.27 -> 0.04, risk $23 -> $80. execute_entry sends a
+    marketable IOC at the CURRENT price and ignores the limit it is passed, so
+    nothing downstream noticed the plan no longer applied."""
+
+    def setUp(self):
+        self._tmp = Path("/tmp/_test_live_drift")
+        if self._tmp.exists():
+            shutil.rmtree(self._tmp)
+        self._tmp.mkdir(parents=True)
+        self._o = (T.STATE_PATH, T.TRADE_LOG)
+        T.STATE_PATH = self._tmp / "s.json"
+        T.TRADE_LOG = self._tmp / "t.csv"
+        self.state = {"owned": {}, "opened_today": 0, "day": "d",
+                      "realised_today": 0.0, "halted": False, "halt_reason": ""}
+
+    def tearDown(self):
+        T.STATE_PATH, T.TRADE_LOG = self._o
+        if self._tmp.exists():
+            shutil.rmtree(self._tmp)
+
+    def test_refuses_to_fire_when_price_drifted_from_the_plan(self):
+        b = FakeBackend(mid=117.5)          # +17.5%, the UNI case
+        ok = T.execute_one(b, episode("UNI"), 1000.0, 1000.0, True, self.state)
+        self.assertFalse(ok)
+        self.assertEqual(b.entries, [], "no order may be sent when the plan no longer applies")
+
+    def test_fires_when_price_is_at_the_level(self):
+        b = FakeBackend(mid=100.0)
+        self.assertTrue(T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state))
+        self.assertEqual(b.entries, ["AAA"])
+
+    def test_refuses_when_price_is_already_through_the_stop(self):
+        b = FakeBackend(mid=94.0)           # below the 95 stop
+        self.assertFalse(T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state))
+        self.assertEqual(b.entries, [])
+
+    def test_refuses_when_live_reward_risk_has_collapsed(self):
+        b = FakeBackend(mid=100.9)          # inside drift, but rr now poor
+        self.assertFalse(T.execute_one(b, episode("AAA", 100.0, 95.0, 101.0),
+                                       1000.0, 1000.0, True, self.state))
+        self.assertEqual(b.entries, [])
+
+    def test_size_comes_from_the_live_price_not_the_plan(self):
+        b = FakeBackend(mid=101.0)          # within drift
+        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
+        rec = self.state["owned"]["AAA"]
+        self.assertAlmostEqual(rec["entry"], 101.0, places=6)
 
 
 class VenueSanityTest(unittest.TestCase):

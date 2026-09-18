@@ -60,6 +60,7 @@ from research.levels.config import (                                  # noqa: E4
     RISK_PCT_PER_TRADE, MAX_CONCURRENT, MAX_NEW_PER_DAY, MAX_LEVERAGE,
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
+    MAX_ENTRY_DRIFT_PCT, TRIGGER_ZONE_SIGMA,
 )
 from research.levels.config import summary as config_summary          # noqa: E402
 
@@ -385,9 +386,39 @@ def main():
     return 0
 
 
+def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float, tp: float):
+    """Refuse to fire unless the live price is where the plan assumed.
+
+    execute_entry sends a MARKETABLE IOC at the current price -- it ignores the
+    limit price passed to it. On 2026-09-18 that bought UNI at 8.8125 against a
+    planned entry of 7.50: the stop went from 5.66% away to 19.7%, reward/risk
+    from 3.27 to 0.04, and the real risk from $23 to $80 on a position sized
+    for the plan. Nothing in the module noticed, because everything downstream
+    trusted the planned numbers.
+
+    The plan is only valid near the level. This re-derives the geometry from
+    the LIVE price and rejects the trade if it no longer holds.
+    """
+    ref = backend.get_mid_price(coin)
+    if not ref or ref <= 0:
+        return None, "no midprice"
+    drift = (ref - planned_entry) / planned_entry * 100
+    if abs(drift) > MAX_ENTRY_DRIFT_PCT:
+        return None, (f"price {ref:.6g} is {drift:+.2f}% from the planned entry "
+                      f"{planned_entry:.6g} (max {MAX_ENTRY_DRIFT_PCT}%)")
+    if ref <= stop:
+        return None, f"price {ref:.6g} is already at or below the stop {stop:.6g}"
+    if ref >= tp:
+        return None, f"price {ref:.6g} is already at or above the target {tp:.6g}"
+    live_rr = (tp - ref) / (ref - stop)
+    if live_rr < MIN_RR:
+        return None, f"reward/risk at the live price is {live_rr:.2f} < {MIN_RR}"
+    return ref, None
+
+
 def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
                 armed: bool, state: Dict[str, Any]) -> bool:
-    """Place one entry, then protect it. Returns True if a position was opened."""
+    """Fire one entry at market, then protect it. True if a position opened."""
     def g(k, d=0.0):
         try:
             return float(ep.get(k) or d)
@@ -395,6 +426,21 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
             return d
     coin = ep["coin"]
     entry, stop, tp = g("suggested_entry"), g("suggested_stop"), g("suggested_tp")
+
+    # Size from the LIVE price, not the planned one. Sizing off the plan while
+    # filling at market is exactly what made the UNI position carry 3.5x its
+    # intended risk.
+    if armed:
+        ref, why = entry_is_actionable(backend, coin, entry, stop, tp)
+        if ref is None:
+            log_trade({"ts_utc": now_iso(), "action": "skip", "coin": coin,
+                       "episode_id": ep.get("episode_id", ""), "entry": entry,
+                       "stop": stop, "tp": tp, "result": "not_actionable",
+                       "detail": why})
+            print(f"[LEVELS_LIVE] skip {coin}: {why}")
+            return False
+        entry = ref
+
     szi = size_from_stop(equity, entry, stop, available)
     size_usd = szi["size_usd"]
     row = {"ts_utc": now_iso(), "coin": coin, "episode_id": ep.get("episode_id", ""),
@@ -474,7 +520,11 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     log_trade({**row, "action": "protection", "result": prot.get("status", ""),
                "detail": f"stop={prot.get('stop_order_id','')} tp={prot.get('tp_order_id','')} "
                          f"{prot.get('error','')}"[:120]})
-    if prot.get("status") != "ok":
+    # place_native_protection returns "protected" / "partial" / "missing" --
+    # never "ok". Comparing against "ok" made the check fire on SUCCESS, so
+    # the first supervised trade placed a correct stop and take-profit and
+    # then immediately emergency-closed the position it had just protected.
+    if prot.get("status") != "protected":
         print(f"[LEVELS_LIVE] !! protection FAILED on {coin} -- closing immediately; "
               f"an unprotected position is not the trade")
         backend.execute_exit(coin=coin, side="LONG", price=fill_px,
