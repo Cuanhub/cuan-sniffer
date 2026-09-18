@@ -370,6 +370,11 @@ class LiveExecutionBackend(ExecutionBackend):
             "trigger_type": HL_PROTECTION_TRIGGER_REFERENCE,
             "stop_trigger_price": float(stop_price),
             "tp_trigger_price": float(tp_price),
+            # False until the venue confirms the resting order matches what we
+            # sent. Every early return below leaves them False, which is the
+            # honest answer: nothing was placed, so nothing was verified.
+            "stop_verified": False,
+            "tp_verified": False,
         }
 
         if send_sz <= 0:
@@ -451,21 +456,29 @@ class LiveExecutionBackend(ExecutionBackend):
             stop_oid=stop_oid,
             tp_oid=tp_oid,
         )
-        # Advisory-only: log verification warnings but never discard exchange-confirmed OIDs.
-        # The exchange returned the OID — trust it. Timing-based misses (order not yet visible
-        # in the open-orders snapshot) would otherwise wipe valid protection IDs. The periodic
-        # audit already handles state drift detection correctly.
-        if verification.get("stop"):
-            stop_warn = verification["stop"]
-            stop_err = f"{stop_err}; verify_warn:{stop_warn}" if stop_err else f"verify_warn:{stop_warn}"
-        if verification.get("tp"):
-            tp_warn = verification["tp"]
-            tp_err = f"{tp_err}; verify_warn:{tp_warn}" if tp_err else f"verify_warn:{tp_warn}"
+        stop_hard, stop_soft = verification["stop"]
+        tp_hard, tp_soft = verification["tp"]
+        stop_err = self._append_verify_notes(stop_err, stop_hard, stop_soft)
+        tp_err = self._append_verify_notes(tp_err, tp_hard, tp_soft)
 
+        # The OIDs are kept whatever the verdict. They are what lets a caller
+        # cancel an order the venue just contradicted, so discarding them here
+        # would destroy the only handle on the problem.
         result["stop_order_id"] = stop_oid or ""
         result["tp_order_id"] = tp_oid or ""
+        result["stop_verified"] = not stop_hard
+        result["tp_verified"] = not tp_hard
 
-        ok_count = int(bool(stop_oid)) + int(bool(tp_oid))
+        # An OID proves the venue ACCEPTED something, not that what it accepted
+        # is a stop. Until 2026-09-18 status was computed from OID presence
+        # alone and verification was advisory, so the sole live protection this
+        # account ever placed was recorded "protected" while carrying four
+        # verification failures. status is the only field the caller acts on
+        # -- tools/live_levels_trader closes any position whose protection is
+        # not "protected" -- so a contradicted order must not count here.
+        stop_ok = bool(stop_oid) and not stop_hard
+        tp_ok = bool(tp_oid) and not tp_hard
+        ok_count = int(stop_ok) + int(tp_ok)
         if ok_count == 2:
             result["status"] = "protected"
         elif ok_count == 1:
@@ -900,21 +913,34 @@ class LiveExecutionBackend(ExecutionBackend):
         """
         Return normalized open orders for account (optionally filtered by coin).
 
-        Normalized fields:
-          - coin (upper string)
-          - oid  (string)
-          - reduce_only (bool)
-          - is_trigger (bool)
-          - tpsl ("tp"/"sl"/"")
-          - trigger_px (float)
+        frontend_open_orders FIRST, and that ordering is load-bearing. The plain
+        openOrders endpoint returns only coin/limitPx/oid/side/sz/timestamp -- no
+        reduceOnly, no isTrigger, no triggerPx. Protection verification is this
+        method's only caller, and against that payload it cannot confirm a single
+        thing it needs to: on 2026-09-18 the one live stop this account has ever
+        placed came back "not_trigger_order;missing_trigger_price" for exactly
+        this reason, because the richer endpoint was only ever the fallback.
+
+        Normalized fields. None means THE PAYLOAD DID NOT SAY, which is not the
+        same as False -- callers must not collapse the two, because "the venue
+        told us this is not a stop" and "this endpoint does not report stops"
+        warrant opposite responses:
+          - coin        (upper string)
+          - oid         (string)
+          - reduce_only (bool | None)
+          - is_trigger  (bool | None)
+          - tpsl        ("tp" | "sl" | "")
+          - trigger_px  (float | None)
+          - size        (float | None)
+          - is_buy      (bool | None)
         """
         query_address = self._user_state_query_address()
         raw = None
         try:
-            if hasattr(self.info, "open_orders"):
-                raw = self.info.open_orders(query_address)
-            elif hasattr(self.info, "frontend_open_orders"):
+            if hasattr(self.info, "frontend_open_orders"):
                 raw = self.info.frontend_open_orders(query_address)
+            elif hasattr(self.info, "open_orders"):
+                raw = self.info.open_orders(query_address)
             else:
                 if self.debug:
                     print("[LIVE_BACKEND] open-orders endpoint unavailable on Info client")
@@ -978,11 +1004,15 @@ class LiveExecutionBackend(ExecutionBackend):
         )
         oid_str = str(oid).strip() if oid is not None else ""
 
-        order_type = raw.get("orderType")
-        if not isinstance(order_type, dict):
-            order_type = nested.get("orderType")
-        if not isinstance(order_type, dict):
-            order_type = {}
+        order_type_raw = raw.get("orderType")
+        if order_type_raw is None:
+            order_type_raw = nested.get("orderType")
+        order_type = order_type_raw if isinstance(order_type_raw, dict) else {}
+        # frontendOpenOrders reports orderType as a STRING ("Stop Market",
+        # "Take Profit Limit"), never as the {"trigger": {...}} dict we send.
+        order_type_text = (
+            order_type_raw.strip().lower() if isinstance(order_type_raw, str) else ""
+        )
 
         trigger = order_type.get("trigger")
         if not isinstance(trigger, dict):
@@ -998,6 +1028,19 @@ class LiveExecutionBackend(ExecutionBackend):
             or trigger.get("tpsl")
             or ""
         ).lower()
+        if tpsl not in {"tp", "sl"} and order_type_text:
+            # Invert the mapping we send: tpsl="sl" comes back as "Stop Market"
+            # or "Stop Limit", tpsl="tp" as "Take Profit Market"/"Take Profit
+            # Limit". frontendOpenOrders carries no tpsl field at all, so
+            # without this the tpsl check is unfalsifiable on the only endpoint
+            # that reports triggers -- and a stop mistakenly placed as a
+            # take-profit, which rests on the WRONG SIDE of price, verifies
+            # clean. Check "take profit" first: "Stop" never appears in a TP
+            # order type, but matching loosely on "stop" would be fragile.
+            if "take profit" in order_type_text:
+                tpsl = "tp"
+            elif "stop" in order_type_text:
+                tpsl = "sl"
         trigger_px_raw = (
             raw.get("triggerPx")
             if raw.get("triggerPx") is not None else
@@ -1012,12 +1055,20 @@ class LiveExecutionBackend(ExecutionBackend):
             except (TypeError, ValueError):
                 trigger_px = None
 
-        is_trigger = (
-            bool(trigger)
-            or tpsl in {"tp", "sl"}
-            or bool(raw.get("isTrigger"))
-            or bool(nested.get("isTrigger"))
-        )
+        is_trigger_raw = raw.get("isTrigger")
+        if is_trigger_raw is None:
+            is_trigger_raw = nested.get("isTrigger")
+        if bool(trigger) or tpsl in {"tp", "sl"}:
+            # Positive structural evidence: a trigger block, or a tp/sl tag we
+            # were given or recovered above.
+            is_trigger = True
+        elif is_trigger_raw is not None:
+            is_trigger = bool(is_trigger_raw)
+        else:
+            # The payload says nothing either way. Reporting False here would
+            # let a field-poor endpoint masquerade as the venue denying that
+            # our stop is a stop.
+            is_trigger = None
 
         if not coin and not oid_str and not is_trigger:
             return None
@@ -1044,9 +1095,15 @@ class LiveExecutionBackend(ExecutionBackend):
         is_buy: Optional[bool]
         if is_buy_raw is None:
             side_txt = str(raw.get("side") or nested.get("side") or "").strip().lower()
+            # Hyperliquid encodes side as "A" (ask/sell) or "B" (bid/buy) on
+            # BOTH open-orders endpoints. "a" was absent from this set, so every
+            # reduce-only stop on a LONG -- which closes SELL, i.e. "A" --
+            # normalized to is_buy=None and reported missing_side forever. The
+            # wrong-side check, the one that catches a stop resting on the wrong
+            # side of the market, could never fire.
             if side_txt in {"buy", "bid", "b"}:
                 is_buy = True
-            elif side_txt in {"sell", "ask", "s"}:
+            elif side_txt in {"sell", "ask", "s", "a"}:
                 is_buy = False
             else:
                 is_buy = None
@@ -1056,8 +1113,8 @@ class LiveExecutionBackend(ExecutionBackend):
         return {
             "coin": coin,
             "oid": oid_str,
-            "reduce_only": bool(reduce_only),
-            "is_trigger": bool(is_trigger),
+            "reduce_only": None if reduce_only is None else bool(reduce_only),
+            "is_trigger": is_trigger,
             "tpsl": tpsl,
             "trigger_px": trigger_px,
             "size": size_val,
@@ -1148,6 +1205,23 @@ class LiveExecutionBackend(ExecutionBackend):
             )
         return ""
 
+    @staticmethod
+    def _append_verify_notes(err: str, hard: List[str], soft: List[str]) -> str:
+        """Fold verification results into the human-readable error string.
+
+        verify_fail: the venue contradicted us and status was downgraded.
+        verify_warn: something went unreported; status was left alone.
+        """
+        notes = []
+        if hard:
+            notes.append("verify_fail:" + ";".join(hard))
+        if soft:
+            notes.append("verify_warn:" + ";".join(soft))
+        if not notes:
+            return err
+        note = " ".join(notes)
+        return f"{err}; {note}" if err else note
+
     def _verify_single_protection_order(
         self,
         order_row: Optional[Dict[str, Any]],
@@ -1157,50 +1231,80 @@ class LiveExecutionBackend(ExecutionBackend):
         expected_trigger_px: float,
         expected_is_buy: bool,
         coin: str,
-    ) -> str:
+    ) -> Tuple[List[str], List[str]]:
+        """Compare one resting order against what we asked the venue for.
+
+        Returns (contradictions, unknowns), and the split is the whole point.
+
+        A CONTRADICTION is the venue reporting a value that disagrees with what
+        we sent: a stop tagged as a take-profit, a trigger 5% from where we put
+        it, a close order on the wrong side. These cannot be explained away by
+        timing or by a thin payload -- the order that is resting is not the
+        order we asked for -- and the caller treats them as unprotected.
+
+        An UNKNOWN is a field the payload simply did not report, including the
+        order not being visible yet. Escalating those would re-create the
+        2026-09-18 failure where a correctly protected UNI position was
+        emergency-closed seconds after entry by a check that fired on success.
+        We surface unknowns and keep the position.
+        """
         if order_row is None:
-            return "order_not_found_in_open_orders"
+            # Usually the open-orders snapshot lagging the ack by a beat, which
+            # is why this is an unknown and not a contradiction.
+            return [], ["order_not_found_in_open_orders"]
 
-        issues: List[str] = []
+        hard: List[str] = []
+        soft: List[str] = []
 
-        if not bool(order_row.get("reduce_only", False)):
-            issues.append("not_reduce_only")
-        if not bool(order_row.get("is_trigger", False)):
-            issues.append("not_trigger_order")
+        reduce_only = order_row.get("reduce_only")
+        if reduce_only is None:
+            soft.append("reduce_only_unreported")
+        elif not reduce_only:
+            # A protection order that is NOT reduce-only can open a position
+            # rather than close one. That is strictly worse than no stop.
+            hard.append("not_reduce_only")
+
+        is_trigger = order_row.get("is_trigger")
+        if is_trigger is None:
+            soft.append("trigger_flag_unreported")
+        elif not is_trigger:
+            hard.append("not_trigger_order")
 
         got_tpsl = str(order_row.get("tpsl", "") or "").strip().lower()
-        if got_tpsl != expected_tpsl:
-            issues.append(f"wrong_tpsl:{got_tpsl or 'none'}")
+        if not got_tpsl:
+            soft.append("tpsl_unreported")
+        elif got_tpsl != expected_tpsl:
+            hard.append(f"wrong_tpsl:{got_tpsl}!=expected:{expected_tpsl}")
 
         got_trigger_px = order_row.get("trigger_px")
         if got_trigger_px is None:
-            issues.append("missing_trigger_price")
+            soft.append("trigger_price_unreported")
         else:
             price_tol = max(1e-9, abs(expected_trigger_px) * 0.0002)
             if abs(float(got_trigger_px) - expected_trigger_px) > price_tol:
-                issues.append(
+                hard.append(
                     f"trigger_price_mismatch:{float(got_trigger_px)}!=expected:{expected_trigger_px}"
                 )
 
         got_size = order_row.get("size")
         if got_size is None:
-            issues.append("missing_size")
+            soft.append("size_unreported")
         else:
             size_tol = max(self._size_tick(coin) * 1.5, abs(expected_size_coin) * 0.001)
             if abs(float(got_size) - expected_size_coin) > size_tol:
-                issues.append(
+                hard.append(
                     f"size_mismatch:{float(got_size)}!=expected:{expected_size_coin}"
                 )
 
         got_is_buy = order_row.get("is_buy")
         if got_is_buy is None:
-            issues.append("missing_side")
+            soft.append("side_unreported")
         elif bool(got_is_buy) != bool(expected_is_buy):
             expected_side = "BUY" if expected_is_buy else "SELL"
             got_side = "BUY" if bool(got_is_buy) else "SELL"
-            issues.append(f"wrong_side:{got_side}!={expected_side}")
+            hard.append(f"wrong_side:{got_side}!={expected_side}")
 
-        return ";".join(issues)
+        return hard, soft
 
     def _verify_protection_orders(
         self,
@@ -1212,11 +1316,13 @@ class LiveExecutionBackend(ExecutionBackend):
         expected_tp_px: float,
         stop_oid: Optional[str],
         tp_oid: Optional[str],
-    ) -> Dict[str, str]:
-        out = {"stop": "", "tp": "", "global": ""}
+    ) -> Dict[str, Any]:
+        """Per leg: (contradictions, unknowns). See _verify_single_protection_order."""
+        out: Dict[str, Any] = {"stop": ([], []), "tp": ([], []), "global": ""}
         orders = self.get_open_orders(coin)
         if orders is None:
-            # Can't verify — log globally but don't set per-OID errors so OIDs are preserved.
+            # Could not ask. That is an unknown, never a contradiction: failing
+            # to reach the venue says nothing about whether the stop is resting.
             out["global"] = "open_orders_verification_unavailable"
             return out
 
