@@ -30,7 +30,9 @@ from typing import Any, Dict, List
 from research.levels import config as C
 from research.levels import storage
 from research.levels.gate import evaluate
-from research.levels.levels import detect_levels, log_sigma, sigma_distance, nearest_level
+from research.levels.levels import (
+    detect_levels, flipped_supports, log_sigma, sigma_distance, nearest_level,
+)
 from research.levels.scanner import fetch, _atr_pct
 from research.levels.venue_client import HyperliquidReadOnlyClient, VenueFetchError
 from research.funding.universe import select_universe
@@ -54,6 +56,9 @@ TIMEFRAMES = ("4h", "1h")
 # named ranked 12th of 12. Levels are flagged, never dropped -- which of these
 # matters is the user's call to make, not mine to pre-empt.
 STALE_TOUCH_BARS = 120
+
+# Two levels within this distance are the same level
+CLUSTER_MERGE_SIGMA = 0.5
 
 TARGET_LABELS = 50
 
@@ -121,6 +126,14 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
         px = bars[i]["c"]
         supports = detect_levels(bars, upto=i + 1, kind="support")
         resistances = detect_levels(bars, upto=i + 1, kind="resistance")
+        # A broken resistance is a support candidate. Merge them in, keeping
+        # the swing-low version where both find the same price.
+        origin = {round(L.price, 10): "swing_low" for L in supports}
+        for F in flipped_supports(bars, upto=i + 1):
+            if not any(abs(sigma_distance(F.price, L.price, sigma)) <= CLUSTER_MERGE_SIGMA
+                       for L in supports):
+                supports.append(F)
+                origin[round(F.price, 10)] = "flipped_resistance"
         for L in supports:
             if L.price >= px:
                 continue
@@ -153,8 +166,13 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
             # 2,480 for the same reason -- buying support with resistance
             # directly overhead is a rule they apply and nothing here measured.
             # Captured and displayed, never gated on.
-            head_sigma = sigma_distance(above[0].price, entry, sigma) if above else 99.0
-            head_pct = ((above[0].price - entry) / entry * 100) if above else 0.0
+            # No detected resistance above is NOT infinite headroom -- it means
+            # price is at or near its highs with no mapped target, so there is
+            # no trade thesis to act on. Reported as None rather than a
+            # sentinel 99.0, which was being read as "maximum headroom" and
+            # floated exactly the untradeable setups to the top of a scan.
+            head_sigma = sigma_distance(above[0].price, entry, sigma) if above else None
+            head_pct = ((above[0].price - entry) / entry * 100) if above else None
             # 7d trajectory, so the user can see how price arrived here
             w = bars[max(0, i - 42):i + 1]
             hi7 = max(x["h"] for x in w); lo7 = min(x["l"] for x in w)
@@ -162,7 +180,9 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
                 "episode_id": storage.make_episode_id(coin + "-" + tf, bars[i]["t"], L.price),
                 "coin": coin, "timeframe": tf, "detected_at_utc": storage.now_iso(),
                 "bar_ts_ms": bars[i]["t"], "level_price": round(L.price, 10),
-                "level_kind": "support", "level_touches": L.touches,
+                "level_kind": "support",
+                "level_origin": origin.get(round(L.price, 10), "swing_low"),
+                "level_touches": L.touches,
                 "level_holds": L.holds, "level_hold_rate": round(L.hold_rate, 4),
                 "level_pivot_count": L.pivot_count,
                 "level_bars_since_last_touch": (i - L.last_touch_idx) if L.last_touch_idx >= 0 else -1,
@@ -172,9 +192,12 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
                 "suggested_tp": round(tp, 10), "suggested_rr": round(rr, 3),
                 "opposing_level_price": round(opp.price, 10) if opp else "",
                 "_px": px, "_near": near, "_hi7": hi7, "_lo7": lo7, "_ladder": ladder,
-                "_tf": tf, "_head_sigma": round(head_sigma, 2), "_head_pct": round(head_pct, 2),
-                "overhead_sigma": round(head_sigma, 3),
-                "overhead_pct": round(head_pct, 3),
+                "_tf": tf,
+                "_head_sigma": round(head_sigma, 2) if head_sigma is not None else None,
+                "_head_pct": round(head_pct, 2) if head_pct is not None else None,
+                "_no_target": head_sigma is None,
+                "overhead_sigma": round(head_sigma, 3) if head_sigma is not None else "",
+                "overhead_pct": round(head_pct, 3) if head_pct is not None else "",
                 "_stale": (i - L.last_touch_idx) > STALE_TOUCH_BARS if L.last_touch_idx >= 0 else True,
                 "_from_hi7": (px - hi7) / hi7 * 100, "_stop_pct": (entry - stop) / entry * 100,
                 **feats,
@@ -196,7 +219,8 @@ def cmd_list(args):
     print(f"labels so far: {len(labelled)} / {TARGET_LABELS}\n")
     for n, c in enumerate(show, 1):
         stale = "  [STALE -- price left this behind]" if c.get("_stale") else ""
-        print(f"[{n}] {c['coin']} {c['_tf']}   price {c['_px']:.6g}")
+        flip = "  [FLIPPED resistance -> support]" if c.get("level_origin") == "flipped_resistance" else ""
+        print(f"[{n}] {c['coin']} {c['_tf']}   price {c['_px']:.6g}{flip}")
         print(f"     level {c['level_price']:.6g}  ({-c['_near']:.2f}s below price, "
               f"{(c['level_price']-c['_px'])/c['_px']*100:+.2f}%)")
         print(f"     history: {c['level_touches']} tests, {c['level_holds']} held "
@@ -206,8 +230,11 @@ def cmd_list(args):
               f"{int(_f(c,'retests'))} retests, {c['_from_hi7']:+.1f}% from 7d high")
         print(f"     trade  : entry {c['suggested_entry']:.6g}  stop {c['suggested_stop']:.6g} "
               f"({c['_stop_pct']:.1f}%)")
-        print(f"     headroom: first resistance {c['_head_sigma']:.2f}s above entry "
-              f"({c['_head_pct']:+.2f}%)")
+        if c.get("_no_target"):
+            print("     headroom: NO resistance mapped above -- no target, not a trade")
+        else:
+            print(f"     headroom: first resistance {c['_head_sigma']:.2f}s above entry "
+                  f"({c['_head_pct']:+.2f}%)")
         if c["_ladder"]:
             rungs = "   ".join(f"{px_:.6g} (rr {r:.2f}, {t} tests {h*100:.0f}%)"
                                for px_, r, t, h in c["_ladder"])

@@ -160,6 +160,38 @@ def detect_levels(bars: List[Dict[str, Any]], upto: Optional[int] = None,
     return out
 
 
+def flipped_supports(bars: List[Dict[str, Any]], upto: Optional[int] = None) -> List[Level]:
+    """Resistance levels price has broken above, re-scored as supports.
+
+    Classic S/R flip, and the detector had no concept of it: supports were
+    only ever built from swing lows, so a level that spent months capping
+    price and was then broken became invisible the moment it mattered most.
+    On XMR 1h that hid 19 levels, including one with 35 tests sitting 1.4%
+    under price -- exactly the kind of level the user reads as support after
+    a break.
+
+    The hold rate is recomputed in the SUPPORT sense rather than carried over.
+    A resistance's hold rate measures how often it rejected price from below,
+    which says nothing about whether it holds as a floor from above.
+    """
+    upto = len(bars) if upto is None else upto
+    if upto < VOL_LOOKBACK // 2:
+        return []
+    sigma = log_sigma(bars, upto - 1)
+    if sigma <= 0:
+        return []
+    price = bars[upto - 1]["c"]
+    out = []
+    for R in detect_levels(bars, upto=upto, kind="resistance"):
+        if R.price >= price:
+            continue
+        lvl = _score_level(bars, R.price, "support", upto, sigma)
+        lvl.pivot_count = R.pivot_count
+        if lvl.touches >= MIN_TOUCHES:
+            out.append(lvl)
+    return out
+
+
 def nearest_level(levels: List[Level], price: float, sigma: float,
                   below: bool = True) -> Optional[Level]:
     """Closest level under (or over) the current price, in sigma terms."""
