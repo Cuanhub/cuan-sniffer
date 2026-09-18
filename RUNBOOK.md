@@ -1,244 +1,216 @@
 # Cuan Sniffer — Operations Runbook
 
-> Live operations reference. See README.md for architecture overview and `.env.example` for full parameter reference.
+Live operations for the **level trader** (`tools/live_levels_trader.py`), the
+only thing in this repo that places orders.
+
+> Everything this file described before 2026-09-18 belonged to the SMC bot
+> retired in `b20820e`. Its commands referenced `main.py`, `executor.py` and
+> `signal_engine.py`, none of which exist. If you are reading an old copy,
+> stop.
 
 ---
 
-## Quick start
+## Read this before arming anything
 
-```bash
-cp .env.example .env
-# Fill in: RPC_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, HL_ACCOUNT_ADDRESS, HL_SECRET_KEY
-pip install -r requirements.txt
-python main.py
-```
+The gate this trades measured **−0.0413R against random entry** over 688
+filled backfill trades (z = −0.93). That is no edge distinguishable from
+throwing darts. Its apparent +203R over the backfill came from a window in
+which all 28 universe coins rose; random entries with the identical
+stop/TP geometry returned *more*.
 
-Use `HL_TESTNET=true` for exchange testnet validation. Paper execution is not supported.
-
----
-
-## Unified Threshold Framework
-
-> Implemented 2026-06-16, Sprint 7 post-candle-fix.
-
-All confidence gates are controlled by a **single master variable**. Do not set individual gate variables unless you have a documented, evidence-based reason to diverge.
-
-### Master variable
-
-```bash
-UNIVERSAL_MIN_CONFIDENCE=0.90   # live-test phase default
-```
-
-All of the following variables default to `UNIVERSAL_MIN_CONFIDENCE` when unset:
-- `SWING_MIN_CONFIDENCE`
-- `SMC_4H_MIN_CONFIDENCE`
-- `WEAK_TREND_MIN_CONFIDENCE`
-- `CHOP_REVERSAL_MIN_CONFIDENCE`
-- `MIN_SIGNAL_CONFIDENCE`
-
-**To raise the confidence floor system-wide:** change `UNIVERSAL_MIN_CONFIDENCE` only.  
-**To override one gate:** set the specific variable in `.env` with a comment explaining why.
-
-### Score pre-filters
-
-```bash
-REGIME_SCORE_THRESHOLD_STRONG=0.64
-REGIME_SCORE_THRESHOLD_WEAK=0.64
-REGIME_SCORE_THRESHOLD_CHOP=0.64
-```
-
-These are **pre-filters**, not quality gates. Raising them reduces trade volume without improving realized-R. Leave at 0.64 unless the sample shows a clear regime-specific score correlation.
-
-### RR gates
-
-```bash
-MIN_STOP_REDESIGN_RR=1.60          # engine TP floor
-MIN_EXECUTION_EFFECTIVE_RR=1.55    # executor fill-time gate
-STOP_REDESIGN_RR_TOLERANCE=0.05    # engine tolerance band
-```
-
-The 0.05 spread (1.55–1.60) creates a tolerance band at execution. `MIN_EXECUTION_EFFECTIVE_RR` must always be ≤ `MIN_STOP_REDESIGN_RR`.
-
-### Feature flags
-
-```bash
-SMC_ENABLE_4H_LIVE=true          # re-enabled after candle-fix
-HARD_BLOCK_CONTINUATION=false    # removed after candle-fix
-HARD_BLOCKED_TIMEFRAMES=         # empty — 4h is no longer blocked
-```
-
-**Do not re-enable `HARD_BLOCK_CONTINUATION=true`** without re-running the continuation performance analysis on post-fix data (N≥30 continuation trades).
-
-**Do not set `HARD_BLOCKED_TIMEFRAMES=4h`** — the historical 4H underperformance was caused by look-ahead bias in HTF/regime data, which has been fixed.
-
-### Startup validation
-
-Every boot prints a threshold summary. Check for `[THRESHOLD WARNING]` lines:
-
-```
-[THRESHOLD SUMMARY] ──────────────────────────────────────────────────────
-  UNIVERSAL_MIN_CONFIDENCE  = 0.90  ← master confidence floor
-  CONFIDENCE GATES (all should match universal):
-    SWING_MIN_CONFIDENCE         = 0.90  ✓
-    ...
-```
-
-If any `[THRESHOLD WARNING]` appears, a gate is diverged from the unified framework. Either fix the `.env` value or document the intentional override.
+It is armed anyway, deliberately, to buy information at roughly $24 a trade.
+Every default is chosen to lose slowly and stop early. Do not widen a rail
+because it refused a trade you liked.
 
 ---
 
-## When to raise `UNIVERSAL_MIN_CONFIDENCE`
+## Start, stop, status
 
-Raise to `0.92` when:
-- N≥60 closed trades at post-candle-fix data quality
-- Rolling 20-trade WR is below 40% (kill-switch triggered repeatedly)
-- Analysis confirms 0.90–0.91 bucket remains net negative
+```sh
+# status — the state file, no side effects
+.venv/bin/python -m tools.live_levels_trader --status
 
-**Evidence:** In the 107-trade pre-fix sample, conf≥0.92 was the first bucket with positive expectancy (+0.317R avg, 61% WR, PF=1.78). 0.90 is used during live-test phase for adequate trade flow.
+# one dry pass, prints intents, places nothing
+.venv/bin/python -m tools.live_levels_trader --once
+
+# install / start under launchd (this is what trades)
+mkdir -p ~/Library/Logs/cuan-sniffer
+cp deploy/launchd/com.cuansniffer.trader.plist ~/Library/LaunchAgents/
+launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.trader.plist
+
+# stop
+launchctl unload ~/Library/LaunchAgents/com.cuansniffer.trader.plist
+
+# is it running? PID in column 1, exit code in column 2
+launchctl list | grep cuansniffer
+```
+
+The `mkdir` is not optional. launchd does not create a missing
+`StandardOutPath` directory — it starts the job and drops the output.
+
+A bare `kill` will not stick: `KeepAlive` restarts anything exiting non-zero.
+Exit 0 is treated as deliberate, so a clean SIGTERM shutdown stays down.
+
+**After editing the plist**, unload and load again. launchd caches the copy
+it read at load time. `deploy/launchd/` is the source of truth;
+`~/Library/LaunchAgents/` holds a deployment artifact.
 
 ---
 
-## Kill-switch
+## Arming takes two independent gates
 
-```bash
-KILL_MIN_TRADES=5       # minimum trades before kill-switch can fire
-KILL_WIN_RATE=0.40      # rolling WR floor
-KILL_ROLLING_N=10       # rolling window
-KILL_PAUSE_HOURS=12     # pause duration when triggered
+```
+--arm                    on the command line
+LEVELS_LIVE_ARMED=yes    in the environment (the plist sets it)
 ```
 
-Per-coin kill-switch:
-```bash
-COIN_MIN_TRADES=5
-COIN_KILL_WIN_RATE=0.35
-COIN_ROLLING_N=10
-COIN_PAUSE_HOURS=12
+Both are required. Removing either leaves the process running harmlessly in
+dry mode rather than stopping it dead, so you can disarm without losing the
+scan. Dry mode skips the trigger check entirely — it prints sized intents,
+never `wait`/`TRIGGER` lines.
+
+---
+
+## Where things are
+
+| what | where |
+|---|---|
+| stdout | `~/Library/Logs/cuan-sniffer/trader.log` |
+| stderr | `~/Library/Logs/cuan-sniffer/trader.err.log` |
+| state | `research/levels/data/_live_state.json` |
+| every decision | `research/levels/data/live_trades.csv` |
+| labels (tracked in git) | `research/levels/data/labels.csv` |
+| rails | `research/levels/config.py` |
+
+Logs are **not rotated** — launchd does not, and neither does the trader.
+A repo-root `live_trader.log` is a dead artifact from before the move; the
+live output is in `~/Library/Logs`.
+
+---
+
+## Halts
+
+A halt is the one condition the trader cannot leave on its own. `preflight`
+refuses to open anything while `halted` is true, so it idles loudly until a
+human clears it. Every halt sends a Telegram alert on the transition.
+
+Causes, all of them:
+
+| reason | meaning |
+|---|---|
+| `venue holds [...] which this module did not open` | a position exists that the trader has no record of |
+| `venue holds N positions, cap is 2` | concurrency cap breached at the venue |
+| `notional $X exceeds 10x equity` | leverage backstop |
+| `filled=True but fill_price=...` | a fill it cannot parse; the position may well exist |
+| `... emergency exit did not fill` | protection failed **and** the close was rejected: a position is open and unprotected |
+| `daily loss stop: ...` | realised losses breached 15% of equity |
+
+```sh
+# see it
+.venv/bin/python -m tools.live_levels_trader --status
+
+# clear it — only after you have looked at the venue yourself
+.venv/bin/python -m tools.live_levels_trader --resume
 ```
+
+`--resume` clears the flag and nothing else. It does not close positions, it
+does not cancel orders, and it does not check that the cause is gone. If the
+cause persists, the next pass halts again.
+
+**The `emergency exit did not fill` halt means go look at Hyperliquid now.**
+There is an open position with no stop on it, and the trader deliberately
+kept its record of it rather than forgetting it.
+
+---
+
+## The rails
+
+```
+risk 3%/trade · max 2 concurrent · 5 new/day · 10x leverage cap · 15% daily loss stop
+```
+
+All defined once, in `research/levels/config.py`, each tagged with whether it
+rests on a measurement or a guess. Thirteen are tagged `GUESSED` — that count
+is the honest measure of how much of this is assumption. Change them there,
+not in `.env`, and record why in `DECISIONS.md`.
+
+The daily loss stop and the daily trade cap are deliberately consistent: at
+3% risk a 15% stop halts after five losing trades, so `MAX_NEW_PER_DAY=5`
+never refuses a trade the risk budget would have allowed. It bounds churn
+the budget cannot see — opening and closing without losing enough to trip
+anything.
+
+---
+
+## Alerts
+
+`notify.py` sends to Telegram via `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
+in `.env`. Three things are sent and nothing else:
+
+- the trader armed (rate limited to 5 minutes, so a restart loop is one message)
+- a halt, on the transition only
+- a position opened and closed immediately because protection failed
+
+Sending never raises — a Telegram outage is not a trading condition. If
+credentials are missing it prints `[ALERT unsent ...]` and carries on.
+
+To check alerting end to end without waiting for an incident:
+
+```sh
+.venv/bin/python -c "
+from dotenv import load_dotenv; load_dotenv()
+import notify; print(notify.send('runbook test'))"
+```
+
+---
+
+## Common procedures
+
+**Restart after a crash.** Nothing to do — `KeepAlive` restarts on non-zero
+exit and `preflight` refuses immediately on a persisted halt flag, so it
+idles rather than trading blind. Confirm with `--status`.
+
+**Disarm without stopping the scan.** Remove `LEVELS_LIVE_ARMED` from the
+plist, then unload and load. The process keeps scanning in dry mode.
+
+**Check what it thinks it holds.** `--status`. Compare against Hyperliquid
+directly; `venue_sanity` does this every pass and after every entry, but it
+is worth doing by hand after any incident.
+
+**Label setups to improve the filter.**
+
+```sh
+.venv/bin/python -m research.levels.review                       # ranked shortlist
+.venv/bin/python -m research.levels.review --label <id> take --note "..."
+.venv/bin/python -m research.levels.review --stats               # gate vs your labels
+```
+
+The current filter was fitted to 18 labels; `labels.csv` now holds 25. More
+labels is the only thing that moves this system off guesses.
 
 ---
 
 ## Tests
 
-```bash
-# Candle integrity (23 tests)
-pytest test_candle_integrity.py -v
-
-# Unified threshold framework (17 tests)
-pytest test_unified_thresholds.py -v
-
-# All
-pytest -v
+```sh
+.venv/bin/python -m pytest -q
 ```
 
-All tests must pass before deploying any threshold change.
+100 tests, no network. `conftest.py` stubs the Telegram transport for the
+whole suite — `.env` is loaded at import, so a test process holds real
+credentials and halt tests would otherwise send real messages.
+
+Run them before deploying any change to a rail or to the protection path.
 
 ---
 
-## Hardcoded threshold inventory (2026-06-16)
+## Why the project lives at `~/CuanSniffer`
 
-The following non-env-driven numeric values exist in the codebase. They are intentionally left unchanged — see classification.
+A launchd job does not inherit Terminal's Full Disk Access. Measured on
+2026-09-18: with the project under `~/Documents`, the venv interpreter could
+not read its own `pyvenv.cfg` and nothing started — it fails silently, with
+an empty log.
 
-| File | Line | Value | Classification |
-|---|---|---|---|
-| signal_engine.py | ~2669 | `max(0.50, ...)` | Confidence clamp floor — never a gate |
-| signal_engine.py | ~3205 | `max(0.55, ...)` | Confidence clamp floor — swing path |
-| signal_engine.py | ~2669 | `min(0.95, ...)` | Confidence clamp ceiling |
-| executor.py | 3405 | `1.75` in `expected_remaining * 1.75` | Position-size tolerance multiplier, NOT RR |
-| executor.py | 53 | `"dead_zone": 0.60` | Session weight dict — not a quality gate |
-| risk_manager.py | 58–64 | CONFIDENCE_SIZING_TIERS | Position sizing multipliers — intentionally broad |
-| tools/research/analyze_smc_live.py | 784–792 | `0.60, 0.70, 0.80, 0.90` | Analysis bucket boundaries — read-only reporting |
-| tools/research/backtest_missed.py | 428–432 | `0.85, 0.80, 0.70, 0.90` | Analysis bucket boundaries — read-only reporting |
-| tools/research/analyze_winrate.py | 569–570 | `0.70, 0.80, 0.90` | Chart bucket bins — read-only reporting |
-| tools/research/param_suggester.py | 44 | `WEAK_TREND_MIN_CONFIDENCE="0.80"` | Analysis tool default — not live code path |
-
----
-
-## Common ops procedures
-
-### Restart after crash
-
-```bash
-python main.py
-```
-
-Bot auto-reconciles open positions from exchange state on startup. No manual cleanup required.
-
-### Temporarily stop new signals without closing positions
-
-```bash
-# In .env:
-PAUSE_NEW_SIGNALS=true
-```
-
-Then restart. Existing positions continue to be managed.
-
-### Check threshold alignment without running the bot
-
-```bash
-python -c "
-import os
-from dotenv import load_dotenv
-load_dotenv()
-from agent import validate_thresholds
-validate_thresholds()
-"
-```
-
-### Disable a specific coin
-
-```bash
-# In .env — add the coin to HARD_BLOCKED_COINS:
-HARD_BLOCKED_COINS=ARB,JUP,PYTH,NEWCOIN
-```
-
-### Check if kill-switch is active
-
-```bash
-cat strategy_filter_state.json
-```
-
-### Run analysis on live trade log
-
-```bash
-python tools/research/analyze_winrate.py
-python tools/research/analyze_smc_live.py
-```
-
-### Run production policy replay (daily)
-
-```bash
-python3 tools/research/analyze_production_policy_replay.py
-python3 tools/research/analyze_production_policy_replay.py --days 30
-python3 tools/research/analyze_production_policy_replay.py --since 2026-06-16 --until 2026-06-27
-```
-
-Compares four scenarios using the shared execution policy:
-
-| Scenario | Purpose |
-|---|---|
-| **engine_only** | Research baseline — raw engine signals with no executor gates |
-| **production_executor** | **Promotion source of truth** — applies stop redesign, chop block, TP cap, effective RR |
-| **no_stop_redesign** | Counterfactual — what if stop widening was disabled |
-| **no_chop_block** | Counterfactual — what if chop block was disabled |
-
-**Promotion criteria** (must all pass on `production_executor`):
-- Resolved trades >= 100
-- PF > 1.50
-- Avg R > +0.20
-- Max DD < 15R
-- No single symbol > 40% of total R
-- No single day > 35% of total R
-- At least 3 profitable symbols
-- At least 60% positive trading days
-
-If `engine_only` passes but `production_executor` fails, the report prints `ENGINE_ONLY_EDGE_NOT_EXECUTABLE` — meaning the edge exists in research but executor gates destroy it.
-
----
-
-## Do not
-
-- Do not commit `.env` — it is gitignored. Stage only `.env.example`.
-- Do not change `HL_SECRET_KEY` while the bot is running.
-- Do not set `HARD_BLOCKED_TIMEFRAMES=4h` — historical basis was contaminated data.
-- Do not raise score thresholds above 0.70 without a per-regime regression analysis.
-- Do not lower `UNIVERSAL_MIN_CONFIDENCE` below 0.85 — below this bucket expectancy is consistently negative in historical data.
+**If this is ever moved under `~/Documents`, `~/Desktop` or `~/Downloads`,
+every launchd job here stops working.** See `deploy/launchd/README.md` for
+the probe that re-verifies this after a move.
