@@ -41,6 +41,7 @@ EPISODE_FIELDNAMES = [
     "vol_ratio_recent_ref", "vol_trend_slope", "vol_down_up_ratio",
     "atr_pct", "entry_buffer_sigma", "suggested_entry", "suggested_stop",
     "suggested_tp", "suggested_rr", "opposing_level_price",
+    "timeframe", "overhead_sigma", "overhead_pct",
 ]
 
 OUTCOME_FIELDNAMES = [

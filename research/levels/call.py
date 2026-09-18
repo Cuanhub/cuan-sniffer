@@ -146,6 +146,15 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
             for Lr in above:
                 r = ((Lr.price - entry) / (entry - stop)) if entry > stop else 0.0
                 ladder.append((Lr.price, r, Lr.touches, Lr.hold_rate))
+
+            # Headroom: how far the first resistance sits above the ENTRY, in
+            # sigma. Added because the user skipped AAVE for "sitting right
+            # below overhead resistance" and rejected an ETH entry beneath
+            # 2,480 for the same reason -- buying support with resistance
+            # directly overhead is a rule they apply and nothing here measured.
+            # Captured and displayed, never gated on.
+            head_sigma = sigma_distance(above[0].price, entry, sigma) if above else 99.0
+            head_pct = ((above[0].price - entry) / entry * 100) if above else 0.0
             # 7d trajectory, so the user can see how price arrived here
             w = bars[max(0, i - 42):i + 1]
             hi7 = max(x["h"] for x in w); lo7 = min(x["l"] for x in w)
@@ -163,7 +172,9 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
                 "suggested_tp": round(tp, 10), "suggested_rr": round(rr, 3),
                 "opposing_level_price": round(opp.price, 10) if opp else "",
                 "_px": px, "_near": near, "_hi7": hi7, "_lo7": lo7, "_ladder": ladder,
-                "_tf": tf,
+                "_tf": tf, "_head_sigma": round(head_sigma, 2), "_head_pct": round(head_pct, 2),
+                "overhead_sigma": round(head_sigma, 3),
+                "overhead_pct": round(head_pct, 3),
                 "_stale": (i - L.last_touch_idx) > STALE_TOUCH_BARS if L.last_touch_idx >= 0 else True,
                 "_from_hi7": (px - hi7) / hi7 * 100, "_stop_pct": (entry - stop) / entry * 100,
                 **feats,
@@ -195,6 +206,8 @@ def cmd_list(args):
               f"{int(_f(c,'retests'))} retests, {c['_from_hi7']:+.1f}% from 7d high")
         print(f"     trade  : entry {c['suggested_entry']:.6g}  stop {c['suggested_stop']:.6g} "
               f"({c['_stop_pct']:.1f}%)")
+        print(f"     headroom: first resistance {c['_head_sigma']:.2f}s above entry "
+              f"({c['_head_pct']:+.2f}%)")
         if c["_ladder"]:
             rungs = "   ".join(f"{px_:.6g} (rr {r:.2f}, {t} tests {h*100:.0f}%)"
                                for px_, r, t, h in c["_ladder"])
