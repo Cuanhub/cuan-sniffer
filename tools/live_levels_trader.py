@@ -583,7 +583,7 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         state["owned"].pop(coin, None)
         save_state(state)
         row.update({"action": "entry", "result": "rejected",
-                    "detail": str(getattr(fill, "reject_reason", ""))[:120]})
+                    "detail": str(getattr(fill, "reject_reason", ""))[:400]})
         log_trade(row)
         return False
 
@@ -617,9 +617,17 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     # stop, at the venue, before anything else happens.
     prot = backend.place_native_protection(coin=coin, side="LONG", size_coin=size_coin,
                                            stop_price=stop, tp_price=tp)
+    # 400, not 120. The trade log is the only durable record of what the venue
+    # said about a stop, and at 120 the one live protection this account has
+    # placed was cut mid-string: the whole tp leg's verdict fell off the end,
+    # which is precisely the evidence this row exists to keep. DictWriter
+    # quotes the field, so length is free.
     log_trade({**row, "action": "protection", "result": prot.get("status", ""),
-               "detail": f"stop={prot.get('stop_order_id','')} tp={prot.get('tp_order_id','')} "
-                         f"{prot.get('error','')}"[:120]})
+               "detail": (f"stop={prot.get('stop_order_id','')} "
+                          f"tp={prot.get('tp_order_id','')} "
+                          f"verified={prot.get('stop_verified')}/"
+                          f"{prot.get('tp_verified')} "
+                          f"{prot.get('error','')}")[:400]})
     # place_native_protection returns "protected" / "partial" / "missing" --
     # never "ok". Comparing against "ok" made the check fire on SUCCESS, so
     # the first supervised trade placed a correct stop and take-profit and
