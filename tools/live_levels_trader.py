@@ -342,13 +342,22 @@ def main():
             ms = backend.get_margin_summary()
             if ms:
                 equity, _used, available = ms
-            bad = venue_sanity(backend, state, equity)
-            if bad:
+            bad, fatal = venue_sanity(backend, state, equity)
+            if bad and fatal:
                 state["halted"] = True
                 state["halt_reason"] = bad
                 save_state(state)
                 print(f"[LEVELS_LIVE] !! HALT before trading -- {bad}")
                 return 1
+            if bad:
+                print(f"[LEVELS_LIVE] skipping this pass (transient): {bad}")
+                if args.once:
+                    return 0
+                for _ in range(POLL_SEC):
+                    if _stop:
+                        break
+                    time.sleep(1)
+                continue
         intents, rejected = build_intents(ro, universe)
         print(f"\n[LEVELS_LIVE] {len(intents)} setup(s) cleared the quality bar, "
               f"{len(rejected)} rejected")
@@ -384,12 +393,17 @@ def main():
             # Re-checked after EVERY entry, not once per pass. The runaway
             # opened twelve positions inside a single pass, so a per-pass
             # check would have reported the damage rather than prevented it.
-            bad = venue_sanity(backend, state, equity)
-            if bad:
+            bad, fatal = venue_sanity(backend, state, equity)
+            if bad and fatal:
                 state["halted"] = True
                 state["halt_reason"] = bad
                 save_state(state)
                 print(f"[LEVELS_LIVE] !! HALT after entry -- {bad}")
+                break
+            if bad:
+                # Cannot confirm what just happened at the venue, so stop
+                # opening anything else this pass rather than trade blind.
+                print(f"[LEVELS_LIVE] cannot verify after entry ({bad}) -- pausing this pass")
                 break
         if args.once:
             return 0
@@ -611,8 +625,14 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
 
 
 def venue_sanity(backend, state: Dict[str, Any], equity: float):
-    """Compare the venue against what this module believes, and halt on any
-    disagreement. Returns a halt reason, or None.
+    """Compare the venue against what this module believes.
+
+    Returns (reason, fatal). fatal=True is a real disagreement and should
+    halt; fatal=False is a transient failure to ask, and should only skip the
+    pass. Conflating the two put the bot into a permanent halt on its second
+    live pass over a 429 rate limit -- a network hiccup is not a safety
+    violation, and treating it as one means any busy minute stops trading
+    until a human clears it.
 
     This is the backstop the 2026-09-18 runaway needed and did not have. Every
     in-process guard shared one assumption -- that state["owned"] reflects
@@ -622,21 +642,21 @@ def venue_sanity(backend, state: Dict[str, Any], equity: float):
     try:
         st = backend.info.user_state(backend._get_user_state_address())
     except Exception as e:
-        return f"venue query failed: {str(e)[:80]}"
+        return f"venue query failed: {str(e)[:80]}", False
     positions = [p["position"] for p in st.get("assetPositions", [])]
     live = {p["coin"].upper() for p in positions if abs(float(p.get("szi", 0) or 0)) > 0}
     known = {c.upper() for c in state.get("owned", {})}
     unknown = live - known
     if unknown:
         return (f"venue holds {sorted(unknown)} which this module did not open "
-                f"(knows: {sorted(known) or 'nothing'})")
+                f"(knows: {sorted(known) or 'nothing'})"), True
     if len(live) > MAX_CONCURRENT:
-        return f"venue holds {len(live)} positions, cap is {MAX_CONCURRENT}"
+        return f"venue holds {len(live)} positions, cap is {MAX_CONCURRENT}", True
     notional = sum(abs(float(p.get("positionValue", 0) or 0)) for p in positions)
     ceiling = equity * MAX_LEVERAGE
     if notional > ceiling:
-        return f"notional ${notional:,.0f} exceeds {MAX_LEVERAGE}x equity (${ceiling:,.0f})"
-    return None
+        return f"notional ${notional:,.0f} exceeds {MAX_LEVERAGE}x equity (${ceiling:,.0f})", True
+    return None, False
 
 
 def reconcile(backend, state: Dict[str, Any]) -> None:

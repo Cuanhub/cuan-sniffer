@@ -332,26 +332,41 @@ class VenueSanityTest(unittest.TestCase):
     def test_flags_positions_the_module_did_not_open(self):
         b = FakeBackend()
         b.venue = {"ZZZ": 100.0}
-        self.assertIn("ZZZ", T.venue_sanity(b, self.state, 1000.0) or "")
+        r, fatal = T.venue_sanity(b, self.state, 1000.0)
+        self.assertIn("ZZZ", r or "")
+        self.assertTrue(fatal)
 
     def test_flags_breaching_the_concurrency_cap(self):
         b = FakeBackend()
         b.venue = {f"C{i}": 10.0 for i in range(T.MAX_CONCURRENT + 1)}
         self.state["owned"] = {c: {} for c in b.venue}
-        self.assertIn("cap", (T.venue_sanity(b, self.state, 1000.0) or "").lower())
+        r, fatal = T.venue_sanity(b, self.state, 1000.0)
+        self.assertIn("cap", (r or "").lower())
+        self.assertTrue(fatal)
 
     def test_flags_notional_above_the_leverage_ceiling(self):
         b = FakeBackend()
         b.venue = {"AAA": 50_000.0}
         self.state["owned"] = {"AAA": {}}
-        msg = T.venue_sanity(b, self.state, 1000.0) or ""
-        self.assertIn("exceeds", msg)
+        msg, fatal = T.venue_sanity(b, self.state, 1000.0)
+        self.assertIn("exceeds", msg or "")
+        self.assertTrue(fatal)
+
+    def test_a_query_failure_is_transient_not_fatal(self):
+        """A 429 put the bot into a permanent halt on its second live pass.
+        Failing to ask is not the same as getting a bad answer."""
+        class Broken(FakeBackend):
+            def user_state(self, addr):
+                raise RuntimeError("429 rate limited")
+        r, fatal = T.venue_sanity(Broken(), self.state, 1000.0)
+        self.assertIn("429", r)
+        self.assertFalse(fatal, "a transient query failure must not halt trading")
 
     def test_quiet_when_everything_agrees(self):
         b = FakeBackend()
         b.venue = {"AAA": 100.0}
         self.state["owned"] = {"AAA": {}}
-        self.assertIsNone(T.venue_sanity(b, self.state, 1000.0))
+        self.assertEqual(T.venue_sanity(b, self.state, 1000.0), (None, False))
 
 
 class ModuleShapeTest(unittest.TestCase):
