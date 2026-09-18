@@ -125,7 +125,8 @@ class FakeBackend:
 def episode(coin, entry=100.0, stop=95.0, tp=115.0):
     return {"coin": coin, "episode_id": f"{coin}_1_{entry}", "level_price": entry,
             "suggested_entry": entry, "suggested_stop": stop, "suggested_tp": tp,
-            "suggested_rr": 3.0, "level_hold_rate": 1.0, "level_touches": 10}
+            "suggested_rr": 3.0, "level_hold_rate": 1.0, "level_touches": 10,
+            "near_sigma": 7.0, "level_origin": "swing_low"}
 
 
 class ArmedPathTest(unittest.TestCase):
@@ -293,6 +294,35 @@ class TriggerTest(unittest.TestCase):
         self.assertTrue(fired)
         bars[-2]["c"] = lv * 0.90        # a CLOSED bar below the level must block
         self.assertFalse(level_has_held(bars, lv)[0])
+
+
+class ReviewFlagTest(unittest.TestCase):
+    """Trades that pass the rails but a human should still look at. These are
+    surfaced, never blocked -- the filters are fitted to 18 labels and their
+    edges are exactly where they should be questioned."""
+
+    def test_flags_notional_far_above_equity(self):
+        ep = episode("BNB", 741.0, 733.0, 757.0)
+        flags = T.review_flags(ep, 2118.0, 768.0)
+        self.assertTrue(any("equity" in f for f in flags), flags)
+
+    def test_flags_a_stop_tight_enough_to_gap_through(self):
+        ep = episode("BNB", 741.457, 733.386, 757.75)   # 1.09% stop
+        self.assertTrue(any("gap" in f for f in T.review_flags(ep, 100.0, 768.0)))
+
+    def test_flags_a_level_with_a_poor_hold_record(self):
+        ep = episode("AAA") | {"level_hold_rate": 0.55, "level_touches": 9}
+        self.assertTrue(any("held only" in f for f in T.review_flags(ep, 100.0, 768.0)))
+
+    def test_flags_the_flipped_resistance_category(self):
+        ep = episode("AAA") | {"level_origin": "flipped_resistance"}
+        self.assertTrue(any("flipped" in f for f in T.review_flags(ep, 100.0, 768.0)))
+
+    def test_a_clean_trade_raises_nothing(self):
+        ep = episode("AAA", 100.0, 90.0, 140.0) | {
+            "level_hold_rate": 0.95, "level_touches": 12,
+            "near_sigma": 8.0, "suggested_rr": 4.0, "level_origin": "swing_low"}
+        self.assertEqual(T.review_flags(ep, 300.0, 768.0), [])
 
 
 class VenueSanityTest(unittest.TestCase):

@@ -400,6 +400,38 @@ def main():
     return 0
 
 
+def review_flags(ep: Dict[str, Any], size_usd: float, equity: float) -> List[str]:
+    """Reasons a human should look at this trade, even though it passed.
+
+    Passing the filters is not the same as being a normal trade. These are the
+    cases where the rails allow something the user may not want, and they are
+    surfaced rather than blocked because the filters are fitted to 18 labels
+    and the edges of that fit are exactly where it should be questioned.
+    """
+    def f(k, d=0.0):
+        try:
+            return float(ep.get(k) or d)
+        except (TypeError, ValueError):
+            return d
+    out = []
+    if equity > 0 and size_usd > equity * 1.5:
+        out.append(f"notional ${size_usd:,.0f} is {size_usd/equity:.1f}x equity")
+    entry, stop = f("suggested_entry"), f("suggested_stop")
+    if entry > 0 and stop > 0:
+        sd = (entry - stop) / entry * 100
+        if sd < 1.5:
+            out.append(f"stop only {sd:.2f}% away -- a gap through it loses more than the risk")
+    if f("suggested_rr") < MIN_RR * 1.1:
+        out.append(f"reward/risk {f('suggested_rr'):.2f} is at the {MIN_RR} floor")
+    if f("near_sigma") < TRADE_MIN_NEAR_SIGMA * 1.1:
+        out.append(f"depth {f('near_sigma'):.2f}s is at the {TRADE_MIN_NEAR_SIGMA}s floor")
+    if f("level_hold_rate") < 0.70:
+        out.append(f"level held only {f('level_hold_rate')*100:.0f}% of its {int(f('level_touches'))} tests")
+    if ep.get("level_origin") == "flipped_resistance":
+        out.append("flipped resistance -- only 1 of the 18 labels was this kind")
+    return out
+
+
 def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float, tp: float):
     """Refuse to fire unless the live price is where the plan assumed.
 
@@ -459,6 +491,12 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
             print(f"[LEVELS_LIVE] wait {coin} @ {g('level_price'):.6g}: {why}")
             return False
         print(f"[LEVELS_LIVE] TRIGGER {coin} @ {g('level_price'):.6g}: {why}")
+        for flag in review_flags(ep, size_from_stop(equity, entry, stop, available)["size_usd"], equity):
+            print(f"[LEVELS_LIVE] [REVIEW] {coin}: {flag}")
+            log_trade({"ts_utc": now_iso(), "action": "review", "coin": coin,
+                       "episode_id": ep.get("episode_id", ""),
+                       "level_price": g("level_price"), "result": "flagged",
+                       "detail": flag})
 
     # Size from the LIVE price, not the planned one. Sizing off the plan while
     # filling at market is exactly what made the UNI position carry 3.5x its
