@@ -502,6 +502,33 @@ class RealisedPnlTest(unittest.TestCase):
         self.assertEqual(b.pnl_queries, [])
 
 
+class DailyCapTest(unittest.TestCase):
+    """MAX_NEW_PER_DAY was 0, and 0 means the rail does not exist.
+
+    preflight guards it with `if MAX_NEW_PER_DAY and ...`, so the disabled
+    state is silent -- the startup banner prints "unlimited" and nothing else
+    ever mentions it.
+    """
+
+    def state(self, opened):
+        return {"owned": {}, "opened_today": opened, "day": "2026-09-18",
+                "realised_today": 0.0, "halted": False, "halt_reason": ""}
+
+    def test_cap_is_enabled(self):
+        self.assertGreater(T.MAX_NEW_PER_DAY, 0,
+                           "0 disables the daily cap entirely")
+
+    def test_refuses_once_the_cap_is_reached(self):
+        reason = T.preflight(FakeBackend(equity=1000.0),
+                             self.state(T.MAX_NEW_PER_DAY))
+        self.assertIsNotNone(reason)
+        self.assertIn("today", reason)
+
+    def test_allows_trading_below_the_cap(self):
+        self.assertIsNone(T.preflight(FakeBackend(equity=1000.0),
+                                      self.state(T.MAX_NEW_PER_DAY - 1)))
+
+
 class ModuleShapeTest(unittest.TestCase):
     def test_every_function_main_calls_is_defined_before_the_guard(self):
         """Regression for the NameError on the first arming attempt: functions

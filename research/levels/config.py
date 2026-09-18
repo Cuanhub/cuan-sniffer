@@ -170,7 +170,16 @@ TRIGGER_MAX_ABOVE_SIGMA = _f("LEVELS_TRIGGER_MAX_ABOVE_SIGMA", 2.0)
 
 # ---- operational rails ------------------------------------------------------
 MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 2)
-MAX_NEW_PER_DAY = _i("LEVELS_MAX_NEW_PER_DAY", 0)          # 0 = unlimited
+# 5, matching the daily loss stop's own arithmetic: at 3% risk a 15% stop
+# halts after five losing trades, so a cap of five never takes a trade the
+# risk budget would have allowed. What it bounds is the case that budget
+# cannot see -- opening and closing without losing enough to trip anything.
+# A protection failure that repeats does exactly that, paying a round trip in
+# fees and spread each pass. opened_today is incremented on FILL, before
+# protection is placed, so a trade that is immediately emergency-closed still
+# spends one of the five; for a churn bound that is the point.
+# 0 disables the rail entirely, which is what it was set to.
+MAX_NEW_PER_DAY = _i("LEVELS_MAX_NEW_PER_DAY", 5)
 # 15%, not 10%. At 3% risk a 10% stop halts after 3 losing trades, and at the
 # ~3.4 reward/risk this filter selects for, a no-edge win rate would be ~23% --
 # so three straight losses is a 46% event and the system would spend most of
