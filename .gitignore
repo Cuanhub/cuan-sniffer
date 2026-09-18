@@ -43,3 +43,9 @@ research/cascade/data/_pending_state.json
 
 # Live trader runtime state (research/levels) -- machine-local, never shared
 research/levels/data/_live_state.json
+
+# Archived data from retired systems -- preserved locally, never committed.
+# The CODE lives in git history (see the retirement commits); these are the
+# irreplaceable DATA files, ~850MB, which cannot be regenerated.
+archive/legacy_bot_data_*/
+archive/cascade_data_*/

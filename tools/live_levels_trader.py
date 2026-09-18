@@ -229,12 +229,17 @@ def describe(ep: Dict[str, Any], equity: float, available: float = None) -> Dict
 
 
 def main():
-    ap = argparse.ArgumentParser(
-        description="Level-setup trade planner (dry run; execution not wired)")
+    ap = argparse.ArgumentParser(description="Level-setup trader")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--equity", type=float, default=None,
                     help="override equity; default reads the live account (unified-aware)")
     ap.add_argument("--status", action="store_true")
+    ap.add_argument("--arm", action="store_true",
+                    help="place REAL orders. Also requires LEVELS_LIVE_ARMED=yes in the "
+                         "environment -- two independent gates, so neither a stray flag "
+                         "in a shell history nor a leftover env var can trade on its own.")
+    ap.add_argument("--resume", action="store_true",
+                    help="clear a daily-loss halt and resume trading")
     args = ap.parse_args()
 
     signal.signal(signal.SIGTERM, _sig)
@@ -248,8 +253,18 @@ def main():
     if args.status:
         print(json.dumps(state, indent=2))
         return 0
+    if args.resume:
+        state["halted"] = False
+        state["halt_reason"] = ""
+        save_state(state)
+        print("[LEVELS_LIVE] halt cleared")
+        return 0
 
-    print("[LEVELS_LIVE] mode: DRY RUN -- order placement is NOT wired into this file")
+    env_armed = os.getenv("LEVELS_LIVE_ARMED", "").strip().lower() == "yes"
+    armed = bool(args.arm and env_armed)
+    if args.arm and not env_armed:
+        print("[LEVELS_LIVE] --arm given but LEVELS_LIVE_ARMED is not 'yes' -- staying DRY")
+    print(f"[LEVELS_LIVE] mode: {'ARMED -- PLACING REAL ORDERS' if armed else 'DRY RUN'}")
     print(f"[LEVELS_LIVE] rails: risk {RISK_PCT_PER_TRADE}%/trade, max {MAX_CONCURRENT} "
           f"concurrent, {'unlimited' if not MAX_NEW_PER_DAY else str(MAX_NEW_PER_DAY)+'/day'}, "
           f"lev cap {MAX_LEVERAGE}x, daily stop {DAILY_LOSS_STOP_PCT}%")
@@ -278,7 +293,28 @@ def main():
             print(f"[LEVELS_LIVE] equity query failed ({e}); defaulting to ${equity:.2f}")
     print(f"[LEVELS_LIVE] risk per trade: ${equity * RISK_PCT_PER_TRADE / 100:.2f}")
 
+    backend = None
+    if armed:
+        from live_execution_backend import LiveExecutionBackend
+        backend = LiveExecutionBackend(debug=True)
+        print("[LEVELS_LIVE] live backend up")
+
     while not _stop:
+        if backend is not None:
+            reconcile(backend, state)
+            why = preflight(backend, state)
+            if why:
+                print(f"[LEVELS_LIVE] not opening this pass: {why}")
+                if args.once:
+                    return 0
+                for _ in range(POLL_SEC):
+                    if _stop:
+                        break
+                    time.sleep(1)
+                continue
+            ms = backend.get_margin_summary()
+            if ms:
+                equity, _used, available = ms
         intents, rejected = build_intents(ro, universe)
         print(f"\n[LEVELS_LIVE] {len(intents)} setup(s) cleared the quality bar, "
               f"{len(rejected)} rejected")
@@ -299,12 +335,18 @@ def main():
             print(f"{d['coin']:10} {d['entry']:>12.6g} {d['stop']:>12.6g} {d['tp']:>12.6g} "
                   f"{d['stop_dist_pct']:>6.2f}% {d['size_usd']:>9.2f} {d['risk_usd']:>7.2f} "
                   f"{d['rr']:>5.2f}  {','.join(flags)}")
-            log_trade({"ts_utc": now_iso(), "action": "dry_run", "result": "planned",
-                       **{k: d[k] for k in ("coin", "episode_id", "level_price", "entry",
-                                            "stop", "tp", "rr", "hold_rate", "touches")},
-                       "size_usd": round(d["size_usd"], 2),
-                       "risk_usd": round(d["risk_usd"], 2),
-                       "detail": ",".join(flags)})
+            if backend is None:
+                log_trade({"ts_utc": now_iso(), "action": "dry_run", "result": "planned",
+                           **{k: d[k] for k in ("coin", "episode_id", "level_price", "entry",
+                                                "stop", "tp", "rr", "hold_rate", "touches")},
+                           "size_usd": round(d["size_usd"], 2),
+                           "risk_usd": round(d["risk_usd"], 2),
+                           "detail": ",".join(flags)})
+                continue
+            if len(state.get("owned", {})) >= MAX_CONCURRENT:
+                print(f"[LEVELS_LIVE] concurrency cap reached, stopping this pass")
+                break
+            execute_one(backend, ep, equity, available, armed, state)
         if args.once:
             return 0
         for _ in range(POLL_SEC):
@@ -316,3 +358,115 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
+                armed: bool, state: Dict[str, Any]) -> bool:
+    """Place one entry, then protect it. Returns True if a position was opened."""
+    def g(k, d=0.0):
+        try:
+            return float(ep.get(k) or d)
+        except (TypeError, ValueError):
+            return d
+    coin = ep["coin"]
+    entry, stop, tp = g("suggested_entry"), g("suggested_stop"), g("suggested_tp")
+    szi = size_from_stop(equity, entry, stop, available)
+    size_usd = szi["size_usd"]
+    row = {"ts_utc": now_iso(), "coin": coin, "episode_id": ep.get("episode_id", ""),
+           "level_price": g("level_price"), "entry": entry, "stop": stop, "tp": tp,
+           "size_usd": round(size_usd, 2), "risk_usd": round(szi["risk_usd"], 2),
+           "rr": g("suggested_rr"), "hold_rate": g("level_hold_rate"),
+           "touches": int(g("level_touches"))}
+
+    if size_usd < MIN_NOTIONAL_USD:
+        row.update({"action": "skip", "result": "below_min_notional"})
+        log_trade(row)
+        return False
+    if coin in state.get("owned", {}):
+        return False
+    if not armed:
+        row.update({"action": "dry_run", "result": "not_armed"})
+        log_trade(row)
+        return False
+
+    fill = backend.execute_entry(coin=coin, side="LONG", price=entry,
+                                 size_usd=size_usd, confidence=0.5)
+    fill_px = float(getattr(fill, "fill_price", 0) or 0)
+    size_coin = float(getattr(fill, "filled_size_coin", 0) or 0)
+    if fill_px <= 0 or size_coin <= 0:
+        row.update({"action": "entry", "result": "rejected",
+                    "detail": str(getattr(fill, "reject_reason", ""))[:120]})
+        log_trade(row)
+        return False
+    row.update({"action": "entry", "result": "filled", "size_coin": size_coin,
+                "detail": f"fill {fill_px:.8g}"})
+    log_trade(row)
+
+    # Protection is not optional. The account held no resting stops at all when
+    # this was written, and every September winner would have been stopped out
+    # by a margin-denominated stop -- so what goes in here is the STRUCTURAL
+    # stop, at the venue, before anything else happens.
+    prot = backend.place_native_protection(coin=coin, side="LONG", size_coin=size_coin,
+                                           stop_price=stop, tp_price=tp)
+    log_trade({**row, "action": "protection", "result": prot.get("status", ""),
+               "detail": f"stop={prot.get('stop_order_id','')} tp={prot.get('tp_order_id','')} "
+                         f"{prot.get('error','')}"[:120]})
+    if prot.get("status") != "ok":
+        print(f"[LEVELS_LIVE] !! protection FAILED on {coin} -- closing immediately; "
+              f"an unprotected position is not the trade")
+        backend.execute_exit(coin=coin, side="LONG", price=fill_px,
+                             size_usd=size_usd, reason="protection_failed")
+        log_trade({**row, "action": "emergency_exit", "result": "closed"})
+        return False
+
+    state.setdefault("owned", {})[coin] = {
+        "episode_id": ep.get("episode_id", ""), "entry": fill_px, "stop": stop,
+        "tp": tp, "size_coin": size_coin, "opened_at": now_iso()}
+    state["opened_today"] = state.get("opened_today", 0) + 1
+    save_state(state)
+    print(f"[LEVELS_LIVE] OPENED {coin} {size_coin} @ {fill_px:.6g} "
+          f"stop {stop:.6g} tp {tp:.6g}")
+    return True
+
+
+def reconcile(backend, state: Dict[str, Any]) -> None:
+    """Release slots for positions no longer open at the venue -- stopped out,
+    took profit, or closed by hand. Without this the module believes it still
+    holds something forever and quietly stops trading."""
+    owned = state.get("owned", {})
+    for coin in list(owned):
+        try:
+            sz = backend._get_venue_signed_size(coin)
+        except Exception:
+            continue
+        if sz is not None and abs(sz) < 1e-12:
+            info = owned.pop(coin, {})
+            log_trade({"ts_utc": now_iso(), "action": "closed", "coin": coin,
+                       "episode_id": info.get("episode_id", ""), "result": "flat",
+                       "detail": "no longer open at venue"})
+            print(f"[LEVELS_LIVE] {coin} closed at venue -- slot released")
+    save_state(state)
+
+
+def preflight(backend, state: Dict[str, Any]):
+    """Reasons not to open anything this pass. Returns a string, or None."""
+    if state.get("halted"):
+        return f"halted: {state.get('halt_reason', '')}"
+    owned = state.get("owned", {})
+    if len(owned) >= MAX_CONCURRENT:
+        return f"holding {len(owned)} of max {MAX_CONCURRENT}"
+    if MAX_NEW_PER_DAY and state.get("opened_today", 0) >= MAX_NEW_PER_DAY:
+        return f"opened {state['opened_today']} today, max {MAX_NEW_PER_DAY}"
+    ms = backend.get_margin_summary()
+    if ms is None:
+        return "margin query failed -- refusing to size blind"
+    equity, used, avail = ms
+    if equity <= 0:
+        return f"equity {equity}"
+    lost = state.get("realised_today", 0.0)
+    if lost <= -abs(equity) * DAILY_LOSS_STOP_PCT / 100.0:
+        state["halted"] = True
+        state["halt_reason"] = f"daily loss stop: {lost:.2f} against {equity:.2f} equity"
+        save_state(state)
+        return state["halt_reason"]
+    return None
