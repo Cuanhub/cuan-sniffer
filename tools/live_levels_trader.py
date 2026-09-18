@@ -54,7 +54,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 from research.levels.levels import log_sigma, sigma_distance          # noqa: E402
 from research.levels.scanner import fetch, scan_coin                  # noqa: E402
 from research.levels.venue_client import HyperliquidReadOnlyClient    # noqa: E402
-from research.funding.universe import select_universe                 # noqa: E402
+from research.levels.universe import select_universe                 # noqa: E402
 
 # Rails come from research/levels/config.py -- one definition each, tagged with
 # whether they rest on a measurement or on my guess.

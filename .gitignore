@@ -49,3 +49,4 @@ research/levels/data/_live_state.json
 # irreplaceable DATA files, ~850MB, which cannot be regenerated.
 archive/legacy_bot_data_*/
 archive/cascade_data_*/
+archive/funding_data_*/

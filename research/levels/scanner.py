@@ -39,7 +39,7 @@ from research.levels.levels import (
     detect_levels, log_sigma, sigma_distance, nearest_level,
 )
 from research.levels.venue_client import HyperliquidReadOnlyClient, VenueFetchError
-from research.funding.universe import select_universe
+from research.levels.universe import select_universe
 
 from research.levels.config import (               # noqa: E402
     POLL_SEC as POLL_INTERVAL_SEC, INTERVAL, HISTORY_DAYS, RESOLVE_MIN_BARS,

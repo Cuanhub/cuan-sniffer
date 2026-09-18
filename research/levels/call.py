@@ -35,7 +35,7 @@ from research.levels.levels import (
 )
 from research.levels.scanner import fetch, _atr_pct
 from research.levels.venue_client import HyperliquidReadOnlyClient, VenueFetchError
-from research.funding.universe import select_universe
+from research.levels.universe import select_universe
 
 # How far below price to look. Set from the user's own calls, not guessed: the
 # levels they said they would actually trade sat 5.45s (CASHCAT 0.149), 5.56s
