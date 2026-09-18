@@ -771,10 +771,24 @@ class LiveExecutionBackend(ExecutionBackend):
 
     def _get_margin_summary_unified(self, addr: str, venue: str) -> Optional[Tuple[float, float, float]]:
         """
-        Unified account: collateral is spot USDC.
-        equity  = USDC.total
-        used    = USDC.hold  (locked margin in open perp positions)
-        available = total - hold
+        Unified account: collateral is spot USDC, and the perp clearinghouse
+        reports zeros for everything (verified 2026-09-18: accountValue,
+        totalMarginUsed and withdrawable were all "0.0" on a funded account).
+
+        equity    = USDC.total
+        available = tokenToAvailableAfterMaintenance for the USDC token, which
+                    is the venue's own answer to how much is actually free and
+                    nets out maintenance margin on open perp positions.
+        used      = equity - available
+
+        available was `total - hold` until 2026-09-18, and `hold` is a SPOT
+        order lock. Whether perp margin ever appears in it could not be
+        established -- the account was flat, so "hold is 0 because nothing is
+        held" and "hold never reflects perp margin" are indistinguishable. If
+        it is the latter, `total - hold` reports the full balance as free
+        while a position is open, and the next trade is sized against
+        collateral that is already committed. tokenToAvailableAfterMaintenance
+        is correct either way, so the ambiguity stops mattering.
         """
         try:
             spot_state = self.info.spot_user_state(addr)
@@ -797,18 +811,27 @@ class LiveExecutionBackend(ExecutionBackend):
 
         try:
             equity = float(usdc.get("total", 0.0))
-            used = float(usdc.get("hold", 0.0))
+            hold = float(usdc.get("hold", 0.0))
         except (TypeError, ValueError) as e:
             print(f"[LIVE_BACKEND] get_margin_summary unified: USDC parse error {e}")
             return None
 
-        available = max(0.0, equity - used)
+        avail = self._available_after_maintenance(spot_state, usdc.get("token"))
+        if avail is None:
+            # Older payload, or the field moved. Fall back to the previous
+            # reading and say so, because it may over-report what is free.
+            available = max(0.0, equity - hold)
+            avail_source = "spot.USDC.total-hold(FALLBACK)"
+        else:
+            available = max(0.0, min(avail, equity))
+            avail_source = "spot.tokenToAvailableAfterMaintenance"
+        used = max(0.0, equity - available)
 
         print(
             f"[LIVE_BACKEND] get_margin_summary PARSED "
             f"equity={equity:.4f} used={used:.4f} available={available:.4f} "
             f"account_model=unified equity_source=spot.USDC.total "
-            f"used_source=spot.USDC.hold venue={venue} addr={addr}"
+            f"avail_source={avail_source} hold={hold:.4f} venue={venue} addr={addr}"
         )
         record_api_success()
         return (equity, used, available)
@@ -864,6 +887,29 @@ class LiveExecutionBackend(ExecutionBackend):
         )
         record_api_success()
         return (equity, used, available)
+
+    @staticmethod
+    def _available_after_maintenance(spot_state: Any, token_id: Any) -> Optional[float]:
+        """Free collateral for one spot token, per the venue.
+
+        tokenToAvailableAfterMaintenance arrives as [[token_id, "amount"], ...].
+        Returns None when the field is absent or the token is not listed, which
+        the caller must treat as "ask a different way", never as zero free.
+        """
+        if not isinstance(spot_state, dict) or token_id is None:
+            return None
+        rows = spot_state.get("tokenToAvailableAfterMaintenance")
+        if not isinstance(rows, list):
+            return None
+        for row in rows:
+            if not isinstance(row, (list, tuple)) or len(row) != 2:
+                continue
+            try:
+                if int(row[0]) == int(token_id):
+                    return float(row[1])
+            except (TypeError, ValueError):
+                continue
+        return None
 
     # ── Realised PnL query ─────────────────────────────────────────────────
 
