@@ -83,8 +83,10 @@ never `wait`/`TRIGGER` lines.
 | rails | `research/levels/config.py` |
 
 Logs are **not rotated** — launchd does not, and neither does the trader.
-A repo-root `live_trader.log` is a dead artifact from before the move; the
-live output is in `~/Library/Logs`.
+
+`trader-pre-launchd-2026-09-18.log` in the same directory is the output from
+before the move to launchd. It holds the record of the runaway and of the one
+live UNI trade, so it is kept; nothing writes to it.
 
 ---
 

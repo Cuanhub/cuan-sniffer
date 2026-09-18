@@ -1,14 +1,17 @@
-# launchd deployment — research collectors
+# launchd deployment — the level trader
 
-Keeps `research/funding/collector.py` and `research/cascade/collector.py`
-running across logout and reboot, so the forward sample
-`CASCADE_HYPOTHESES.md` requires can actually reach two continuous weeks.
+Keeps `tools/live_levels_trader.py` running across logout and reboot.
 Canonical copies live here; `~/Library/LaunchAgents/` holds the deployed
 copies.
 
-Two jobs, not one supervisor: the collectors are already independent
-processes with separate universes, cadences and output directories, and a
-crash in one must not take the other's sample with it.
+> This file described the funding and cascade collectors until 2026-09-18.
+> Both were retired in `3d4d89e`, and their plists are gone. What remains is
+> one job that places real orders, plus a diagnostic probe.
+
+**`com.cuansniffer.trader.plist` is the only job here that places real
+orders.** Read the header of `tools/live_levels_trader.py` before installing
+it: no edge has been measured for this strategy, and the filter is fitted to
+a couple of dozen labels. `RUNBOOK.md` is the operations reference.
 
 ---
 
@@ -28,8 +31,8 @@ failures over six days before it was moved out.
 
 The project was moved to `~/CuanSniffer` on 2026-09-18 for exactly this
 reason. **If it is ever moved back under `~/Documents`, `~/Desktop` or
-`~/Downloads`, every launchd job here silently stops working** — it does not
-error visibly, it starts, fails to import, and leaves an empty log.
+`~/Downloads`, the job here silently stops working** — it does not error
+visibly, it starts, fails to import, and leaves an empty log.
 
 Step 1 re-verifies this after any move.
 
@@ -55,89 +58,91 @@ rm ~/Library/LaunchAgents/com.cuansniffer.tccprobe.plist
 **Any line `FAIL`** → launchd cannot reach the project. Pick one:
 
 - **Grant Full Disk Access to the venv interpreter.** System Settings →
-  Privacy & Security → Full Disk Access → add
-  `.venv/bin/python` *and* `/bin/zsh`. Fastest path, but FDA on a Python
-  binary applies to *every* script that interpreter ever runs, not just
-  these collectors. Worth understanding before clicking.
-- **Move the project out of `~/Documents`** (e.g. `~/CuanSniffer`), which is
-  what TrenchKit did. Most robust and the permission stops being a live
-  dependency, but every absolute path — these plists, and anything else
-  pointing at the current location — has to be updated.
-- **Stay on `nohup`** and accept that the run does not survive a reboot.
-  Honest fallback, and fine if the machine stays up; just know that a
-  restart silently ends the collection window.
+  Privacy & Security → Full Disk Access → add `.venv/bin/python` *and*
+  `/bin/zsh`. Fastest path, but FDA on a Python binary applies to *every*
+  script that interpreter ever runs. Worth understanding before clicking.
+- **Move the project out of `~/Documents`**, which is what TrenchKit did.
+  Most robust, and the permission stops being a live dependency, but every
+  absolute path — this plist, and anything else pointing at the current
+  location — has to be updated.
 
 ### Step 2 — stop whatever is already running
 
-`nohup`'d collectors from an interactive session will otherwise keep running
-alongside the launchd jobs: double the API load, and duplicate funding
-snapshot rows. Cascade resolutions dedupe on `resolution_id`, funding
-snapshots do not.
+An interactive or `nohup`'d trader will otherwise keep running alongside the
+launchd job. Two armed processes share no state file locking, so both would
+claim slots independently and `MAX_CONCURRENT` would mean nothing.
 
 ```sh
-pkill -TERM -f "research.funding.collector"
-pkill -TERM -f "research.cascade.collector"
-pgrep -fl "research\.(funding|cascade)\.collector"   # expect no output
+pkill -TERM -f "tools.live_levels_trader"
+pgrep -fl "tools\.live_levels_trader"     # expect no output
 ```
 
-`SIGTERM` is correct, not `-9`: both collectors trap it, finish the current
-cycle and persist pending state before exiting.
+`SIGTERM` is correct, not `-9`: the trader traps it, finishes the current
+pass and exits 0.
 
 ### Step 3 — install
 
 ```sh
 mkdir -p ~/Library/Logs/cuan-sniffer
-cp deploy/launchd/com.cuansniffer.funding.plist ~/Library/LaunchAgents/
-cp deploy/launchd/com.cuansniffer.cascade.plist ~/Library/LaunchAgents/
-launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.funding.plist
-launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.cascade.plist
+cp deploy/launchd/com.cuansniffer.trader.plist ~/Library/LaunchAgents/
+launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.trader.plist
 ```
 
 The `mkdir` is not optional. launchd does not create a missing
 `StandardOutPath` directory; it starts the job and drops the output.
 
-### Step 4 — verify it is actually collecting
+### Step 4 — verify it is actually trading
 
 ```sh
 launchctl list | grep cuansniffer          # PID in col 1, 0 in col 2
-tail -f ~/Library/Logs/cuan-sniffer/cascade.log
+tail -f ~/Library/Logs/cuan-sniffer/trader.log
 ```
 
-A healthy cascade log shows `cycle complete: pending=N` about once a minute
-and names its arms at startup; funding shows `cycle complete: N rows written`
-every five minutes. Confirm a data file appears for today:
+A healthy log opens with `mode: ARMED -- PLACING REAL ORDERS`, a rails line
+and the measured-edge note, then prints a sizing table and a `wait` or
+`TRIGGER` line per candidate roughly every 15 minutes. An armed start also
+sends a Telegram message; if that did not arrive, fix alerting before
+leaving it unattended.
 
 ```sh
-ls -la research/funding/data/*_$(date -u +%F).csv | head
+.venv/bin/python -m tools.live_levels_trader --status
 ```
 
 ---
 
 ## Operating notes
 
-**Stopping.** `launchctl unload ~/Library/LaunchAgents/com.cuansniffer.<job>.plist`.
+**Stopping.** `launchctl unload ~/Library/LaunchAgents/com.cuansniffer.trader.plist`.
 A bare `kill` will not stick: `KeepAlive` restarts anything that exits
 non-zero. Exit 0 is treated as deliberate, so a clean `SIGTERM` shutdown
 stays down.
+
+**Disarming without stopping.** Arming needs `--arm` *and*
+`LEVELS_LIVE_ARMED=yes`. Drop the `EnvironmentVariables` block, reload, and
+the process keeps scanning in dry mode instead of dying — which is the point
+of requiring two independent gates.
+
+**A halt survives a restart.** It is persisted in
+`research/levels/data/_live_state.json`, and the trader returns 1 on a fatal
+venue-sanity halt, which `KeepAlive` restarts. Preflight then refuses again
+on the flag, so it idles loudly rather than trading blind. Clear it with
+`--resume` only after looking at the venue.
 
 **After editing a plist**, unload and load again — launchd caches the copy it
 read at load time. Edit the copy here, re-copy to `~/Library/LaunchAgents/`,
 then reload. The deployed copy is a deployment artifact; this one is the
 source of truth.
 
-**Logs are not rotated.** launchd does not rotate, and neither collector
-does. Cascade writes roughly a line a minute (~1.5 MB over two weeks),
-funding a line per five minutes. Fine for one collection window, not fine
-left running for months.
+**Logs are not rotated.** launchd does not, and neither does the trader. It
+writes roughly 30 lines per 15-minute pass — about 1.5 MB a day with the
+current universe. Fine for a live-test window, not fine left for months.
 
-**Config.** Neither collector loads `.env`; both read env vars with defaults
-baked into the code (`CASCADE_STOP_ARMS`, `FUNDING_UNIVERSE_TOP_N`,
-`FUNDING_UNIVERSE_EXCLUDE`). The plists deliberately set no
-`EnvironmentVariables`, so the committed defaults are the single source of
-truth and a deployed job cannot silently diverge from the repo. To pin a
-value for an experiment, add it to the plist and say so in `DECISIONS.md` —
-an undocumented override in a deployed plist is invisible to anyone reading
-the code later.
+**Config.** Unlike the retired collectors, the trader **does** load `.env`
+(`load_dotenv` at import), and the plist sets `LEVELS_LIVE_ARMED` on top of
+it. Rails belong in `research/levels/config.py`, which reads env vars with
+committed defaults; putting a rail override in `.env` or in the plist makes
+a deployed job silently diverge from the code. If you pin one for an
+experiment, say so in `DECISIONS.md`.
 
 **The venv path matters.** `ProgramArguments` points at `.venv/bin/python`,
 not at the homebrew binary it symlinks to. CPython only adds the venv's
