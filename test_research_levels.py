@@ -9,7 +9,7 @@ from pathlib import Path
 from research.levels import storage
 from research.levels.gate import evaluate
 from research.levels.levels import (
-    detect_levels, find_pivots, log_sigma, sigma_distance, Level,
+    detect_levels, find_pivots, log_sigma, sigma_distance,
 )
 
 

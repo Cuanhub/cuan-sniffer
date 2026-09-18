@@ -27,14 +27,13 @@ Usage:
 import argparse
 import math
 import signal
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
 from research.levels import storage
-from research.levels.gate import evaluate, RUN_LOOKBACK
+from research.levels.gate import evaluate
 from research.levels.levels import (
     detect_levels, log_sigma, sigma_distance, nearest_level,
 )

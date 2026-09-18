@@ -31,9 +31,9 @@ from research.levels import config as C
 from research.levels import storage
 from research.levels.gate import evaluate
 from research.levels.levels import (
-    detect_levels, flipped_supports, log_sigma, sigma_distance, nearest_level,
+    detect_levels, flipped_supports, log_sigma, sigma_distance,
 )
-from research.levels.scanner import fetch, _atr_pct
+from research.levels.scanner import _atr_pct
 from research.levels.venue_client import HyperliquidReadOnlyClient, VenueFetchError
 from research.levels.universe import select_universe
 
@@ -277,7 +277,6 @@ def cmd_label(eid: str, verdict: str, note: str):
 
 
 def cmd_progress():
-    import csv
     from collections import Counter
     labs = _labelled()
     if not labs:

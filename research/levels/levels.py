@@ -97,7 +97,6 @@ def _score_level(bars: List[Dict[str, Any]], price: float, kind: str,
       exactly the tests worth counting.
     """
     lvl = Level(price=price, kind=kind)
-    band = sigma * TOUCH_BAND_SIGMA
     in_touch = False
     for i in range(min(upto, len(bars))):
         b = bars[i]

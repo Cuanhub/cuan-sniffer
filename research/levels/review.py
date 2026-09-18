@@ -23,7 +23,7 @@ would just launder the same guess.
 import argparse
 import csv
 from collections import Counter
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from research.levels import storage
 

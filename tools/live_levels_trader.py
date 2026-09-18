@@ -39,7 +39,6 @@ Usage:
 
 import argparse
 import json
-import math
 import os
 import signal
 import time
@@ -51,7 +50,6 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
-from research.levels.levels import log_sigma, sigma_distance          # noqa: E402
 from research.levels.scanner import fetch, scan_coin                  # noqa: E402
 from research.levels.venue_client import HyperliquidReadOnlyClient    # noqa: E402
 from research.levels.universe import select_universe                 # noqa: E402
@@ -344,7 +342,7 @@ def main():
                            "detail": ",".join(flags)})
                 continue
             if len(state.get("owned", {})) >= MAX_CONCURRENT:
-                print(f"[LEVELS_LIVE] concurrency cap reached, stopping this pass")
+                print("[LEVELS_LIVE] concurrency cap reached, stopping this pass")
                 break
             execute_one(backend, ep, equity, available, armed, state)
         if args.once:
