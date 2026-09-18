@@ -23,6 +23,14 @@ signals_*.csv
 *.png
 *.lock
 
+# ...except the labels. 2.6KB of take/skip verdicts, and the one file here
+# that nothing can regenerate: episodes and outcomes can be replayed from
+# price history, but a judgement call cannot be. research/levels/ exists to
+# capture judgement that lives nowhere in the codebase (see SCHEMA.md), and
+# that file was being excluded by a rule written to keep 850MB of archived
+# price data out of the repo.
+!research/levels/data/labels.csv
+
 # OS / editor
 .DS_Store
 .vscode/

@@ -1,0 +1,26 @@
+episode_id,labelled_at_utc,verdict,confidence,note
+AAVE-4H_1789704000000_132.27,2026-09-18T05:17:02Z,skip,,sitting right below overhead resistance
+BTC-1H_1789707600000_77002.5,2026-09-18T05:17:26Z,skip,,wrong level - would trade ~75k on 4h/1h; entering here is late in the run
+BTC-4H_1789704000000_74903,2026-09-18T05:20:46Z,take,,~75k on 4h - the level I would have traded
+BTC-1H_1789707600000_75055.5,2026-09-18T05:21:17Z,take,,"~75k on 1h - same level, would have traded"
+DOGE-1H_1789707600000_0.083794,2026-09-18T05:43:44Z,maybe,,maybe - resistance just overhead; sitting ON the level now. good trade IF it holds and channels
+CRV-4H_1789704000000_0.33041,2026-09-18T05:44:18Z,maybe,,"maybe - 0.331 was prior support on 4h/1h, we are above it now. good entry IF this level holds"
+DOGE-4H_1789704000000_0.078281,2026-09-18T05:45:20Z,take,,0.0784 - the level I would have opened a long at
+XMR-1H_1789707600000_492.3,2026-09-18T05:58:14Z,take,,"great take at 492. note: current price has just broken a resistance, 545 next overhead"
+USELESS-1H_1789711200000_0.25817,2026-09-18T06:13:58Z,take,,take at current levels - sitting just above previous resistance (flipped)
+XRP-1H_1789711200000_1.2565,2026-09-18T06:13:58Z,take,,looks like a take
+DOGE-1H_1789711200000_0.080625,2026-09-18T06:13:58Z,take,,"take, but sitting at a crucial level"
+PONS-1H_1789711200000_0.67069,2026-09-18T06:13:58Z,take,,would enter on a pullback to 0.68
+PONS-1H_1789711200000_0.65648,2026-09-18T06:13:58Z,take,,like 0.66 better than current levels
+PONS-1H_1789711200000_0.572325,2026-09-18T06:13:58Z,take,,like 0.55 area - flipped resistance level
+BNB-4H_1789704000000_725.15,2026-09-18T06:13:58Z,skip,,currently sitting right AT the flipped level - prefer 705
+BNB-4H_1789704000000_706.535,2026-09-18T06:13:58Z,take,,like 705
+VVV-4H_1789704000000_23.447,2026-09-18T06:13:58Z,skip,,would not take at current price
+VVV-4H_1789704000000_21.212,2026-09-18T06:13:58Z,skip,,VVV at 21 - would not take it
+XRP-4H_1789732800000_1.1272,2026-09-18T12:10:42Z,take,,"strong play - more aligned with a buy zone, never traded below it"
+LINK-1H_1789732800000_11.0635,2026-09-18T12:10:42Z,take,,can see this setup
+SOL-1H_1789732800000_101.72,2026-09-18T12:10:43Z,maybe,,trying to flip resistance - need to watch the market a bit
+LTC-1H_1789732800000_53.5705,2026-09-18T12:10:43Z,maybe,,trying to flip resistance - watch
+BNB-1H_1789732800000_720.46,2026-09-18T12:10:43Z,maybe,,"sitting at a level, still flipping - watch"
+ETH-1H_1789732800000_2387.35,2026-09-18T12:10:44Z,maybe,,flipped resistance - watch
+BNB-4H_1789732800000_706.535,2026-09-18T12:10:44Z,take,,good entry around 704 on the 4h
