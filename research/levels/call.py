@@ -173,6 +173,20 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
             # floated exactly the untradeable setups to the top of a scan.
             head_sigma = sigma_distance(above[0].price, entry, sigma) if above else None
             head_pct = ((above[0].price - entry) / entry * 100) if above else None
+            # How long this level spent CAPPING price, and how recently. The
+            # user reads "many are trying to flip resistance levels" off the
+            # chart and treats those as needing observation, while calling a
+            # level price has never traded below "more aligned with a buy
+            # zone". level_origin does not capture that: it only marks levels
+            # the resistance detector happened to find, so SOL 101.72 scored
+            # swing_low while having capped price for 95 of the last 120 bars,
+            # last only 12 bars ago. Time spent under the level is the measure
+            # that actually separates the two.
+            look = bars[max(0, i - 120):i + 1]
+            capped = sum(1 for x in look if x["c"] < L.price)
+            last_capped = max((k for k, x in enumerate(look) if x["c"] < L.price), default=None)
+            bars_since_capped = (len(look) - 1 - last_capped) if last_capped is not None else -1
+
             # 7d trajectory, so the user can see how price arrived here
             w = bars[max(0, i - 42):i + 1]
             hi7 = max(x["h"] for x in w); lo7 = min(x["l"] for x in w)
@@ -193,6 +207,9 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
                 "opposing_level_price": round(opp.price, 10) if opp else "",
                 "_px": px, "_near": near, "_hi7": hi7, "_lo7": lo7, "_ladder": ladder,
                 "_tf": tf,
+                "capped_bars": capped,
+                "capped_frac": round(capped / max(len(look), 1), 3),
+                "bars_since_capped": bars_since_capped,
                 "_head_sigma": round(head_sigma, 2) if head_sigma is not None else None,
                 "_head_pct": round(head_pct, 2) if head_pct is not None else None,
                 "_no_target": head_sigma is None,
@@ -233,7 +250,12 @@ def cmd_list(args):
         if c.get("_no_target"):
             print("     headroom: NO resistance mapped above -- no target, not a trade")
         else:
-            print(f"     headroom: first resistance {c['_head_sigma']:.2f}s above entry "
+            cap = c.get("capped_bars", 0)
+        if cap:
+            since = c.get("bars_since_capped", -1)
+            print(f"     was resistance: capped price {cap}/120 bars"
+                  + (f", last {since} bars ago" if since >= 0 else ""))
+        print(f"     headroom: first resistance {c['_head_sigma']:.2f}s above entry "
                   f"({c['_head_pct']:+.2f}%)")
         if c["_ladder"]:
             rungs = "   ".join(f"{px_:.6g} (rr {r:.2f}, {t} tests {h*100:.0f}%)"

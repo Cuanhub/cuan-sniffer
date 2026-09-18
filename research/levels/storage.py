@@ -42,6 +42,7 @@ EPISODE_FIELDNAMES = [
     "atr_pct", "entry_buffer_sigma", "suggested_entry", "suggested_stop",
     "suggested_tp", "suggested_rr", "opposing_level_price",
     "timeframe", "overhead_sigma", "overhead_pct", "level_origin",
+    "capped_bars", "capped_frac", "bars_since_capped",
 ]
 
 OUTCOME_FIELDNAMES = [

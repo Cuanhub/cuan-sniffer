@@ -443,6 +443,12 @@ def review_flags(ep: Dict[str, Any], size_usd: float, equity: float) -> List[str
         out.append(f"level held only {f('level_hold_rate')*100:.0f}% of its {int(f('level_touches'))} tests")
     if ep.get("level_origin") == "flipped_resistance":
         out.append("flipped resistance -- only 1 of the 18 labels was this kind")
+    # Time spent capping price, which level_origin misses entirely.
+    cap = f("capped_bars")
+    since = f("bars_since_capped", -1)
+    if cap >= 25 and 0 <= since <= 48:
+        out.append(f"was resistance until recently -- capped price {int(cap)}/120 bars, "
+                   f"last {int(since)} bars ago; price is still flipping it")
     return out
 
 
