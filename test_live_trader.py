@@ -18,7 +18,6 @@ in the module; the fix for the process is here -- a fake backend that returns
 the real FillResult shape, so the armed path can be exercised without a venue.
 """
 
-import json
 import shutil
 import unittest
 from dataclasses import dataclass, field

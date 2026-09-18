@@ -60,7 +60,7 @@ from research.levels.config import (                                  # noqa: E4
     RISK_PCT_PER_TRADE, MAX_CONCURRENT, MAX_NEW_PER_DAY, MAX_LEVERAGE,
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
-    MAX_ENTRY_DRIFT_PCT, TRIGGER_ZONE_SIGMA,
+    MAX_ENTRY_DRIFT_PCT,
 )
 from research.levels.config import summary as config_summary          # noqa: E402
 
