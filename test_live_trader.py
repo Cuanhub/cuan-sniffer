@@ -599,6 +599,18 @@ class ModuleShapeTest(unittest.TestCase):
             self.assertLess(src.index(f"def {fn}("), guard,
                             f"{fn} is defined after the __main__ guard")
 
+    def test_runtime_paths_are_redirected_under_test(self):
+        """conftest must keep every test off the live state and trade log.
+
+        reconcile() saves state and appends a trade row as a matter of
+        course, so a test that calls it with a hand-built dict writes to
+        research/levels/data/ unless something has redirected the paths.
+        Seventy fabricated rows reached the real-money audit trail that way.
+        """
+        for path in (T.STATE_PATH, T.TRADE_LOG):
+            self.assertNotIn("research/levels/data", str(path),
+                             "conftest's isolated_runtime_files is not applying")
+
 
 if __name__ == "__main__":
     unittest.main()
