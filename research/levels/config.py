@@ -52,29 +52,62 @@ BREAK_WINDOW = _i("LEVELS_BREAK_WINDOW", 12)         # STRUCTURAL: judging a bre
                                                      # every level score 100% holds
 MIN_TOUCHES_DETECT = _i("LEVELS_MIN_TOUCHES_DETECT", 2)  # GUESSED
 
-# EVIDENCED. Hold rate is what separates a level price respects from one it
-# merely crosses: BTC 74,900 held 10 of 10 tests; a naive band around CASHCAT
-# 0.14 held 8 of 18. Observed spread across detected levels is 0.43-1.00.
-MIN_HOLD_RATE = _f("LEVELS_MIN_HOLD_RATE", 0.90)     # threshold itself GUESSED
-MIN_TOUCHES = _i("LEVELS_MIN_TOUCHES", 8)            # GUESSED
+# NOT USED AS A TRADE FILTER. Hold rate looked like the obvious quality
+# measure and was tagged EVIDENCED here for days. Against 18 labels it passes
+# 4 of 5 SKIPS and only 5 of 11 TAKES -- takes average a hold rate of 0.86
+# against 0.92 for skips, and fewer tests (10.7 vs 12.2). Both point the wrong
+# way, so filtering on them costs takes and buys nothing. Kept for display and
+# for the record, not for gating.
+MIN_HOLD_RATE = _f("LEVELS_MIN_HOLD_RATE", 0.90)     # display only
+MIN_TOUCHES = _i("LEVELS_MIN_TOUCHES", 8)            # display only
 
 # ---- when is the level live -------------------------------------------------
 # EVIDENCED that timing dominates: the same limit at 0.1428 on CASHCAT left
 # resting from 08-20 rides a -73.67% drawdown, while placed on 09-08 it fills
 # at the same price and never goes more than -0.48% underwater. A 150x
 # difference in drawdown from nothing but when the order became live.
-# The THRESHOLDS are GUESSED -- fitted to two levels named after the fact.
+#
+# The THRESHOLDS below, however, do not capture that. Measured against 18
+# labels, none of the three separates a take from a skip:
+#     pull_sigma  takes median 3.8  skips median 4.0   gap +0.57
+#     run_sigma   takes median 13.3 skips median 14.8  gap -0.21
+#     retests     takes median 4    skips median 6     gap -1.91  (backwards)
+# At their old values (pull>=5.0, retests>=2) the gate rejected 7 of 11 takes,
+# so the trader would never have SEEN them whatever the trade filter said.
+#
+# They are now set as a LOGGING net, not a decision: wide enough that every
+# labelled take passes, because an episode that is never recorded can never be
+# labelled or measured. What gets bought is decided by the TRADE_ thresholds
+# further down, which do discriminate.
 RUN_LOOKBACK = _i("LEVELS_RUN_LOOKBACK", 84)
-RUN_SIGMA_MIN = _f("LEVELS_RUN_SIGMA_MIN", 6.0)
-PULL_SIGMA_MIN = _f("LEVELS_PULL_SIGMA_MIN", 5.0)
+RUN_SIGMA_MIN = _f("LEVELS_RUN_SIGMA_MIN", 6.0)     # all 11 takes are >=12.6
+PULL_SIGMA_MIN = _f("LEVELS_PULL_SIGMA_MIN", 1.0)   # was 5.0, rejected 7 takes
 RETEST_LOOKBACK = _i("LEVELS_RETEST_LOOKBACK", 180)
-MIN_RETESTS = _i("LEVELS_MIN_RETESTS", 2)
+MIN_RETESTS = _i("LEVELS_MIN_RETESTS", 1)           # was 2, rejected 1 take
 RETEST_BAND_SIGMA = _f("LEVELS_RETEST_BAND_SIGMA", 1.0)
 
-# GUESSED. Single definition -- this was previously applied twice, at 5.0 in
-# the gate and 2.0 in the trader, so a setup could pass one and fail the other
-# with nothing naming which was authoritative.
-MAX_NEAR_SIGMA = _f("LEVELS_MAX_NEAR_SIGMA", 2.0)
+# GATE vs TRADE, kept apart on purpose. The gate decides what gets LOGGED and
+# is deliberately wide, because an episode that never gets recorded can never
+# be labelled or measured. The trade filter below decides what gets BOUGHT.
+# Collapsing the two is what produced a filter that logged and traded the same
+# narrow slice.
+GATE_MAX_NEAR_SIGMA = _f("LEVELS_GATE_MAX_NEAR_SIGMA", 12.0)
+
+# EVIDENCED, and it replaces an inverted predecessor. MAX_NEAR_SIGMA was 2.0 --
+# it REQUIRED price to be within 2 sigma of the level, and tested against 18
+# labels it passed 1 of 11 takes while passing 1 of 5 skips. The user's takes
+# sit 0.18-10.00 sigma below price (median 5.80); their skips 1.13-4.67
+# (median 2.06). The old filter demanded the shallow setups they reject and
+# excluded the deep ones they take. Direction reversed; threshold from the data.
+TRADE_MIN_NEAR_SIGMA = _f("LEVELS_TRADE_MIN_NEAR_SIGMA", 5.0)
+
+# EVIDENCED. "Sitting ON the level now" was the user's own reason for two
+# skips and both maybes. Takes were last tested 9-40 bars ago; skips 0-9.
+TRADE_MIN_BARS_SINCE_TOUCH = _i("LEVELS_TRADE_MIN_BARS_SINCE_TOUCH", 9)
+
+# EVIDENCED. Overhead resistance was the stated reason for the AAVE skip and
+# the ETH rejection. Takes average 7.58 sigma of headroom, skips 2.98.
+TRADE_MIN_OVERHEAD_SIGMA = _f("LEVELS_TRADE_MIN_OVERHEAD_SIGMA", 5.0)
 
 # ---- rules 2 and 3: entry and stop ------------------------------------------
 # EVIDENCED. Both levels the user named would have MISSED as exact limits:
@@ -93,9 +126,15 @@ STOP_SIGMA_BELOW = _f("LEVELS_STOP_SIGMA_BELOW", 3.0)        # size GUESSED
 # ceiling on the result, never an input. At fixed 10x a 10% stop costs the whole
 # account and a 44% stop costs 4.4x of it, because stop distance is set by the
 # chart rather than chosen.
-RISK_PCT_PER_TRADE = _f("LEVELS_RISK_PCT", 5.0)
+# 3% for the initial trials, to be raised only as the system demonstrates
+# profitability. Nothing measures this strategy's edge yet, so the first
+# trades are being bought as information at roughly $24 each.
+RISK_PCT_PER_TRADE = _f("LEVELS_RISK_PCT", 3.0)
 MAX_LEVERAGE = _f("LEVELS_MAX_LEVERAGE", 10.0)
-MIN_RR = _f("LEVELS_MIN_RR", 2.5)                 # GUESSED
+# Lowered from 2.5: at 2.5 the filter kept 6 of 11 takes, at 2.0 it keeps 7
+# while still admitting 0 of 5 skips. Live median reward/risk is 3.40 anyway,
+# so the floor rarely binds.
+MIN_RR = _f("LEVELS_MIN_RR", 2.0)
 MIN_NOTIONAL_USD = _f("LEVELS_MIN_NOTIONAL", 12.0)
 
 # ---- operational rails ------------------------------------------------------
@@ -108,8 +147,10 @@ ONSET_MATCH_SIGMA = _f("LEVELS_ONSET_MATCH_SIGMA", 0.5)
 
 
 def summary() -> str:
-    return (f"level: hold>={MIN_HOLD_RATE} touches>={MIN_TOUCHES} | "
-            f"timing: run>={RUN_SIGMA_MIN}s pull>={PULL_SIGMA_MIN}s "
-            f"retests>={MIN_RETESTS} near<={MAX_NEAR_SIGMA}s | "
-            f"trade: entry +{ENTRY_BUFFER_SIGMA}s stop -{STOP_SIGMA_BELOW}s "
-            f"rr>={MIN_RR} risk {RISK_PCT_PER_TRADE}%")
+    return (f"gate(log): run>={RUN_SIGMA_MIN}s pull>={PULL_SIGMA_MIN}s "
+            f"retests>={MIN_RETESTS} near<={GATE_MAX_NEAR_SIGMA}s | "
+            f"trade(buy): depth>={TRADE_MIN_NEAR_SIGMA}s "
+            f"rested>={TRADE_MIN_BARS_SINCE_TOUCH}b "
+            f"headroom>={TRADE_MIN_OVERHEAD_SIGMA}s rr>={MIN_RR} | "
+            f"entry +{ENTRY_BUFFER_SIGMA}s stop -{STOP_SIGMA_BELOW}s "
+            f"risk {RISK_PCT_PER_TRADE}%")

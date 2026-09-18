@@ -50,7 +50,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
-from research.levels.scanner import fetch, scan_coin                  # noqa: E402
+from research.levels.call import find_candidates as _find_candidates  # noqa: E402
 from research.levels.venue_client import HyperliquidReadOnlyClient    # noqa: E402
 from research.levels.universe import select_universe                 # noqa: E402
 
@@ -58,8 +58,8 @@ from research.levels.universe import select_universe                 # noqa: E40
 # whether they rest on a measurement or on my guess.
 from research.levels.config import (                                  # noqa: E402
     RISK_PCT_PER_TRADE, MAX_CONCURRENT, MAX_NEW_PER_DAY, MAX_LEVERAGE,
-    DAILY_LOSS_STOP_PCT, MIN_HOLD_RATE, MIN_TOUCHES, MIN_RR,
-    MIN_NOTIONAL_USD, POLL_SEC,
+    DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
+    TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
 )
 from research.levels.config import summary as config_summary          # noqa: E402
 
@@ -111,23 +111,35 @@ def log_trade(row: Dict[str, Any]) -> None:
 def passes_quality(ep: Dict[str, Any]) -> Optional[str]:
     """Returns a rejection reason, or None if the setup clears the bar.
 
-    Far stricter than the gate itself. The gate produced 39 episodes in one
-    pass against roughly 9 trades a month by hand; trading it unfiltered would
-    express the 25x looseness directly as 25x the losses."""
+    Derived from 18 of the user's own take/skip calls, not invented. Scored on
+    those labels this combination keeps 8 of 11 takes and admits 0 of 5 skips.
+
+    What it does NOT check is as important. hold_rate and level_touches were
+    the original filters and both point the wrong way: hold_rate passes 4 of 5
+    skips against 5 of 11 takes, and takes average FEWER tests than skips
+    (10.7 vs 12.2). Filtering on them cost takes and bought nothing.
+
+    Depth, rest and headroom are likely one underlying factor rather than
+    three independent ones -- price far from a level has necessarily not
+    tested it lately and has more room above. They are checked separately so a
+    larger sample can tell them apart.
+    """
     def f(k, d=0.0):
         try:
             return float(ep.get(k) or d)
         except (TypeError, ValueError):
             return d
-    if f("level_hold_rate") < MIN_HOLD_RATE:
-        return f"hold_rate {f('level_hold_rate'):.2f} < {MIN_HOLD_RATE}"
-    if f("level_touches") < MIN_TOUCHES:
-        return f"touches {int(f('level_touches'))} < {MIN_TOUCHES}"
+    if f("near_sigma") < TRADE_MIN_NEAR_SIGMA:
+        return f"depth {f('near_sigma'):.2f}s < {TRADE_MIN_NEAR_SIGMA}s (price too close to the level)"
+    if f("level_bars_since_last_touch") < TRADE_MIN_BARS_SINCE_TOUCH:
+        return (f"last tested {int(f('level_bars_since_last_touch'))}b "
+                f"< {TRADE_MIN_BARS_SINCE_TOUCH}b (still sitting on it)")
+    if not str(ep.get("overhead_sigma", "")).strip():
+        return "no resistance mapped above -- no target"
+    if f("overhead_sigma") < TRADE_MIN_OVERHEAD_SIGMA:
+        return f"headroom {f('overhead_sigma'):.2f}s < {TRADE_MIN_OVERHEAD_SIGMA}s (resistance overhead)"
     if f("suggested_rr") < MIN_RR:
         return f"rr {f('suggested_rr'):.2f} < {MIN_RR}"
-    # near_sigma is enforced once, inside the gate -- it used to be checked
-    # here too at a different value, so a setup could pass one and fail the
-    # other with nothing naming which was authoritative.
     return None
 
 
@@ -190,22 +202,24 @@ def size_from_stop(equity: float, entry: float, stop: float,
 
 def build_intents(client, universe) -> List[Dict[str, Any]]:
     """Scan for setups and keep the ones clearing the quality bar. No side
-    effects, no venue writes -- this half only reads and computes."""
+    effects, no venue writes -- this half only reads and computes.
+
+    Uses the SAME candidate source as the call sheet the user labels. That
+    matters more than it looks: the trader previously used scanner.scan_coin,
+    which is 4h-only and onset-only, while the user labels candidates from
+    call.find_candidates, which scans 4h and 1h and includes flipped
+    resistances. Eight of their eleven takes are 1h setups, so the trader
+    could not see most of what it was being tuned on, and any filter fitted to
+    those labels was being applied to a different population than it was
+    measured on.
+    """
     intents, rejected = [], []
-    for u in universe:
-        coin = u["symbol"]
-        try:
-            bars = fetch(client, coin)
-        except Exception:
+    for ep in _find_candidates(client, universe):
+        why = passes_quality(ep)
+        if why:
+            rejected.append((ep.get("coin"), ep.get("level_price"), why))
             continue
-        if len(bars) < 120:
-            continue
-        for ep in scan_coin(coin, bars):
-            why = passes_quality(ep)
-            if why:
-                rejected.append((coin, ep.get("level_price"), why))
-                continue
-            intents.append(ep)
+        intents.append(ep)
     return intents, rejected
 
 

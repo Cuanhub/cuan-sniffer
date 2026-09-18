@@ -34,7 +34,7 @@ from research.levels.levels import log_sigma, sigma_distance
 
 from research.levels.config import (               # noqa: E402
     RUN_LOOKBACK, RUN_SIGMA_MIN, PULL_SIGMA_MIN, RETEST_LOOKBACK,
-    MIN_RETESTS, RETEST_BAND_SIGMA, MAX_NEAR_SIGMA,
+    MIN_RETESTS, RETEST_BAND_SIGMA, GATE_MAX_NEAR_SIGMA,
 )
 
 VOL_RECENT = 12            # volume windows; captured, never gated on
@@ -99,7 +99,7 @@ def evaluate(bars: List[Dict[str, Any]], i: int, level_price: float) -> Optional
     near_sigma = sigma_distance(px, level_price, sigma)
     c_run = run_sigma >= RUN_SIGMA_MIN and pull_sigma >= PULL_SIGMA_MIN
     c_retest = retests >= MIN_RETESTS
-    c_near = near_sigma <= MAX_NEAR_SIGMA
+    c_near = near_sigma <= GATE_MAX_NEAR_SIGMA
 
     feats = {
         "sigma_4h": round(sigma, 6),
