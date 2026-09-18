@@ -145,10 +145,28 @@ MIN_NOTIONAL_USD = _f("LEVELS_MIN_NOTIONAL", 12.0)
 # would have refused it.
 MAX_ENTRY_DRIFT_PCT = _f("LEVELS_MAX_ENTRY_DRIFT_PCT", 1.5)
 
-# How close price must come before a watched setup is fired. The strategy
-# identifies levels while price is 5-10 sigma above them and waits; this is
-# the arrival condition, not a quality filter.
+# ---- the trigger: has the level actually held? -----------------------------
+# The filters above identify a level worth watching while price is still 5-10
+# sigma above it. They say nothing about the moment of entry, and the user's
+# own labels are explicit that arrival alone is not enough: every setup they
+# marked "maybe" was one price was sitting on right then, with the reason
+# given as "good trade IF it holds" and "if we maintain this level in a
+# channel". Firing on arrival would buy exactly those.
+#
+# Their proposed rule, and the first testable version of "it held": price came
+# down into the zone, and has stayed above the level for two hours since.
+# Checked on 1h bars regardless of the timeframe the level was found on,
+# because the hold is a wall-clock condition, not a chart-interval one.
 TRIGGER_ZONE_SIGMA = _f("LEVELS_TRIGGER_ZONE_SIGMA", 1.0)
+TRIGGER_HOLD_HOURS = _i("LEVELS_TRIGGER_HOLD_HOURS", 2)
+TRIGGER_TOUCH_LOOKBACK_HOURS = _i("LEVELS_TRIGGER_TOUCH_LOOKBACK_HOURS", 12)
+
+# How far above the level price may sit and still count as holding AT it.
+# Without this, "held" meant nothing more than "is above", which a level price
+# has run away from satisfies trivially: UNI touched 7.5078 twelve hours ago,
+# rallied to 8.64, and the trigger read that as two hours of support 16% below
+# the market. The channel has a ceiling as well as a floor.
+TRIGGER_MAX_ABOVE_SIGMA = _f("LEVELS_TRIGGER_MAX_ABOVE_SIGMA", 2.0)
 
 # ---- operational rails ------------------------------------------------------
 MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 2)

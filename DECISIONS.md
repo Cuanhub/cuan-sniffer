@@ -192,3 +192,57 @@ trade-off, not for picking a winner post hoc. Choosing an arm because it
 scored best on this sample is the same error as re-tuning thresholds on it;
 `CASCADE_HYPOTHESES.md`'s minimum-sample and weekly-window bars apply per
 arm, independently.
+
+---
+
+## 2026-09-18 — Shorts deferred until the long side clears 50% wins
+
+**Decision:** the level system stays long-only. Short setups are not built
+until the long side is "dialled in", defined by the user as a win rate at or
+above 50%.
+
+**Why it came up:** the user identified a short on UNI -- price double-tapped
+resistance at 8.8889 twice on 2026-09-18 (03:00 high 8.8889, 07:00 high
+8.8353, 0.35 sigma apart, both confirmed on the 1h), with the stop just above
+the double top and support 6.96-8.99R below. The detector already holds that
+level: 2 tests, 100% held, 1.0 sigma above price. The geometry is there; the
+system simply has no path that produces a short.
+
+**What long-only actually means in the code:** every candidate is
+`kind="support"`, every entry `side="LONG"`, the trigger asks whether price
+held ABOVE a level, stops go below and targets above, and
+`flipped_supports()` converts resistance into support but never the reverse.
+Most of this mirrors cleanly -- `detect_levels(kind="resistance")` is already
+computed on every scan and used for targets -- so the code is not the hard
+part.
+
+**The hard part is that no short has ever been labelled.** All 18 labels are
+longs, and every threshold in the trade filter was fitted to them:
+TRADE_MIN_NEAR_SIGMA=5.0, the 9-bar rest, the 5 sigma headroom. Applying
+those to shorts would repeat exactly the error this filter was built to
+correct -- carrying numbers across to a population they were never measured
+on. Shorts need their own labels first.
+
+**A second gap the same setup exposed:** nothing in the system models trend.
+The user's own note was "since the trend is still up this could be more risky
+to trade the correction", and the system has no way to express that. It would
+short a double top in a rally as readily as in a downtrend. This matters
+because the September book that motivated the whole strategy was 23 fills,
+all long, in a window where all 28 universe coins rose a median 38.5%.
+
+**Two things to be honest about when the criterion is checked:**
+
+At the ~3.4 reward/risk this filter selects for, break-even is about a 23%
+win rate, so 50% is a demanding bar rather than a natural one -- it implies
+roughly +1.0R per trade. The long side may be strongly profitable well below
+it. The criterion is a deliberate scope gate, not a profitability threshold,
+and it should not be read as "below 50% means it does not work".
+
+"50%" also needs a sample size, or two lucky trades satisfy it. The
+pre-registration discipline used elsewhere in this project suggests at least
+20-30 closed trades before the number means anything.
+
+**How to apply going forward:** when the long side has 20+ closed trades at
+50%+, collect short labels through `research.levels.call` the same way the
+long labels were collected, fit the short thresholds to those, and only then
+mirror the code. Do not start by mirroring the code.

@@ -53,6 +53,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 from research.levels.call import find_candidates as _find_candidates  # noqa: E402
 from research.levels.venue_client import HyperliquidReadOnlyClient    # noqa: E402
 from research.levels.universe import select_universe                 # noqa: E402
+from research.levels.trigger import fetch_1h, level_has_held          # noqa: E402
 
 # Rails come from research/levels/config.py -- one definition each, tagged with
 # whether they rest on a measurement or on my guess.
@@ -68,6 +69,19 @@ STATE_PATH = Path(__file__).resolve().parents[1] / "research" / "levels" / "data
 TRADE_LOG = Path(__file__).resolve().parents[1] / "research" / "levels" / "data" / "live_trades.csv"
 
 _stop = False
+
+# Injectable so the armed path can be tested without a venue. It defaults to
+# None and is built on first use; tests assign a fake. Constructing it at
+# import time made the test suite hang -- every armed test tried to fetch 1h
+# candles for coins like "AAA" and sat through five retries with backoff.
+_RO_CLIENT = None
+
+
+def _ro_client():
+    global _RO_CLIENT
+    if _RO_CLIENT is None:
+        _RO_CLIENT = HyperliquidReadOnlyClient()
+    return _RO_CLIENT
 
 
 def _sig(signum, frame):
@@ -426,6 +440,25 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
             return d
     coin = ep["coin"]
     entry, stop, tp = g("suggested_entry"), g("suggested_stop"), g("suggested_tp")
+
+    # The trigger: has this level actually held? Checked before anything is
+    # sent, and only when armed, because it costs an API call per candidate.
+    # Arrival alone is not a setup -- every "maybe" the user gave was a level
+    # price was sitting on at that moment.
+    if armed:
+        try:
+            bars1h = fetch_1h(_ro_client(), coin)
+        except Exception as e:
+            print(f"[LEVELS_LIVE] skip {coin}: 1h fetch failed ({str(e)[:60]})")
+            return False
+        fired, why = level_has_held(bars1h, g("level_price"))
+        if not fired:
+            log_trade({"ts_utc": now_iso(), "action": "skip", "coin": coin,
+                       "episode_id": ep.get("episode_id", ""), "level_price": g("level_price"),
+                       "result": "not_triggered", "detail": why})
+            print(f"[LEVELS_LIVE] wait {coin} @ {g('level_price'):.6g}: {why}")
+            return False
+        print(f"[LEVELS_LIVE] TRIGGER {coin} @ {g('level_price'):.6g}: {why}")
 
     # Size from the LIVE price, not the planned one. Sizing off the plan while
     # filling at market is exactly what made the UNI position carry 3.5x its

@@ -27,6 +27,34 @@ from typing import Any, Dict, Optional
 import tools.live_levels_trader as T
 
 
+class FakeCandles:
+    """1h bars that satisfy the trigger: price dipped to the level, then held
+    above it. Tests that want the trigger to fail override `held`."""
+
+    def __init__(self, level=100.0, held=True, touched=True):
+        self.level, self.held, self.touched = level, held, touched
+
+    def get_candles(self, coin, interval, start, end):
+        lv = self.level
+        bars = []
+        for i in range(40):
+            # Closes must vary or log_sigma is 0 and the trigger has no scale
+            # to measure the zone in. They must also sit CLOSE to the level in
+            # sigma terms, since holding means holding in the zone, not merely
+            # somewhere above it.
+            # When the level was never reached, the whole series sits higher:
+            # price that has not come down is also not holding in the zone, so
+            # either rejection is the correct one.
+            base = 1.004 if self.touched else 1.035
+            c = lv * (base + 0.004 * ((i % 5) - 2))
+            low = lv * 0.999 if (self.touched and i == 35) else c * 0.998
+            bars.append({"t": i * 3600_000, "o": c, "h": c * 1.002, "l": low, "c": c})
+        if not self.held:
+            bars[-2]["c"] = lv * 0.98
+            bars[-3]["c"] = lv * 0.98
+        return bars
+
+
 @dataclass
 class FakeFill:
     """Mirrors execution_backend.FillResult -- the real contract."""
@@ -106,14 +134,15 @@ class ArmedPathTest(unittest.TestCase):
         if self._tmp.exists():
             shutil.rmtree(self._tmp)
         self._tmp.mkdir(parents=True)
-        self._orig_state, self._orig_log = T.STATE_PATH, T.TRADE_LOG
+        self._orig_state, self._orig_log, self._orig_ro = T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT
         T.STATE_PATH = self._tmp / "state.json"
         T.TRADE_LOG = self._tmp / "trades.csv"
+        T._RO_CLIENT = FakeCandles()
         self.state = {"owned": {}, "opened_today": 0, "day": "d",
                       "realised_today": 0.0, "halted": False, "halt_reason": ""}
 
     def tearDown(self):
-        T.STATE_PATH, T.TRADE_LOG = self._orig_state, self._orig_log
+        T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT = self._orig_state, self._orig_log, self._orig_ro
         if self._tmp.exists():
             shutil.rmtree(self._tmp)
 
@@ -173,14 +202,15 @@ class EntryDriftTest(unittest.TestCase):
         if self._tmp.exists():
             shutil.rmtree(self._tmp)
         self._tmp.mkdir(parents=True)
-        self._o = (T.STATE_PATH, T.TRADE_LOG)
+        self._o = (T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT)
         T.STATE_PATH = self._tmp / "s.json"
         T.TRADE_LOG = self._tmp / "t.csv"
+        T._RO_CLIENT = FakeCandles()
         self.state = {"owned": {}, "opened_today": 0, "day": "d",
                       "realised_today": 0.0, "halted": False, "halt_reason": ""}
 
     def tearDown(self):
-        T.STATE_PATH, T.TRADE_LOG = self._o
+        T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT = self._o
         if self._tmp.exists():
             shutil.rmtree(self._tmp)
 
@@ -211,6 +241,58 @@ class EntryDriftTest(unittest.TestCase):
         T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
         rec = self.state["owned"]["AAA"]
         self.assertAlmostEqual(rec["entry"], 101.0, places=6)
+
+
+class TriggerTest(unittest.TestCase):
+    """The user's rule: price came down to the level and has held above it for
+    two hours. Arrival alone is not enough -- every setup they marked "maybe"
+    was one price was sitting on at that moment."""
+
+    def setUp(self):
+        self._tmp = Path("/tmp/_test_trigger")
+        if self._tmp.exists():
+            shutil.rmtree(self._tmp)
+        self._tmp.mkdir(parents=True)
+        self._o = (T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT)
+        T.STATE_PATH = self._tmp / "s.json"
+        T.TRADE_LOG = self._tmp / "t.csv"
+        self.state = {"owned": {}, "opened_today": 0, "day": "d",
+                      "realised_today": 0.0, "halted": False, "halt_reason": ""}
+
+    def tearDown(self):
+        T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT = self._o
+        if self._tmp.exists():
+            shutil.rmtree(self._tmp)
+
+    def test_fires_after_the_level_has_held(self):
+        T._RO_CLIENT = FakeCandles(held=True, touched=True)
+        b = FakeBackend(mid=100.0)
+        self.assertTrue(T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state))
+
+    def test_waits_while_the_level_is_breaking(self):
+        T._RO_CLIENT = FakeCandles(held=False, touched=True)
+        b = FakeBackend(mid=100.0)
+        self.assertFalse(T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state))
+        self.assertEqual(b.entries, [], "must not buy a level that is closing below itself")
+
+    def test_waits_when_price_never_reached_the_level(self):
+        T._RO_CLIENT = FakeCandles(held=True, touched=False)
+        b = FakeBackend(mid=100.0)
+        self.assertFalse(T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state))
+
+    def test_hold_ignores_the_still_forming_bar(self):
+        """A live candle is not a hold. Counting it would let a wick that is
+        about to be filled stand in for two hours of support."""
+        from research.levels.trigger import level_has_held
+        lv = 100.0
+        bars = [{"t": i * 3600_000, "o": lv * 1.004, "h": lv * 1.006,
+                 "l": lv * 0.999 if i == 30 else lv * 1.002,
+                 "c": lv * (1.004 + 0.004 * ((i % 5) - 2))} for i in range(40)]
+        bars[-1]["c"] = lv * 0.90        # forming bar collapsing -- must be ignored
+        fired, _ = level_has_held(bars, lv)
+        self.assertTrue(fired)
+        bars[-2]["c"] = lv * 0.90        # a CLOSED bar below the level must block
+        self.assertFalse(level_has_held(bars, lv)[0])
 
 
 class VenueSanityTest(unittest.TestCase):
