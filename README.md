@@ -135,5 +135,5 @@ generated four earlier false positives. Collect labels first.
 | `RUNBOOK.md` | running the live trader; halts, alerts, procedures |
 | `research/levels/SCHEMA.md` | every column, and why it is measured that way |
 | `DECISIONS.md` | what was tried, what it measured, what was concluded |
-| `HYPOTHESES.md` | open questions |
+| `HYPOTHESES.md`, `CASCADE_HYPOTHESES.md` | pre-registrations from the retired funding and cascade lines. Kept unedited on purpose — they record what was predicted before the data arrived |
 | `deploy/launchd/README.md` | keeping it running across reboots |

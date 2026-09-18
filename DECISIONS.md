@@ -1,8 +1,8 @@
 # Decisions Log
 
 Dated record of non-obvious decisions made during the 2026-09-01 data-only
-pivot, with the evidence behind each one. See `PIVOT_STATUS.md` for the
-overall state of the pivot.
+pivot, with the evidence behind each one. `README.md` has the current state
+of the system; `research/levels/SCHEMA.md` has the data model.
 
 ---
 
@@ -246,3 +246,41 @@ pre-registration discipline used elsewhere in this project suggests at least
 50%+, collect short labels through `research.levels.call` the same way the
 long labels were collected, fit the short thresholds to those, and only then
 mirror the code. Do not start by mirroring the code.
+
+---
+
+## 2026-09-18 — Volume is not a discriminator; captured, never gated
+
+**Decision:** no volume reading enters the gate or the trade filter. All three
+continue to be recorded on every episode.
+
+**Evidence.** SCHEMA.md set this test in advance, and deliberately: three
+competing readings of "volume contracted into the level" are captured on every
+episode so the question gets settled from data rather than argued, with the
+criterion stated up front — near-zero gaps on all three settle it in the
+negative. At 25 labels (14 take / 5 skip / 6 maybe), `review --stats` gives:
+
+| feature | take avg | skip avg | gap |
+|---|---|---|---|
+| `vol_ratio_recent_ref` | 0.848 | 0.780 | +0.068 |
+| `vol_trend_slope` | 0.014 | 0.028 | −0.014 |
+| `vol_down_up_ratio` | 0.495 | 0.432 | +0.063 |
+
+Against the features the filter actually uses, those are noise: `near_sigma`
+separates takes from skips by **+4.121** and `suggested_rr` by **+1.313** —
+sixty times the largest volume gap. The pre-registered criterion is met.
+
+This also confirms the original note behind the whole question: the remembered
+feature was not the one first computed. At the fill bar every window measured
+0.90–1.25x its reference, normal to elevated.
+
+**What this does not establish.** Five skips. The criterion was written
+against exactly this comparison, so meeting it is the outcome it was designed
+to produce, and a gap resting on n=5 would move on a handful of new labels.
+This closes the question of gating on volume *today*. It does not close the
+question.
+
+**How to apply going forward:** do not add a volume threshold. Re-read
+`review --stats` when the skip count reaches roughly 15, and treat a gap that
+has grown rather than shrunk as the signal to look again. Capture costs
+nothing, so nothing is removed in the meantime.
