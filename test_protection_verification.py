@@ -282,6 +282,39 @@ class ProtectionStatusTest(unittest.TestCase):
         self.assertNotEqual(res["status"], "protected")
 
 
+class StopOnlyStatusTest(unittest.TestCase):
+    """place_stop_only had no verification at all -- an OID was enough.
+
+    Nothing on the levels path calls it today, but it is a public,
+    order-capable method that reports the same "protected" the caller treats
+    as permission to keep a position open.
+    """
+
+    def stop_only(self, resting, stop_oid="S1"):
+        b = StubBackend(resting, stop_oid=stop_oid)
+        return b.place_stop_only(coin="UNI", side="LONG", size_coin=46.3,
+                                 stop_price=95.0)
+
+    def test_verified_stop_is_protected(self):
+        self.assertEqual(self.stop_only([good_stop()])["status"], "protected")
+
+    def test_contradicted_stop_is_not_protected(self):
+        res = self.stop_only([good_stop(side="B")])
+        self.assertEqual(res["status"], "missing")
+        self.assertIs(res["stop_verified"], False)
+        self.assertIn("verify_fail", res["error"])
+
+    def test_unreported_fields_stay_protected(self):
+        res = self.stop_only([{"coin": "UNI", "oid": "S1", "side": "A", "sz": "46.3"}])
+        self.assertEqual(res["status"], "protected")
+        self.assertIn("verify_warn", res["error"])
+
+    def test_rejected_order_is_missing(self):
+        res = self.stop_only([], stop_oid=None)
+        self.assertEqual(res["status"], "missing")
+        self.assertIs(res["stop_verified"], False)
+
+
 class EndpointPreferenceTest(unittest.TestCase):
     """The plain openOrders endpoint cannot carry a verifiable answer."""
 

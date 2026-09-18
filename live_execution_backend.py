@@ -547,6 +547,7 @@ class LiveExecutionBackend(ExecutionBackend):
             "error": "",
             "trigger_type": HL_PROTECTION_TRIGGER_REFERENCE,
             "stop_trigger_price": float(stop_price),
+            "stop_verified": False,
         }
 
         if send_sz <= 0:
@@ -574,9 +575,29 @@ class LiveExecutionBackend(ExecutionBackend):
             allow_limit_fallback=HL_SL_ALLOW_LIMIT_FALLBACK,
         )
 
+        # Same rule as place_native_protection: an accepted order ID says the
+        # venue took something, not that what it took is a stop. This path had
+        # no verification at all, so it would have reported "protected" for an
+        # order resting on the wrong side of the market.
+        verification = self._verify_protection_orders(
+            coin=coin,
+            close_is_buy=close_is_buy,
+            expected_size_coin=send_sz,
+            expected_stop_px=rounded_stop_px,
+            expected_tp_px=0.0,
+            stop_oid=stop_oid,
+            tp_oid=None,
+        )
+        stop_hard, stop_soft = verification["stop"]
+        stop_err = self._append_verify_notes(str(stop_err or ""), stop_hard, stop_soft)
+        if verification.get("global"):
+            note = f"verify:{verification['global']}"
+            stop_err = f"{stop_err}; {note}" if stop_err else note
+
         result["stop_order_id"] = stop_oid or ""
-        result["status"] = "protected" if stop_oid else "missing"
-        result["error"] = str(stop_err or "")
+        result["stop_verified"] = bool(stop_oid) and not stop_hard
+        result["status"] = "protected" if result["stop_verified"] else "missing"
+        result["error"] = stop_err
 
         if LIVE_LOG_ORDERS:
             print(
