@@ -94,6 +94,15 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def iso_to_ms(ts: str) -> Optional[int]:
+    """now_iso() back into venue milliseconds. None if unparseable."""
+    try:
+        dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    return int(dt.timestamp() * 1000)
+
+
 def load_state() -> Dict[str, Any]:
     if STATE_PATH.exists():
         try:
@@ -697,10 +706,37 @@ def venue_sanity(backend, state: Dict[str, Any], equity: float):
     return None, False
 
 
+def assumed_loss(info: Dict[str, Any]) -> float:
+    """What this trade cost if it hit its stop, from the plan we recorded.
+
+    Used when the venue will not tell us what a close actually realised. The
+    daily loss stop exists to react to losses, so the safe assumption when a
+    number is missing is the losing one -- an unmeasured close must never be
+    cheaper than a measured one.
+    """
+    try:
+        entry = float(info.get("entry") or 0)
+        stop = float(info.get("stop") or 0)
+        size_coin = float(info.get("size_coin") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if entry <= 0 or stop <= 0 or size_coin <= 0:
+        return 0.0
+    return -abs(entry - stop) * size_coin
+
+
 def reconcile(backend, state: Dict[str, Any]) -> None:
     """Release slots for positions no longer open at the venue -- stopped out,
     took profit, or closed by hand. Without this the module believes it still
-    holds something forever and quietly stops trading."""
+    holds something forever and quietly stops trading.
+
+    This is also the only place a closed trade's result is ever observed, so
+    it is where realised_today has to be accrued. Until 2026-09-18 nothing
+    wrote that field: it was initialised to 0.0, reset to 0.0 each day, and
+    read once by the daily loss stop, which therefore compared 0.0 against a
+    negative threshold and could not fire. The kill switch the module's own
+    SAFETY MODEL advertises was inert for every trade.
+    """
     owned = state.get("owned", {})
     for coin in list(owned):
         try:
@@ -709,10 +745,28 @@ def reconcile(backend, state: Dict[str, Any]) -> None:
             continue
         if sz is not None and abs(sz) < 1e-12:
             info = owned.pop(coin, {})
+
+            since = iso_to_ms(info.get("opened_at", ""))
+            pnl = None
+            if since is not None:
+                try:
+                    pnl = backend.get_realised_pnl(coin, since)
+                except Exception as e:
+                    print(f"[LEVELS_LIVE] realised PnL query failed for {coin}: "
+                          f"{str(e)[:80]}")
+            if pnl is None:
+                pnl = assumed_loss(info)
+                note = f"pnl unavailable -- charged as a stop-out: {pnl:.2f}"
+            else:
+                note = f"realised {pnl:.2f}"
+
+            state["realised_today"] = state.get("realised_today", 0.0) + pnl
             log_trade({"ts_utc": now_iso(), "action": "closed", "coin": coin,
                        "episode_id": info.get("episode_id", ""), "result": "flat",
-                       "detail": "no longer open at venue"})
-            print(f"[LEVELS_LIVE] {coin} closed at venue -- slot released")
+                       "risk_usd": round(pnl, 2),
+                       "detail": f"no longer open at venue; {note}"})
+            print(f"[LEVELS_LIVE] {coin} closed at venue -- slot released, {note} "
+                  f"(day {state['realised_today']:.2f})")
     save_state(state)
 
 

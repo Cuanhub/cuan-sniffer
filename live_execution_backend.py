@@ -865,6 +865,55 @@ class LiveExecutionBackend(ExecutionBackend):
         record_api_success()
         return (equity, used, available)
 
+    # ── Realised PnL query ─────────────────────────────────────────────────
+
+    def get_realised_pnl(self, coin: str, since_ms: int) -> Optional[float]:
+        """Net realised PnL for `coin` from fills at or after since_ms.
+
+        Returns None on query failure, and the distinction matters: a caller
+        that reads a failure as 0.0 has a daily loss stop that cannot see
+        losses. Fees are subtracted where the venue reports them -- closedPnl
+        is gross, and at 3% risk per trade the fees on a churning day are not
+        rounding error.
+        """
+        coin = str(coin or "").upper().strip()
+        addr = self._get_user_state_address()
+        try:
+            fills = self.info.user_fills_by_time(addr, int(since_ms))
+        except Exception as e:
+            record_api_failure("live_fills", e)
+            if self.debug:
+                print(f"[LIVE_BACKEND] user_fills_by_time failed coin={coin} "
+                      f"since={since_ms}: {e}")
+            return None
+
+        if not isinstance(fills, list):
+            if self.debug:
+                print(f"[LIVE_BACKEND] user_fills_by_time unexpected type={type(fills)}")
+            return None
+
+        total = 0.0
+        matched = 0
+        for f in fills:
+            if not isinstance(f, dict):
+                continue
+            if str(f.get("coin", "")).upper() != coin:
+                continue
+            if int(f.get("time", 0) or 0) < int(since_ms):
+                continue
+            try:
+                total += float(f.get("closedPnl", 0) or 0)
+                total -= float(f.get("fee", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            matched += 1
+
+        record_api_success()
+        if LIVE_LOG_ORDERS:
+            print(f"[LIVE_BACKEND] realised_pnl {coin} since={since_ms} "
+                  f"fills={matched} net={total:.4f}")
+        return total
+
     # ── Venue position query ───────────────────────────────────────────────
 
     def _get_venue_signed_size(self, coin: str) -> Optional[float]:

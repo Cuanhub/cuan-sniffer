@@ -69,7 +69,7 @@ class FakeFill:
 
 class FakeBackend:
     def __init__(self, equity=1000.0, protection_ok=True, fill=True, mid=None,
-                 exit_fills=True, protection_oids=False):
+                 exit_fills=True, protection_oids=False, realised_pnl=0.0):
         self.equity = equity
         self.mid = mid
         self.protection_ok = protection_ok
@@ -78,6 +78,8 @@ class FakeBackend:
         self.protections = []
         self.exits = []
         self.cancels = []
+        self.pnl_queries = []
+        self.realised_pnl = realised_pnl   # None models a failed query
         self.exit_fills = exit_fills
         self.protection_oids = protection_oids
         self.venue = {}          # coin -> notional
@@ -125,6 +127,10 @@ class FakeBackend:
         # The real backend returns "protected" on success, never "ok".
         # The fake said "ok" and so agreed with the bug instead of catching it.
         return {"status": "protected", "stop_order_id": "s1", "tp_order_id": "t1"}
+
+    def get_realised_pnl(self, coin, since_ms):
+        self.pnl_queries.append((coin, since_ms))
+        return self.realised_pnl
 
     def cancel_order(self, coin, oid):
         self.cancels.append((coin, oid))
@@ -407,6 +413,85 @@ class VenueSanityTest(unittest.TestCase):
         b.venue = {"AAA": 100.0}
         self.state["owned"] = {"AAA": {}}
         self.assertEqual(T.venue_sanity(b, self.state, 1000.0), (None, False))
+
+
+class RealisedPnlTest(unittest.TestCase):
+    """The daily loss stop was inert for every trade this module ever made.
+
+    realised_today was initialised to 0.0, reset to 0.0 each day, and read
+    once by preflight -- and never written in between. preflight therefore
+    asked whether 0.0 <= -(15% of equity), which is never true. reconcile is
+    the only place a close is observed, so it is where the number has to come
+    from.
+    """
+
+    def state_holding(self, coin="AAA", entry=100.0, stop=95.0, size_coin=2.0):
+        return {"owned": {coin: {"episode_id": "e1", "entry": entry, "stop": stop,
+                                 "size_coin": size_coin, "size_usd": entry * size_coin,
+                                 "opened_at": "2026-09-18T07:00:00Z", "confirmed": True}},
+                "opened_today": 1, "day": "2026-09-18", "realised_today": 0.0,
+                "halted": False, "halt_reason": ""}
+
+    def test_iso_round_trips_to_venue_milliseconds(self):
+        self.assertEqual(T.iso_to_ms("2026-09-18T07:00:00Z"), 1789714800000)
+        self.assertIsNone(T.iso_to_ms("not a timestamp"))
+
+    def test_closed_position_accrues_its_loss(self):
+        b = FakeBackend(realised_pnl=-42.5)
+        b.venue = {}                       # flat at the venue
+        st = self.state_holding()
+        T.reconcile(b, st)
+        self.assertNotIn("AAA", st["owned"])
+        self.assertAlmostEqual(st["realised_today"], -42.5)
+        self.assertEqual(b.pnl_queries, [("AAA", 1789714800000)])
+
+    def test_closed_position_accrues_its_win(self):
+        b = FakeBackend(realised_pnl=18.0)
+        st = self.state_holding()
+        T.reconcile(b, st)
+        self.assertAlmostEqual(st["realised_today"], 18.0)
+
+    def test_unmeasurable_close_is_charged_as_a_stop_out(self):
+        # Reading a failed query as 0.0 is the bug this replaces. (100-95)*2.
+        b = FakeBackend(realised_pnl=None)
+        st = self.state_holding()
+        T.reconcile(b, st)
+        self.assertAlmostEqual(st["realised_today"], -10.0)
+
+    def test_losses_accumulate_across_closes(self):
+        st = self.state_holding()
+        T.reconcile(FakeBackend(realised_pnl=-30.0), st)
+        st["owned"]["BBB"] = {"episode_id": "e2", "entry": 100.0, "stop": 95.0,
+                              "size_coin": 2.0, "size_usd": 200.0,
+                              "opened_at": "2026-09-18T08:00:00Z", "confirmed": True}
+        T.reconcile(FakeBackend(realised_pnl=-30.0), st)
+        self.assertAlmostEqual(st["realised_today"], -60.0)
+
+    def test_daily_loss_stop_now_fires(self):
+        # The payoff. At $1000 equity the 15% stop trips below -$150.
+        b = FakeBackend(equity=1000.0, realised_pnl=-160.0)
+        st = self.state_holding()
+        T.reconcile(b, st)
+        reason = T.preflight(b, st)
+        self.assertIsNotNone(reason)
+        self.assertIn("daily loss stop", reason)
+        self.assertTrue(st["halted"])
+
+    def test_daily_loss_stop_leaves_a_normal_day_alone(self):
+        b = FakeBackend(equity=1000.0, realised_pnl=-20.0)
+        st = self.state_holding()
+        T.reconcile(b, st)
+        self.assertIsNone(T.preflight(b, st))
+        self.assertFalse(st["halted"])
+
+    def test_open_position_is_not_accrued(self):
+        b = FakeBackend(realised_pnl=-99.0)
+        b.venue = {"AAA": 200.0}           # still open
+        st = self.state_holding()
+        T.reconcile(b, st)
+        self.assertIn("AAA", st["owned"])
+        self.assertEqual(st["realised_today"], 0.0)
+        self.assertEqual(b.pnl_queries, [])
 
 
 class ModuleShapeTest(unittest.TestCase):
