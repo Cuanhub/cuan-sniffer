@@ -368,10 +368,6 @@ def main():
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
                 armed: bool, state: Dict[str, Any]) -> bool:
     """Place one entry, then protect it. Returns True if a position was opened."""
@@ -482,3 +478,7 @@ def preflight(backend, state: Dict[str, Any]):
         save_state(state)
         return state["halt_reason"]
     return None
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
