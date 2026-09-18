@@ -140,7 +140,11 @@ MIN_NOTIONAL_USD = _f("LEVELS_MIN_NOTIONAL", 12.0)
 # ---- operational rails ------------------------------------------------------
 MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 2)
 MAX_NEW_PER_DAY = _i("LEVELS_MAX_NEW_PER_DAY", 0)          # 0 = unlimited
-DAILY_LOSS_STOP_PCT = _f("LEVELS_DAILY_LOSS_STOP_PCT", 10.0)
+# 15%, not 10%. At 3% risk a 10% stop halts after 3 losing trades, and at the
+# ~3.4 reward/risk this filter selects for, a no-edge win rate would be ~23% --
+# so three straight losses is a 46% event and the system would spend most of
+# its life halted, learning nothing. 15% allows 5, where five straight is 27%.
+DAILY_LOSS_STOP_PCT = _f("LEVELS_DAILY_LOSS_STOP_PCT", 15.0)
 POLL_SEC = _i("LEVELS_POLL_SEC", 900)
 RESOLVE_MIN_BARS = _i("LEVELS_RESOLVE_MIN_BARS", 42)       # ~7d before judging
 ONSET_MATCH_SIGMA = _f("LEVELS_ONSET_MATCH_SIGMA", 0.5)
