@@ -618,8 +618,40 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     if prot.get("status") != "protected":
         print(f"[LEVELS_LIVE] !! protection FAILED on {coin} -- closing immediately; "
               f"an unprotected position is not the trade")
-        backend.execute_exit(coin=coin, side="LONG", price=fill_px,
-                             size_usd=size_usd, reason="protection_failed")
+        exit_fill = backend.execute_exit(coin=coin, side="LONG", price=fill_px,
+                                         size_usd=size_usd, reason="protection_failed")
+
+        # Cancel whatever the venue DID accept. Protection can fail with one
+        # leg resting, and a leg that failed verification may not be
+        # reduce-only -- an order like that, left on a flat account, opens a
+        # position rather than closing one: unstopped, and in a coin this
+        # module has just stopped tracking.
+        for oid in (prot.get("stop_order_id"), prot.get("tp_order_id")):
+            if not oid:
+                continue
+            try:
+                if not backend.cancel_order(coin=coin, oid=oid):
+                    print(f"[LEVELS_LIVE] !! cancel refused {coin} oid={oid}")
+            except Exception as e:
+                print(f"[LEVELS_LIVE] !! cancel failed {coin} oid={oid}: {str(e)[:80]}")
+
+        if not getattr(exit_fill, "filled", False):
+            # The close did not go through. The position is open, unprotected,
+            # and releasing the slot here would drop the only record this
+            # module has of it -- venue_sanity would then meet it as an
+            # unknown position and halt, but not until the next entry, with
+            # the rest of this pass still free to trade. Halt now and KEEP the
+            # slot, so reconcile() can retire it once it is genuinely flat.
+            state["halted"] = True
+            state["halt_reason"] = (
+                f"{coin}: protection failed and the emergency exit did not fill "
+                f"-- position is open and unprotected")
+            save_state(state)
+            log_trade({**row, "action": "emergency_exit", "result": "exit_failed",
+                       "detail": state["halt_reason"]})
+            print(f"[LEVELS_LIVE] !! HALT -- {state['halt_reason']}")
+            return False
+
         state["owned"].pop(coin, None)
         save_state(state)
         log_trade({**row, "action": "emergency_exit", "result": "closed"})

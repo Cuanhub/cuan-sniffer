@@ -68,7 +68,8 @@ class FakeFill:
 
 
 class FakeBackend:
-    def __init__(self, equity=1000.0, protection_ok=True, fill=True, mid=None):
+    def __init__(self, equity=1000.0, protection_ok=True, fill=True, mid=None,
+                 exit_fills=True, protection_oids=False):
         self.equity = equity
         self.mid = mid
         self.protection_ok = protection_ok
@@ -76,6 +77,9 @@ class FakeBackend:
         self.entries = []
         self.protections = []
         self.exits = []
+        self.cancels = []
+        self.exit_fills = exit_fills
+        self.protection_oids = protection_oids
         self.venue = {}          # coin -> notional
         self.info = self
 
@@ -111,13 +115,26 @@ class FakeBackend:
     def place_native_protection(self, coin, side, size_coin, stop_price, tp_price):
         self.protections.append(coin)
         if not self.protection_ok:
+            if self.protection_oids:
+                # The shape that actually needs cleaning up: the venue ACCEPTED
+                # an order and then described it back as something we did not
+                # ask for, so a live OID exists despite the failed status.
+                return {"status": "partial", "error": "verify_fail:not_reduce_only",
+                        "stop_order_id": "s1", "tp_order_id": ""}
             return {"status": "missing", "error": "rejected"}
         # The real backend returns "protected" on success, never "ok".
         # The fake said "ok" and so agreed with the bug instead of catching it.
         return {"status": "protected", "stop_order_id": "s1", "tp_order_id": "t1"}
 
+    def cancel_order(self, coin, oid):
+        self.cancels.append((coin, oid))
+        return True
+
     def execute_exit(self, coin, side, price, size_usd, reason):
         self.exits.append(coin)
+        if not self.exit_fills:
+            return FakeFill(filled=False, fill_price=0.0, fill_size_usd=0.0,
+                            reject_reason="exit_rejected")
         self.venue.pop(coin, None)
         return FakeFill(filled=True, fill_price=price, fill_size_usd=size_usd)
 
@@ -184,6 +201,29 @@ class ArmedPathTest(unittest.TestCase):
         ok = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
         self.assertFalse(ok)
         self.assertEqual(b.exits, ["AAA"], "an unprotected position must be closed")
+        self.assertNotIn("AAA", self.state["owned"])
+
+    def test_protection_failure_cancels_what_the_venue_accepted(self):
+        # A contradicted leg may not be reduce-only, and a non-reduce-only
+        # order resting on a flat account opens a position instead of closing
+        # one -- in a coin this module has just stopped tracking.
+        b = FakeBackend(protection_ok=False, protection_oids=True)
+        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
+        self.assertEqual(b.cancels, [("AAA", "s1")])
+
+    def test_failed_emergency_exit_halts_and_keeps_the_slot(self):
+        # The close can be rejected. Releasing the slot anyway would discard
+        # the only record of a position that is open and unprotected.
+        b = FakeBackend(protection_ok=False, exit_fills=False)
+        ok = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
+        self.assertFalse(ok)
+        self.assertTrue(self.state["halted"], "an unprotected open position must halt")
+        self.assertIn("AAA", self.state["owned"])
+
+    def test_successful_emergency_exit_releases_the_slot(self):
+        b = FakeBackend(protection_ok=False)
+        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
+        self.assertFalse(self.state.get("halted", False))
         self.assertNotIn("AAA", self.state["owned"])
 
     def test_dry_run_sends_nothing(self):
