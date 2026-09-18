@@ -35,10 +35,26 @@ from research.levels.scanner import fetch, _atr_pct
 from research.levels.venue_client import HyperliquidReadOnlyClient, VenueFetchError
 from research.funding.universe import select_universe
 
-# How near price must be to a level to be worth looking at. Deliberately loose:
-# this is a viewing window, not a filter, and a tight one would pre-decide the
-# very boundary these calls exist to locate.
-CANDIDATE_NEAR_SIGMA = 4.0
+# How far below price to look. Set from the user's own calls, not guessed: the
+# levels they said they would actually trade sat 5.45s (CASHCAT 0.149), 5.56s
+# (ETH 2355) and 8.03s (PUMP 0.0034) below price. The original 4.0s window
+# excluded ALL THREE -- the tool was showing shallow dips while they were
+# waiting for real structure. 12.0 covers their range with room either side.
+CANDIDATE_NEAR_SIGMA = 12.0
+
+# The user reads 1h and 4h and gets different levels from each -- CASHCAT 0.18
+# on the 1h against 0.149 on the 4h, both of which they named as entries. A
+# 4h-only tool cannot show half of what they trade.
+TIMEFRAMES = ("4h", "1h")
+
+# A level price left behind long ago cannot be broken, so it scores a perfect
+# hold rate while meaning "abandoned" rather than "respected". CASHCAT's Aug
+# 21-22 liquidation wicks ranked 2nd and 3rd on hold rate at 81% and 84% below
+# price, untested for 162 and 304 bars, while the level the user actually
+# named ranked 12th of 12. Levels are flagged, never dropped -- which of these
+# matters is the user's call to make, not mine to pre-empt.
+STALE_TOUCH_BARS = 120
+
 TARGET_LABELS = 50
 
 
@@ -49,20 +65,59 @@ def _f(d, k, dv=0.0):
         return dv
 
 
-def find_candidates(client, universe) -> List[Dict[str, Any]]:
+def _fetch_tf(client, coin: str, tf: str):
+    import time
+    now = int(time.time() * 1000)
+    days = C.HISTORY_DAYS if tf == "4h" else 60
+    raw = client.get_candles(coin, tf, now - days * 86400000, now)
+    out = []
+    for b in raw:
+        try:
+            out.append({"t": int(b["t"]), "o": float(b["o"]), "h": float(b["h"]),
+                        "l": float(b["l"]), "c": float(b["c"]), "v": float(b.get("v", 0.0))})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return sorted(out, key=lambda x: x["t"])
+
+
+def find_candidates(client, universe, timeframes=TIMEFRAMES) -> List[Dict[str, Any]]:
     out = []
     for u in universe:
         coin = u["symbol"]
-        try:
-            bars = fetch(client, coin)
-        except VenueFetchError:
-            continue
+        for tf in timeframes:
+            try:
+                bars = _fetch_tf(client, coin, tf)
+            except VenueFetchError:
+                continue
+            out.extend(_candidates_for(coin, bars, tf))
+    # Round-robin across coins rather than sorting by any quality measure.
+    # Sorting by hold rate is what buried the user's own levels behind
+    # liquidation wicks, and sorting by coin put six AAVE rows at the top of a
+    # 199-row sheet. Interleaving gives breadth across the universe without
+    # ranking anything, so a labelling pass sees a spread of coins, timeframes
+    # and distances instead of one asset's ladder.
+    by_coin: Dict[str, List[Dict[str, Any]]] = {}
+    for r in out:
+        by_coin.setdefault(r["coin"], []).append(r)
+    for rows in by_coin.values():
+        rows.sort(key=lambda r: r["_near"])
+    interleaved = []
+    depth = max((len(v) for v in by_coin.values()), default=0)
+    for k in range(depth):
+        for coin in sorted(by_coin):
+            if k < len(by_coin[coin]):
+                interleaved.append(by_coin[coin][k])
+    return interleaved
+
+
+def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
         if len(bars) < 120:
-            continue
+            return out
         i = len(bars) - 1
         sigma = log_sigma(bars, i)
         if sigma <= 0:
-            continue
+            return out
         px = bars[i]["c"]
         supports = detect_levels(bars, upto=i + 1, kind="support")
         resistances = detect_levels(bars, upto=i + 1, kind="resistance")
@@ -95,8 +150,8 @@ def find_candidates(client, universe) -> List[Dict[str, Any]]:
             w = bars[max(0, i - 42):i + 1]
             hi7 = max(x["h"] for x in w); lo7 = min(x["l"] for x in w)
             out.append({
-                "episode_id": storage.make_episode_id(coin, bars[i]["t"], L.price),
-                "coin": coin, "detected_at_utc": storage.now_iso(),
+                "episode_id": storage.make_episode_id(coin + "-" + tf, bars[i]["t"], L.price),
+                "coin": coin, "timeframe": tf, "detected_at_utc": storage.now_iso(),
                 "bar_ts_ms": bars[i]["t"], "level_price": round(L.price, 10),
                 "level_kind": "support", "level_touches": L.touches,
                 "level_holds": L.holds, "level_hold_rate": round(L.hold_rate, 4),
@@ -108,11 +163,12 @@ def find_candidates(client, universe) -> List[Dict[str, Any]]:
                 "suggested_tp": round(tp, 10), "suggested_rr": round(rr, 3),
                 "opposing_level_price": round(opp.price, 10) if opp else "",
                 "_px": px, "_near": near, "_hi7": hi7, "_lo7": lo7, "_ladder": ladder,
+                "_tf": tf,
+                "_stale": (i - L.last_touch_idx) > STALE_TOUCH_BARS if L.last_touch_idx >= 0 else True,
                 "_from_hi7": (px - hi7) / hi7 * 100, "_stop_pct": (entry - stop) / entry * 100,
                 **feats,
             })
-    out.sort(key=lambda r: r["_near"])
-    return out
+        return out
 
 
 def cmd_list(args):
@@ -128,11 +184,13 @@ def cmd_list(args):
     print(f"{len(cands)} level(s) within {CANDIDATE_NEAR_SIGMA}s of price -- showing {len(show)}")
     print(f"labels so far: {len(labelled)} / {TARGET_LABELS}\n")
     for n, c in enumerate(show, 1):
-        print(f"[{n}] {c['coin']}   price {c['_px']:.6g}")
+        stale = "  [STALE -- price left this behind]" if c.get("_stale") else ""
+        print(f"[{n}] {c['coin']} {c['_tf']}   price {c['_px']:.6g}")
         print(f"     level {c['level_price']:.6g}  ({-c['_near']:.2f}s below price, "
               f"{(c['level_price']-c['_px'])/c['_px']*100:+.2f}%)")
         print(f"     history: {c['level_touches']} tests, {c['level_holds']} held "
-              f"({c['level_hold_rate']*100:.0f}%), last tested {c['level_bars_since_last_touch']} bars ago")
+              f"({c['level_hold_rate']*100:.0f}%), last tested "
+              f"{c['level_bars_since_last_touch']} bars ago{stale}")
         print(f"     context: ran {_f(c,'run_sigma'):.1f}s, pulled back {_f(c,'pull_sigma'):.1f}s, "
               f"{int(_f(c,'retests'))} retests, {c['_from_hi7']:+.1f}% from 7d high")
         print(f"     trade  : entry {c['suggested_entry']:.6g}  stop {c['suggested_stop']:.6g} "
