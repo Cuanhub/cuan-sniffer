@@ -240,6 +240,25 @@ class ArmedPathTest(unittest.TestCase):
         T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
         self.assertAlmostEqual(self.state["realised_today"], -3.5)
 
+    def test_fetch_failure_is_recorded_not_just_printed(self):
+        # Every other drop reason writes a row; this one only printed, so a
+        # candidate lost to a rate limit left no trace in the durable record.
+        class Boom:
+            def get_candles(self, *a, **kw):
+                raise RuntimeError("candleSnapshot:AAA:1h failed: 429 rate limit")
+
+        orig, T._RO_CLIENT = T._RO_CLIENT, Boom()
+        try:
+            b = FakeBackend()
+            ok = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
+        finally:
+            T._RO_CLIENT = orig
+        self.assertFalse(ok)
+        self.assertEqual(b.entries, [], "nothing may be sent without a trigger check")
+        rows = T.TRADE_LOG.read_text()
+        self.assertIn("fetch_failed", rows)
+        self.assertIn("429", rows)
+
     def test_dry_run_sends_nothing(self):
         b = FakeBackend()
         T.execute_one(b, episode("AAA"), 1000.0, 1000.0, False, self.state)

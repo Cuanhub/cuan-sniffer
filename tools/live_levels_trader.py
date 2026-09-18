@@ -513,7 +513,17 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         try:
             bars1h = fetch_1h(_ro_client(), coin)
         except Exception as e:
-            print(f"[LEVELS_LIVE] skip {coin}: 1h fetch failed ({str(e)[:60]})")
+            # Recorded, not just printed. Every other way a candidate is
+            # dropped writes a row, so a setup lost to a rate limit was the
+            # one outcome invisible to live_trades.csv -- and the gap between
+            # what the gate saw and what it did is the measurement this whole
+            # package exists to make.
+            detail = f"1h fetch failed: {str(e)[:200]}"
+            print(f"[LEVELS_LIVE] skip {coin}: {detail}")
+            log_trade({"ts_utc": now_iso(), "action": "skip", "coin": coin,
+                       "episode_id": ep.get("episode_id", ""),
+                       "level_price": g("level_price"),
+                       "result": "fetch_failed", "detail": detail})
             return False
         fired, why = level_has_held(bars1h, g("level_price"))
         if not fired:
