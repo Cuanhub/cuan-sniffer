@@ -56,18 +56,14 @@ from research.levels.scanner import fetch, scan_coin                  # noqa: E4
 from research.levels.venue_client import HyperliquidReadOnlyClient    # noqa: E402
 from research.funding.universe import select_universe                 # noqa: E402
 
-# ---- rails -----------------------------------------------------------------
-RISK_PCT_PER_TRADE = float(os.getenv("LEVELS_RISK_PCT", "5"))     # % of equity at risk
-MAX_CONCURRENT = int(os.getenv("LEVELS_MAX_CONCURRENT", "2"))
-MAX_NEW_PER_DAY = int(os.getenv("LEVELS_MAX_NEW_PER_DAY", "0"))   # 0 = unlimited
-MAX_LEVERAGE = float(os.getenv("LEVELS_MAX_LEVERAGE", "10"))
-DAILY_LOSS_STOP_PCT = float(os.getenv("LEVELS_DAILY_LOSS_STOP_PCT", "10"))
-MIN_HOLD_RATE = float(os.getenv("LEVELS_MIN_HOLD_RATE", "0.90"))
-MIN_TOUCHES = int(os.getenv("LEVELS_MIN_TOUCHES", "8"))
-MIN_RR = float(os.getenv("LEVELS_MIN_RR", "2.5"))
-MAX_NEAR_SIGMA = float(os.getenv("LEVELS_MAX_NEAR_SIGMA", "2.0"))
-MIN_NOTIONAL_USD = float(os.getenv("LEVELS_MIN_NOTIONAL", "12"))
-POLL_SEC = int(os.getenv("LEVELS_POLL_SEC", "900"))
+# Rails come from research/levels/config.py -- one definition each, tagged with
+# whether they rest on a measurement or on my guess.
+from research.levels.config import (                                  # noqa: E402
+    RISK_PCT_PER_TRADE, MAX_CONCURRENT, MAX_NEW_PER_DAY, MAX_LEVERAGE,
+    DAILY_LOSS_STOP_PCT, MIN_HOLD_RATE, MIN_TOUCHES, MIN_RR,
+    MIN_NOTIONAL_USD, POLL_SEC,
+)
+from research.levels.config import summary as config_summary          # noqa: E402
 
 STATE_PATH = Path(__file__).resolve().parents[1] / "research" / "levels" / "data" / "_live_state.json"
 TRADE_LOG = Path(__file__).resolve().parents[1] / "research" / "levels" / "data" / "live_trades.csv"
@@ -131,8 +127,9 @@ def passes_quality(ep: Dict[str, Any]) -> Optional[str]:
         return f"touches {int(f('level_touches'))} < {MIN_TOUCHES}"
     if f("suggested_rr") < MIN_RR:
         return f"rr {f('suggested_rr'):.2f} < {MIN_RR}"
-    if f("near_sigma") > MAX_NEAR_SIGMA:
-        return f"near_sigma {f('near_sigma'):.2f} > {MAX_NEAR_SIGMA}"
+    # near_sigma is enforced once, inside the gate -- it used to be checked
+    # here too at a different value, so a setup could pass one and fail the
+    # other with nothing naming which was authoritative.
     return None
 
 
@@ -256,8 +253,7 @@ def main():
     print(f"[LEVELS_LIVE] rails: risk {RISK_PCT_PER_TRADE}%/trade, max {MAX_CONCURRENT} "
           f"concurrent, {'unlimited' if not MAX_NEW_PER_DAY else str(MAX_NEW_PER_DAY)+'/day'}, "
           f"lev cap {MAX_LEVERAGE}x, daily stop {DAILY_LOSS_STOP_PCT}%")
-    print(f"[LEVELS_LIVE] quality: hold>={MIN_HOLD_RATE} touches>={MIN_TOUCHES} "
-          f"rr>={MIN_RR} near<={MAX_NEAR_SIGMA}s")
+    print(f"[LEVELS_LIVE] {config_summary()}")
     print("[LEVELS_LIVE] NOTE: this gate measured -0.0413R vs random entry "
           "(z=-0.93, n=688 backfill trades).")
 

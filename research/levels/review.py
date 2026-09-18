@@ -37,16 +37,18 @@ def _f(row: Dict[str, Any], key: str, default: float = 0.0) -> float:
         return default
 
 
-def score(ep: Dict[str, Any]) -> float:
-    """Shortlist ranking. Hold rate is weighted hardest because it is what
-    separated the user's two named levels from the noise around them: BTC
-    74,900 held 10 of 10 tests, while a naive band around CASHCAT 0.14 held
-    8 of 18 and was not the same object at all."""
-    hold = _f(ep, "level_hold_rate")
-    touches = min(_f(ep, "level_touches"), 20) / 20.0
-    rr = min(_f(ep, "suggested_rr"), 4.0) / 4.0
-    near = 1.0 / (1.0 + abs(_f(ep, "near_sigma")))
-    return hold * 0.45 + rr * 0.30 + touches * 0.15 + near * 0.10
+def sort_key(ep: Dict[str, Any]):
+    """Shortlist ordering: hold rate first, then reward/risk.
+
+    This used to be a weighted sum of four features with coefficients
+    0.45/0.30/0.15/0.10 that I invented. Those weights encoded a claim about
+    relative importance that nothing supports, and dressing a guess up as a
+    score makes it harder to see that it is one. Hold rate leads because it
+    is the one level property with a measurement behind it -- BTC 74,900 held
+    10 of 10 tests where a naive band around CASHCAT 0.14 held 8 of 18. The
+    ordering is a convenience for reviewing, not a model.
+    """
+    return (_f(ep, "level_hold_rate"), _f(ep, "suggested_rr"))
 
 
 def labelled_ids():
@@ -64,14 +66,14 @@ def cmd_list(args):
         return 0
     done = labelled_ids()
     pending = [e for e in eps if e["episode_id"] not in done]
-    pending.sort(key=score, reverse=True)
+    pending.sort(key=sort_key, reverse=True)
     show = pending if args.all else pending[:args.top]
     print(f"{len(eps)} episodes logged, {len(done)} labelled, {len(pending)} pending"
           f" -- showing {len(show)}\n")
-    print(f"{'score':>6} {'coin':10} {'level':>12} {'hold':>5} {'tch':>4} {'run':>6} {'pull':>6} "
+    print(f"{'coin':10} {'level':>12} {'hold':>5} {'tch':>4} {'run':>6} {'pull':>6} "
           f"{'rr':>5} {'entry':>12}  episode_id")
     for e in show:
-        print(f"{score(e):>6.3f} {e['coin']:10} {_f(e,'level_price'):>12.6g} "
+        print(f"{e['coin']:10} {_f(e,'level_price'):>12.6g} "
               f"{_f(e,'level_hold_rate')*100:>4.0f}% {int(_f(e,'level_touches')):>4} "
               f"{_f(e,'run_sigma'):>5.1f}s {_f(e,'pull_sigma'):>5.1f}s "
               f"{_f(e,'suggested_rr'):>5.2f} {_f(e,'suggested_entry'):>12.6g}  {e['episode_id']}")

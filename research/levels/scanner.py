@@ -36,17 +36,15 @@ from typing import Any, Dict, List
 from research.levels import storage
 from research.levels.gate import evaluate, RUN_LOOKBACK
 from research.levels.levels import (
-    detect_levels, log_sigma, sigma_distance, HISTORY_BARS, nearest_level,
+    detect_levels, log_sigma, sigma_distance, nearest_level,
 )
 from research.levels.venue_client import HyperliquidReadOnlyClient, VenueFetchError
 from research.funding.universe import select_universe
 
-POLL_INTERVAL_SEC = 900        # 15m; levels are 4h structures, not tick data
-INTERVAL = "4h"
-HISTORY_DAYS = 125
-RESOLVE_MIN_BARS = 42          # ~7d before an outcome is judged
-ENTRY_BUFFER_SIGMA = 0.35      # limit sits this far above the level
-STOP_SIGMA_BELOW = 3.0         # structural stop, below the level
+from research.levels.config import (               # noqa: E402
+    POLL_SEC as POLL_INTERVAL_SEC, INTERVAL, HISTORY_DAYS, RESOLVE_MIN_BARS,
+    ENTRY_BUFFER_SIGMA, STOP_SIGMA_BELOW, ONSET_MATCH_SIGMA,
+)
 FAILURE_LOG = Path(__file__).resolve().parent / "data" / "_fetch_failures.log"
 
 _stop = False
@@ -89,9 +87,6 @@ def _atr_pct(bars: List[Dict[str, Any]], i: int, n: int = 14) -> float:
         trs.append(max(seg[j]["h"] - seg[j]["l"], abs(seg[j]["h"] - p), abs(seg[j]["l"] - p)))
     px = bars[i]["c"]
     return (sum(trs) / len(trs) / px * 100) if trs and px > 0 else 0.0
-
-
-ONSET_MATCH_SIGMA = 0.5    # a level within this distance is "the same level"
 
 
 def _fired_previous_bar(bars: List[Dict[str, Any]], i: int, level_price: float,

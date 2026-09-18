@@ -107,6 +107,33 @@ the position before returning +$31.84.
 `episode_id`, `labelled_at_utc`, `verdict` (`take` / `skip` / `maybe`),
 `confidence`, `note`.
 
+## All tunables live in `config.py`
+
+Every parameter is defined once, in `research/levels/config.py`, tagged with
+what it rests on:
+
+| tag | meaning |
+|---|---|
+| `STRUCTURAL` | forced by the problem. Changing it breaks correctness, not calibration. |
+| `EVIDENCED` | supported by a measurement recorded in `DECISIONS.md`. |
+| `GUESSED` | my invention. No evidence. Expected to move once labels exist. |
+
+Thirteen of the parameters are tagged `GUESSED`. That count is the honest
+measure of how much of this system is currently assumption.
+
+Before consolidation the system had 31 knobs across four modules, and
+`near_sigma` was filtered **twice** — at 5.0 in the gate and 2.0 in the
+trader — so a setup could pass one and fail the other with nothing naming
+which was authoritative. It is now enforced once, in the gate, at 2.0. That
+makes the gate stricter than it was during the backfill, so episodes
+collected before 2026-09-18 came through a looser filter than episodes
+collected after.
+
+The review shortlist is ordered by hold rate then reward/risk. It previously
+used a weighted sum with coefficients 0.45/0.30/0.15/0.10 that I invented;
+those encoded a claim about relative importance that nothing supports, and
+presenting a guess as a score made it harder to see that it was one.
+
 ## Calibration status — read before using any of this
 
 Gate thresholds (`run_sigma ≥ 6`, `pull_sigma ≥ 5`, `retests ≥ 2`) are

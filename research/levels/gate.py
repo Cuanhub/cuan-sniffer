@@ -32,14 +32,12 @@ from typing import Any, Dict, List, Optional
 
 from research.levels.levels import log_sigma, sigma_distance
 
-RUN_LOOKBACK = 84          # 4h bars (~14d) to measure the run over
-RUN_SIGMA_MIN = 6.0
-PULL_SIGMA_MIN = 5.0
-RETEST_LOOKBACK = 180      # ~30d
-MIN_RETESTS = 2
-RETEST_BAND_SIGMA = 1.0
-NEAR_SIGMA_MAX = 5.0       # how close price must already be to the level
-VOL_RECENT = 12
+from research.levels.config import (               # noqa: E402
+    RUN_LOOKBACK, RUN_SIGMA_MIN, PULL_SIGMA_MIN, RETEST_LOOKBACK,
+    MIN_RETESTS, RETEST_BAND_SIGMA, MAX_NEAR_SIGMA,
+)
+
+VOL_RECENT = 12            # volume windows; captured, never gated on
 VOL_REF = 60
 
 
@@ -101,7 +99,7 @@ def evaluate(bars: List[Dict[str, Any]], i: int, level_price: float) -> Optional
     near_sigma = sigma_distance(px, level_price, sigma)
     c_run = run_sigma >= RUN_SIGMA_MIN and pull_sigma >= PULL_SIGMA_MIN
     c_retest = retests >= MIN_RETESTS
-    c_near = near_sigma <= NEAR_SIGMA_MAX
+    c_near = near_sigma <= MAX_NEAR_SIGMA
 
     feats = {
         "sigma_4h": round(sigma, 6),

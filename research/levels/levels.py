@@ -24,16 +24,12 @@ import statistics
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-# Defaults are placeholders fitted to n=2 named levels; they are expected to
-# move once labelled data exists. See SCHEMA.md.
-PIVOT_WINDOW = 3           # bars either side for a swing pivot
-CLUSTER_SIGMA = 1.5        # pivots within this many sigma merge into one level
-TOUCH_BAND_SIGMA = 1.0     # how close a bar must come to count as a touch
-BREAK_SIGMA = 3.0          # close beyond the level, after a touch, that breaks it
-BREAK_WINDOW = 12          # bars after a touch in which a break is judged
-MIN_TOUCHES = 2
-VOL_LOOKBACK = 120         # bars used for the sigma estimate
-HISTORY_BARS = 720         # 4h bars of history to detect levels over (~120d)
+# All tunables live in config.py, each tagged STRUCTURAL / EVIDENCED / GUESSED.
+from research.levels.config import (               # noqa: E402
+    PIVOT_WINDOW, CLUSTER_SIGMA, TOUCH_BAND_SIGMA, BREAK_SIGMA, BREAK_WINDOW,
+    VOL_LOOKBACK,
+)
+from research.levels.config import MIN_TOUCHES_DETECT as MIN_TOUCHES  # noqa: E402
 
 
 def log_sigma(bars: List[Dict[str, Any]], i: int, lookback: int = VOL_LOOKBACK) -> float:
