@@ -42,9 +42,11 @@ import json
 import os
 import signal
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
@@ -62,7 +64,7 @@ from research.levels.config import (                                  # noqa: E4
     RISK_PCT_PER_TRADE, MAX_CONCURRENT, MAX_NEW_PER_DAY, MAX_LEVERAGE,
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
-    MAX_ENTRY_DRIFT_PCT,
+    MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS,
 )
 from research.levels.config import summary as config_summary          # noqa: E402
 
@@ -110,7 +112,7 @@ def load_state() -> Dict[str, Any]:
             return json.loads(STATE_PATH.read_text())
         except Exception:
             pass
-    return {"owned": {}, "opened_today": 0, "day": "", "realised_today": 0.0,
+    return {"owned": {}, "watching": {}, "opened_today": 0, "day": "", "realised_today": 0.0,
             "halted": False, "halt_reason": ""}
 
 
@@ -133,8 +135,27 @@ def log_trade(row: Dict[str, Any]) -> None:
         w.writerow({k: row.get(k, "") for k in cols})
 
 
-def passes_quality(ep: Dict[str, Any]) -> Optional[str]:
+def passes_quality(ep: Dict[str, Any], watched: bool = False) -> Optional[str]:
     """Returns a rejection reason, or None if the setup clears the bar.
+
+    `watched` means this level already cleared the full bar on an earlier pass
+    and is being re-checked as price comes back to it. Depth and rest are then
+    skipped, because they are ADMISSION criteria and cannot survive the thing
+    they are admitting the level for.
+
+    Both measure distance from the level -- depth wants price >=5 sigma above
+    it, rest wants the level untested for >=9 bars -- and the entry trigger
+    requires the opposite of each: price within 2 sigma, touched inside 12
+    hours. Checking them again at entry is asking a level to be far away at
+    the moment it is being bought for being near. That conjunction is empty,
+    and it took the trader to 3041 consecutive "not_triggered" decisions with
+    the trigger never firing once. This docstring already said they were "one
+    underlying factor": price far from a level has necessarily not tested it
+    lately.
+
+    Target, headroom and reward/risk are NOT skipped. Those stay true, and
+    stay meaningful, with price sitting on the level -- on 2026-09-18 the RR
+    floor correctly refused all three USELESS triggers at rr 0.45-0.63.
 
     Derived from 18 of the user's own take/skip calls, not invented. Scored on
     those labels this combination keeps 8 of 11 takes and admits 0 of 5 skips.
@@ -154,11 +175,12 @@ def passes_quality(ep: Dict[str, Any]) -> Optional[str]:
             return float(ep.get(k) or d)
         except (TypeError, ValueError):
             return d
-    if f("near_sigma") < TRADE_MIN_NEAR_SIGMA:
-        return f"depth {f('near_sigma'):.2f}s < {TRADE_MIN_NEAR_SIGMA}s (price too close to the level)"
-    if f("level_bars_since_last_touch") < TRADE_MIN_BARS_SINCE_TOUCH:
-        return (f"last tested {int(f('level_bars_since_last_touch'))}b "
-                f"< {TRADE_MIN_BARS_SINCE_TOUCH}b (still sitting on it)")
+    if not watched:
+        if f("near_sigma") < TRADE_MIN_NEAR_SIGMA:
+            return f"depth {f('near_sigma'):.2f}s < {TRADE_MIN_NEAR_SIGMA}s (price too close to the level)"
+        if f("level_bars_since_last_touch") < TRADE_MIN_BARS_SINCE_TOUCH:
+            return (f"last tested {int(f('level_bars_since_last_touch'))}b "
+                    f"< {TRADE_MIN_BARS_SINCE_TOUCH}b (still sitting on it)")
     if not str(ep.get("overhead_sigma", "")).strip():
         return "no resistance mapped above -- no target"
     if f("overhead_sigma") < TRADE_MIN_OVERHEAD_SIGMA:
@@ -225,9 +247,95 @@ def size_from_stop(equity: float, entry: float, stop: float,
             "margin_capped": margin_capped}
 
 
-def build_intents(client, universe) -> List[Dict[str, Any]]:
+@dataclass(frozen=True)
+class Outcome:
+    """What execute_one did.
+
+    Truthy when a position was opened AND protected, so `if execute_one(...)`
+    keeps its old meaning.
+
+    order_sent is separate because venue_sanity keys off it. That check costs a
+    user_state call and must run after anything that could have changed what
+    the venue holds -- but it was running after EVERY candidate, ~99% of which
+    send nothing. At ~130 candidates a pass that is ~130 extra calls per pass;
+    it tripped 429s, and a 429 is transient, so the loop broke and abandoned
+    the rest of the pass. 22 passes were truncated that way in nine hours,
+    mean coverage 87 of 129 candidates.
+    """
+    opened: bool = False
+    order_sent: bool = False
+
+    def __bool__(self) -> bool:
+        return self.opened
+
+
+def watch_key(ep: Dict[str, Any]) -> str:
+    return f"{str(ep.get('coin','')).upper()}|{ep.get('level_price','')}"
+
+
+def prune_watchlist(watching: Dict[str, Any]) -> int:
+    """Drop levels watched longer than WATCH_TTL_HOURS. Returns the count."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=WATCH_TTL_HOURS)
+    dropped = 0
+    for key in list(watching):
+        at = iso_to_ms(watching[key].get("admitted_at", ""))
+        if at is None or at < cutoff.timestamp() * 1000:
+            watching.pop(key, None)
+            dropped += 1
+    return dropped
+
+
+def seed_watchlist_from_log(watching: Dict[str, Any]) -> int:
+    """Admit levels the trade log shows already cleared the full bar.
+
+    The watchlist is new, so it starts empty, and a level only becomes
+    eligible once it has been seen while price was still far above it. That
+    would leave the levels price has ALREADY come back to -- the ones closest
+    to triggering -- ineligible until they drift far away and return again.
+
+    Those admissions did happen and were recorded: a dry_run/planned row is
+    written only for a setup that cleared the quality bar, so the log is an
+    accurate register of what qualified and when. This replays the ones inside
+    the TTL. Returns the number added.
+    """
+    import csv as _csv
+    if not TRADE_LOG.exists():
+        return 0
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(hours=WATCH_TTL_HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    added = 0
+    try:
+        with open(TRADE_LOG, newline="") as fh:
+            for r in _csv.DictReader(fh):
+                if r.get("action") != "dry_run" or r.get("result") != "planned":
+                    continue
+                if (r.get("ts_utc") or "") < cutoff:
+                    continue
+                key = f"{str(r.get('coin','')).upper()}|{r.get('level_price','')}"
+                if key in watching:
+                    continue
+                watching[key] = {"coin": r.get("coin"),
+                                 "level_price": r.get("level_price"),
+                                 "admitted_at": r.get("ts_utc"),
+                                 "seeded": True}
+                added += 1
+    except (OSError, _csv.Error) as e:
+        print(f"[LEVELS_LIVE] watchlist seed failed: {str(e)[:100]}")
+        return added
+    return added
+
+
+def build_intents(client, universe, watching: Optional[Dict[str, Any]] = None
+                  ) -> Tuple[List[Dict[str, Any]], List[Any]]:
     """Scan for setups and keep the ones clearing the quality bar. No side
     effects, no venue writes -- this half only reads and computes.
+
+    A level clearing the FULL bar is admitted to `watching` and stays eligible
+    for WATCH_TTL_HOURS. While it is watched it only has to clear the entry
+    criteria -- target, headroom, reward/risk -- because depth and rest were
+    already answered at admission and cannot be true again once price has come
+    back to the level. Without that, the quality bar and the entry trigger
+    contradict each other and nothing can ever be bought (see passes_quality).
 
     Uses the SAME candidate source as the call sheet the user labels. That
     matters more than it looks: the trader previously used scanner.scan_coin,
@@ -238,13 +346,27 @@ def build_intents(client, universe) -> List[Dict[str, Any]]:
     those labels was being applied to a different population than it was
     measured on.
     """
+    watching = {} if watching is None else watching
     intents, rejected = [], []
     for ep in _find_candidates(client, universe):
-        why = passes_quality(ep)
-        if why:
-            rejected.append((ep.get("coin"), ep.get("level_price"), why))
+        key = watch_key(ep)
+        strict = passes_quality(ep, watched=False)
+        if strict is None:
+            # Clears the full bar: admit it, or refresh what is already there.
+            watching.setdefault(key, {"coin": ep.get("coin"),
+                                      "level_price": ep.get("level_price"),
+                                      "admitted_at": now_iso()})
+            intents.append(ep)
             continue
-        intents.append(ep)
+        if key in watching:
+            relaxed = passes_quality(ep, watched=True)
+            if relaxed is None:
+                intents.append({**ep, "_watched": True})
+                continue
+            rejected.append((ep.get("coin"), ep.get("level_price"),
+                             f"watched, but {relaxed}"))
+            continue
+        rejected.append((ep.get("coin"), ep.get("level_price"), strict))
     return intents, rejected
 
 
@@ -277,6 +399,10 @@ def main():
                          "in a shell history nor a leftover env var can trade on its own.")
     ap.add_argument("--resume", action="store_true",
                     help="clear a daily-loss halt and resume trading")
+    ap.add_argument("--seed-watchlist", action="store_true",
+                    help="admit levels the trade log shows already cleared the "
+                         "quality bar, then exit. Run once after the watchlist "
+                         "is introduced; it is empty otherwise.")
     args = ap.parse_args()
 
     signal.signal(signal.SIGTERM, _sig)
@@ -289,6 +415,15 @@ def main():
         save_state(state)
     if args.status:
         print(json.dumps(state, indent=2))
+        return 0
+    if args.seed_watchlist:
+        watching = state.setdefault("watching", {})
+        before = len(watching)
+        added = seed_watchlist_from_log(watching)
+        prune_watchlist(watching)
+        save_state(state)
+        print(f"[LEVELS_LIVE] watchlist seeded: {before} -> {len(watching)} "
+              f"({added} admitted from the trade log)")
         return 0
     if args.resume:
         state["halted"] = False
@@ -373,9 +508,17 @@ def main():
                         break
                     time.sleep(1)
                 continue
-        intents, rejected = build_intents(ro, universe)
-        print(f"\n[LEVELS_LIVE] {len(intents)} setup(s) cleared the quality bar, "
+        watching = state.setdefault("watching", {})
+        expired = prune_watchlist(watching)
+        intents, rejected = build_intents(ro, universe, watching)
+        save_state(state)
+        n_watched = sum(1 for e in intents if e.get("_watched"))
+        print(f"\n[LEVELS_LIVE] {len(intents)} setup(s) cleared the quality bar "
+              f"({n_watched} of them on the watchlist as price came back), "
               f"{len(rejected)} rejected")
+        print(f"[LEVELS_LIVE] watching {len(watching)} level(s) for up to "
+              f"{WATCH_TTL_HOURS}h"
+              + (f"; {expired} expired this pass" if expired else ""))
         for c, lp, why in rejected[:8]:
             print(f"    reject {c:10} level={lp} -- {why}")
         if intents:
@@ -404,10 +547,18 @@ def main():
             if len(state.get("owned", {})) >= MAX_CONCURRENT:
                 print("[LEVELS_LIVE] concurrency cap reached, stopping this pass")
                 break
-            execute_one(backend, ep, equity, available, armed, state)
-            # Re-checked after EVERY entry, not once per pass. The runaway
-            # opened twelve positions inside a single pass, so a per-pass
-            # check would have reported the damage rather than prevented it.
+            outcome = execute_one(backend, ep, equity, available, armed, state)
+            # Re-checked after every ORDER, not once per pass: the runaway
+            # opened twelve positions inside a single pass, so a per-pass check
+            # would have reported the damage rather than prevented it.
+            #
+            # After every order, though -- not after every candidate. Nearly
+            # all of them send nothing, and asking the venue anyway added ~130
+            # user_state calls a pass, tripped 429s, and truncated the pass on
+            # the transient branch below. The safety property is unchanged:
+            # nothing can reach the venue without this running straight after.
+            if not outcome.order_sent:
+                continue
             bad, fatal = venue_sanity(backend, state, equity)
             if bad and fatal:
                 halt(state, bad, "after entry")
@@ -524,14 +675,14 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
                        "episode_id": ep.get("episode_id", ""),
                        "level_price": g("level_price"),
                        "result": "fetch_failed", "detail": detail})
-            return False
+            return Outcome()
         fired, why = level_has_held(bars1h, g("level_price"))
         if not fired:
             log_trade({"ts_utc": now_iso(), "action": "skip", "coin": coin,
                        "episode_id": ep.get("episode_id", ""), "level_price": g("level_price"),
                        "result": "not_triggered", "detail": why})
             print(f"[LEVELS_LIVE] wait {coin} @ {g('level_price'):.6g}: {why}")
-            return False
+            return Outcome()
         print(f"[LEVELS_LIVE] TRIGGER {coin} @ {g('level_price'):.6g}: {why}")
         for flag in review_flags(ep, size_from_stop(equity, entry, stop, available)["size_usd"], equity):
             print(f"[LEVELS_LIVE] [REVIEW] {coin}: {flag}")
@@ -551,7 +702,7 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
                        "stop": stop, "tp": tp, "result": "not_actionable",
                        "detail": why})
             print(f"[LEVELS_LIVE] skip {coin}: {why}")
-            return False
+            return Outcome()
         entry = ref
 
     szi = size_from_stop(equity, entry, stop, available)
@@ -565,13 +716,13 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     if size_usd < MIN_NOTIONAL_USD:
         row.update({"action": "skip", "result": "below_min_notional"})
         log_trade(row)
-        return False
+        return Outcome()
     if coin in state.get("owned", {}):
-        return False
+        return Outcome()
     if not armed:
         row.update({"action": "dry_run", "result": "not_armed"})
         log_trade(row)
-        return False
+        return Outcome()
 
     # Claim the slot BEFORE sending the order, not after parsing the reply.
     # On 2026-09-18 this recorded the position only after a fill it believed
@@ -598,7 +749,7 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         row.update({"action": "entry", "result": "rejected",
                     "detail": str(getattr(fill, "reject_reason", ""))[:400]})
         log_trade(row)
-        return False
+        return Outcome(order_sent=True)
 
     fill_px = float(getattr(fill, "fill_price", 0) or 0)
     filled_usd = float(getattr(fill, "fill_size_usd", 0) or 0) or size_usd
@@ -611,7 +762,7 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         row.update({"action": "entry", "result": "unparseable_fill",
                     "detail": state["halt_reason"]})
         log_trade(row)
-        return False
+        return Outcome(order_sent=True)
 
     state["owned"][coin].update({"entry": fill_px, "size_coin": size_coin,
                                  "confirmed": True})
@@ -673,7 +824,7 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
                         f"not fill -- position is open and unprotected")
             log_trade({**row, "action": "emergency_exit", "result": "exit_failed",
                        "detail": state["halt_reason"]})
-            return False
+            return Outcome(order_sent=True)
 
         note = accrue_close(backend, state, coin, state["owned"].get(coin, {}))
         state["owned"].pop(coin, None)
@@ -687,11 +838,11 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
             f"⚠️ *{coin}* opened and closed immediately\n"
             f"protection came back `{prot.get('status', '?')}`\n"
             f"{str(prot.get('error', ''))[:300]}\n{note}")
-        return False
+        return Outcome(order_sent=True)
 
     print(f"[LEVELS_LIVE] OPENED {coin} {size_coin} @ {fill_px:.6g} "
           f"stop {stop:.6g} tp {tp:.6g}")
-    return True
+    return Outcome(opened=True, order_sent=True)
 
 
 def venue_sanity(backend, state: Dict[str, Any], equity: float):

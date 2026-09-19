@@ -259,6 +259,27 @@ class ArmedPathTest(unittest.TestCase):
         self.assertIn("fetch_failed", rows)
         self.assertIn("429", rows)
 
+    def test_a_skipped_candidate_reports_no_order(self):
+        # venue_sanity keys off this. A dry candidate must not cost a
+        # user_state call -- that is what truncated 22 passes.
+        b = FakeBackend()
+        out = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, False, self.state)
+        self.assertFalse(out.order_sent)
+
+    def test_a_filled_entry_reports_an_order(self):
+        b = FakeBackend()
+        out = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
+        self.assertTrue(out.order_sent)
+        self.assertTrue(out.opened)
+
+    def test_a_rejected_entry_still_reports_an_order(self):
+        # The order reached the venue; whether it filled is a separate
+        # question, and venue_sanity must still run.
+        b = FakeBackend(fill=False)
+        out = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
+        self.assertTrue(out.order_sent)
+        self.assertFalse(out.opened)
+
     def test_dry_run_sends_nothing(self):
         b = FakeBackend()
         T.execute_one(b, episode("AAA"), 1000.0, 1000.0, False, self.state)
@@ -605,6 +626,122 @@ class HaltAlertTest(unittest.TestCase):
         self.assertEqual(
             body.count('state["halted"] = True'), 1,
             "a halt that sets the flag directly is a halt nobody is told about")
+
+
+def gated(coin="AAA", level=100.0, near=7.0, rest=20, overhead=7.0, rr=3.0):
+    """A gated episode as call.find_candidates emits it."""
+    return {"coin": coin, "level_price": level, "episode_id": f"{coin}-1H_1_{level}",
+            "near_sigma": near, "level_bars_since_last_touch": rest,
+            "overhead_sigma": overhead, "suggested_rr": rr,
+            "suggested_entry": level, "suggested_stop": level * 0.95,
+            "suggested_tp": level * 1.15, "level_hold_rate": 1.0,
+            "level_touches": 10, "level_origin": "swing_low"}
+
+
+class WatchlistTest(unittest.TestCase):
+    """The quality bar and the entry trigger describe the same level at two
+    different moments, and contradict each other at one.
+
+    Depth wants price >=5 sigma ABOVE the level; the trigger wants it within
+    2 sigma. Rest wants the level untested for >=9 bars; the trigger wants it
+    touched inside 12 hours. Checked together on one candidate in one pass
+    they are an empty set, and the trader proved it: 3041 consecutive
+    not_triggered decisions, the trigger never once firing.
+    """
+
+    def test_depth_and_rest_are_admission_only(self):
+        shallow = gated(near=0.5, rest=1)
+        self.assertIsNotNone(T.passes_quality(shallow, watched=False))
+        self.assertIsNone(T.passes_quality(shallow, watched=True))
+
+    def test_entry_criteria_still_apply_while_watched(self):
+        # These stay true and stay meaningful with price sitting on the level.
+        # The rr floor correctly refused all three USELESS triggers at 0.45-0.63.
+        self.assertIsNotNone(T.passes_quality(gated(near=0.5, rr=0.45), watched=True))
+        self.assertIsNotNone(T.passes_quality(gated(near=0.5, overhead=1.0), watched=True))
+        self.assertIsNotNone(T.passes_quality(gated(near=0.5, overhead=""), watched=True))
+
+    def test_price_returning_to_an_admitted_level_still_qualifies(self):
+        orig = T._find_candidates
+        watching = {}
+        try:
+            # pass 1: price far above -- clears the full bar, gets admitted
+            T._find_candidates = lambda c, u: [gated(near=7.0, rest=20)]
+            intents, _ = T.build_intents(None, None, watching)
+            self.assertEqual(len(intents), 1)
+            self.assertIn("AAA|100.0", watching)
+
+            # pass 2: price has come back to the level -- depth and rest now
+            # fail, which is exactly what being ready to enter looks like
+            T._find_candidates = lambda c, u: [gated(near=0.4, rest=1)]
+            intents, rejected = T.build_intents(None, None, watching)
+            self.assertEqual(len(intents), 1, "a watched level must survive the pullback")
+            self.assertTrue(intents[0]["_watched"])
+            self.assertEqual(rejected, [])
+        finally:
+            T._find_candidates = orig
+
+    def test_an_unadmitted_shallow_level_is_still_rejected(self):
+        orig = T._find_candidates
+        try:
+            T._find_candidates = lambda c, u: [gated(near=0.4, rest=1)]
+            intents, rejected = T.build_intents(None, None, {})
+            self.assertEqual(intents, [])
+            self.assertIn("depth", rejected[0][2])
+        finally:
+            T._find_candidates = orig
+
+    def test_watchlist_expires(self):
+        from datetime import datetime, timedelta, timezone
+        stale = (datetime.now(timezone.utc)
+                 - timedelta(hours=T.WATCH_TTL_HOURS + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        watching = {"AAA|100.0": {"admitted_at": stale},
+                    "BBB|200.0": {"admitted_at": T.now_iso()}}
+        self.assertEqual(T.prune_watchlist(watching), 1)
+        self.assertNotIn("AAA|100.0", watching)
+        self.assertIn("BBB|200.0", watching)
+
+    def test_seeding_replays_admissions_from_the_trade_log(self):
+        # A dry_run/planned row is written only for a setup that cleared the
+        # full bar, so the log is an accurate register of what qualified.
+        from datetime import datetime, timedelta, timezone
+        old_ts = (datetime.now(timezone.utc)
+                  - timedelta(hours=T.WATCH_TTL_HOURS + 2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        T.log_trade({"ts_utc": T.now_iso(), "action": "dry_run", "coin": "AAA",
+                     "level_price": "100.0", "result": "planned"})
+        T.log_trade({"ts_utc": T.now_iso(), "action": "skip", "coin": "BBB",
+                     "level_price": "200.0", "result": "not_triggered"})
+        T.log_trade({"ts_utc": old_ts, "action": "dry_run", "coin": "CCC",
+                     "level_price": "300.0", "result": "planned"})
+        watching = {}
+        added = T.seed_watchlist_from_log(watching)
+        self.assertEqual(added, 1)
+        self.assertIn("AAA|100.0", watching)
+        self.assertNotIn("BBB|200.0", watching, "a skip is not an admission")
+        self.assertNotIn("CCC|300.0", watching, "outside the TTL")
+
+    def test_seeding_is_idempotent(self):
+        T.log_trade({"ts_utc": T.now_iso(), "action": "dry_run", "coin": "AAA",
+                     "level_price": "100.0", "result": "planned"})
+        watching = {}
+        self.assertEqual(T.seed_watchlist_from_log(watching), 1)
+        self.assertEqual(T.seed_watchlist_from_log(watching), 0)
+
+    def test_seeding_without_a_log_is_harmless(self):
+        self.assertEqual(T.seed_watchlist_from_log({}), 0)
+
+    def test_unparseable_admission_time_expires(self):
+        watching = {"AAA|100.0": {"admitted_at": "garbage"}}
+        self.assertEqual(T.prune_watchlist(watching), 1)
+
+
+class OutcomeTest(unittest.TestCase):
+    """venue_sanity must run after every ORDER, not every candidate."""
+
+    def test_truthiness_tracks_opened(self):
+        self.assertTrue(T.Outcome(opened=True, order_sent=True))
+        self.assertFalse(T.Outcome(opened=False, order_sent=True))
+        self.assertFalse(T.Outcome())
 
 
 class ModuleShapeTest(unittest.TestCase):

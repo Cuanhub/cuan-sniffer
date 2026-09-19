@@ -168,6 +168,28 @@ TRIGGER_TOUCH_LOOKBACK_HOURS = _i("LEVELS_TRIGGER_TOUCH_LOOKBACK_HOURS", 12)
 # the market. The channel has a ceiling as well as a floor.
 TRIGGER_MAX_ABOVE_SIGMA = _f("LEVELS_TRIGGER_MAX_ABOVE_SIGMA", 2.0)
 
+# How long a level stays on the watchlist after it clears the quality bar.
+#
+# STRUCTURAL. The quality filter and the entry trigger describe the SAME level
+# at two different moments, and they disagree by construction: depth demands
+# price sit >=5 sigma ABOVE the level, the trigger demands it sit <=2 sigma
+# above. Evaluated in one pass on one candidate those are an empty set, which
+# is why the trader took zero trades between 2026-09-18 15:53 and 2026-09-19
+# 00:00 -- 3041 decisions, every one "not_triggered", the trigger never once
+# firing. trigger.py always said this out loud: the filters pick levels "worth
+# watching, while price is still 5-10 sigma above them", and the trigger
+# decides "the moment of entry", which "is a separate question".
+#
+# Watching is what connects the two moments. A level admitted while price is
+# far above stays eligible while price comes back to it, so depth and rest are
+# checked once, at admission, rather than again at entry where they can no
+# longer be true.
+#
+# 48h: the user's takes sit 0.18-10.00 sigma below price (median 5.80), and a
+# 5-sigma pullback is a multi-day move for a major. Too short silently
+# re-creates the deadlock for anything slower than the window.
+WATCH_TTL_HOURS = _i("LEVELS_WATCH_TTL_HOURS", 48)
+
 # ---- operational rails ------------------------------------------------------
 MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 2)
 # 5, matching the daily loss stop's own arithmetic: at 3% risk a 15% stop

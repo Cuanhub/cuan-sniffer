@@ -42,6 +42,25 @@ def isolated_runtime_files(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_live_venue(monkeypatch):
+    """No test may reach Hyperliquid.
+
+    The trader builds its read-only client lazily into a module global, so a
+    test that exercises the armed path without supplying candles silently
+    fetches them from the real API -- three new tests did exactly that and
+    took 64 seconds doing it. Fail loudly instead; tests that need candles
+    assign their own fake, as ArmedPathTest does.
+    """
+    class _Refuse:
+        def get_candles(self, *a, **kw):
+            raise AssertionError(
+                "test reached the live venue: set T._RO_CLIENT to a fake")
+
+    import tools.live_levels_trader as trader
+    monkeypatch.setattr(trader, "_RO_CLIENT", _Refuse())
+
+
+@pytest.fixture(autouse=True)
 def captured_alerts(monkeypatch):
     """Swallow outbound alerts and hand the payloads back for assertions."""
     sent = []
