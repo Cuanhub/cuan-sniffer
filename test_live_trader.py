@@ -707,6 +707,25 @@ class WatchlistTest(unittest.TestCase):
         finally:
             T._find_candidates = orig
 
+    def test_requalifying_restarts_the_ttl_clock(self):
+        # A level price is still far above keeps qualifying pass after pass.
+        # Ageing it out underneath that would drop it for no reason; the
+        # window that matters starts when it stops clearing on its own.
+        from datetime import datetime, timedelta, timezone
+        stale = (datetime.now(timezone.utc)
+                 - timedelta(hours=T.WATCH_TTL_HOURS - 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        watching = {"AAA|100.0": {"coin": "AAA", "level_price": 100.0,
+                                  "admitted_at": stale}}
+        orig = T._find_candidates
+        try:
+            T._find_candidates = lambda c, u: [gated(near=7.0, rest=20)]
+            T.build_intents(None, None, watching)
+        finally:
+            T._find_candidates = orig
+        self.assertNotEqual(watching["AAA|100.0"]["admitted_at"], stale,
+                            "re-qualifying must restart the clock")
+        self.assertEqual(T.prune_watchlist(watching), 0)
+
     def test_an_unadmitted_shallow_level_is_still_rejected(self):
         orig = T._find_candidates
         try:

@@ -352,10 +352,16 @@ def build_intents(client, universe, watching: Optional[Dict[str, Any]] = None
         key = watch_key(ep)
         strict = passes_quality(ep, watched=False)
         if strict is None:
-            # Clears the full bar: admit it, or refresh what is already there.
-            watching.setdefault(key, {"coin": ep.get("coin"),
-                                      "level_price": ep.get("level_price"),
-                                      "admitted_at": now_iso()})
+            # Clears the full bar, so the clock restarts. The TTL means "48h
+            # since this last qualified", not "48h since we first noticed it":
+            # a level price is still far above goes on qualifying pass after
+            # pass, and letting it age out underneath that would drop it for
+            # no reason. The window that matters starts when price closes in
+            # and the level stops clearing on its own.
+            entry = watching.get(key) or {"coin": ep.get("coin"),
+                                          "level_price": ep.get("level_price")}
+            entry["admitted_at"] = now_iso()
+            watching[key] = entry
             intents.append(ep)
             continue
         if key in watching:
