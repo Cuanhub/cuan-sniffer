@@ -976,6 +976,39 @@ class RestingBidTest(unittest.TestCase):
         self.assertNotIn("AAA", self.state["pending"])
 
 
+class HoldRuleSelectionTest(unittest.TestCase):
+    """execute_one must pick the hold rule from the level's origin."""
+
+    def test_the_two_rules_are_different(self):
+        self.assertNotEqual(T.TRIGGER_HOLD_HOURS, T.TRIGGER_HOLD_HOURS_SWING)
+        self.assertLess(T.TRIGGER_HOLD_HOURS_SWING, T.TRIGGER_HOLD_HOURS)
+
+    def test_origin_selects_the_hold_window(self):
+        seen = []
+        orig = T.level_has_held
+        T.level_has_held = lambda bars, lvl, hold_hours=None, **kw: (
+            seen.append(hold_hours), (False, "not_triggered"))[1]
+        tmp = Path("/tmp/_test_holdrule")
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        tmp.mkdir(parents=True)
+        orig_paths = (T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT)
+        T.STATE_PATH, T.TRADE_LOG = tmp / "s.json", tmp / "t.csv"
+        T._RO_CLIENT = FakeCandles()
+        st = {"owned": {}, "pending": {}, "opened_today": 0, "day": "d",
+              "realised_today": 0.0, "halted": False, "halt_reason": ""}
+        try:
+            for origin, expected in (("flipped_resistance", T.TRIGGER_HOLD_HOURS),
+                                     ("swing_low", T.TRIGGER_HOLD_HOURS_SWING)):
+                ep = dict(episode("AAA"), level_origin=origin)
+                T.execute_one(FakeBackend(), ep, 1000.0, 1000.0, True, st)
+                self.assertEqual(seen[-1], expected, origin)
+        finally:
+            T.level_has_held = orig
+            T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT = orig_paths
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class ModuleShapeTest(unittest.TestCase):
     def test_every_function_main_calls_is_defined_before_the_guard(self):
         """Regression for the NameError on the first arming attempt: functions

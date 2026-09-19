@@ -159,6 +159,24 @@ MAX_ENTRY_DRIFT_PCT = _f("LEVELS_MAX_ENTRY_DRIFT_PCT", 1.5)
 # because the hold is a wall-clock condition, not a chart-interval one.
 TRIGGER_ZONE_SIGMA = _f("LEVELS_TRIGGER_ZONE_SIGMA", 1.0)
 TRIGGER_HOLD_HOURS = _i("LEVELS_TRIGGER_HOLD_HOURS", 2)
+
+# The 2h hold is for FLIPPED RESISTANCE only, and that is what it was always
+# for. The user's words: it "was more in the notion of a channel forming on a
+# recent flip from s/r". Broken resistance becoming support is a claim that
+# has to be proven, and watching it hold a channel for two hours is the proof.
+#
+# Ordinary support is a different animal. It taps and sends -- the user again:
+# "support usually taps then sends higher and doesn't sit for 2h". Demanding
+# two hours of sitting there asks it to behave like the thing it is not, and
+# the cost is not theoretical: by the time the hold completes, price has run,
+# and MAX_ENTRY_DRIFT_PCT then refuses the fill. That is the miss measured on
+# 2026-09-19, where not one of 139 tradeable levels was inside the 1.5% drift
+# guard and the nearest was 3.10% away.
+#
+# 1 bar for a swing low: the level was reached, and the last closed candle is
+# back above it. A tap and a reclaim, which is the event itself rather than a
+# wait for it to become something else.
+TRIGGER_HOLD_HOURS_SWING = _i("LEVELS_TRIGGER_HOLD_HOURS_SWING", 1)
 TRIGGER_TOUCH_LOOKBACK_HOURS = _i("LEVELS_TRIGGER_TOUCH_LOOKBACK_HOURS", 12)
 
 # How far above the level price may sit and still count as holding AT it.

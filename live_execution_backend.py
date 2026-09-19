@@ -578,21 +578,37 @@ class LiveExecutionBackend(ExecutionBackend):
         return out
 
     def cancel_order(self, coin: str, oid: str) -> bool:
+        """Cancel one resting order. True only when the venue confirms it.
+
+        The oid is sent as an INT. The SDK signature is cancel(name, oid: int)
+        and the venue answers a string with 422 "Failed to deserialize the
+        JSON body into the target type" -- so every cancel this system ever
+        attempted failed, silently, because this returns False and the callers
+        only print. That covers the protection orders cancelled after an
+        emergency exit and the expiry of a resting bid: exactly the cleanup
+        paths whose whole job is to leave nothing behind at the venue.
+        """
         coin = str(coin or "").upper().strip()
-        oid = str(oid or "").strip()
-        if not coin or not oid:
+        oid_str = str(oid or "").strip()
+        if not coin or not oid_str:
             return False
         try:
-            resp = self.exchange.cancel(coin, oid)
+            oid_int = int(oid_str)
+        except (TypeError, ValueError):
+            if LIVE_LOG_ORDERS:
+                print(f"[LIVE_BACKEND] CANCEL bad oid coin={coin} oid={oid_str!r}")
+            return False
+        try:
+            resp = self.exchange.cancel(coin, oid_int)
         except Exception as e:
             if LIVE_LOG_ORDERS:
-                print(f"[LIVE_BACKEND] CANCEL failed coin={coin} oid={oid} err={e}")
+                print(f"[LIVE_BACKEND] CANCEL failed coin={coin} oid={oid_str} err={e}")
             return False
 
         ok = isinstance(resp, dict) and str(resp.get("status", "")).lower() == "ok"
         if LIVE_LOG_ORDERS:
             status = "OK" if ok else "NOT_OK"
-            print(f"[LIVE_BACKEND] CANCEL {status} coin={coin} oid={oid} resp={resp}")
+            print(f"[LIVE_BACKEND] CANCEL {status} coin={coin} oid={oid_str} resp={resp}")
         return ok
 
     def place_stop_only(

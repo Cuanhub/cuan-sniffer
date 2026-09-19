@@ -375,6 +375,51 @@ class AssetMetadataTest(unittest.TestCase):
         self.assertIn("asset_metadata_unavailable", res["error"])
 
 
+class CancelOrderTest(unittest.TestCase):
+    """The SDK is cancel(name, oid: int). We were sending a string.
+
+    The venue answered 422 "Failed to deserialize the JSON body into the
+    target type", cancel_order returned False, and every caller only printed
+    -- so every cancel this system ever attempted failed silently. Those are
+    the cleanup paths: protection orders after an emergency exit, and the
+    expiry of a resting bid. Their entire job is to leave nothing behind.
+    """
+
+    class Ex:
+        def __init__(self):
+            self.seen = []
+
+        def cancel(self, name, oid):
+            self.seen.append((name, oid))
+            if not isinstance(oid, int):
+                raise RuntimeError("422 Failed to deserialize the JSON body")
+            return {"status": "ok"}
+
+    def backend(self):
+        b = Backend.__new__(Backend)
+        b.exchange, b.debug = self.Ex(), False
+        return b
+
+    def test_the_oid_is_sent_as_an_int(self):
+        b = self.backend()
+        self.assertTrue(b.cancel_order("UNI", "549652894820"))
+        self.assertEqual(b.exchange.seen, [("UNI", 549652894820)])
+
+    def test_an_int_oid_also_works(self):
+        b = self.backend()
+        self.assertTrue(b.cancel_order("UNI", 549652894820))
+
+    def test_a_non_numeric_oid_is_refused_without_calling_the_venue(self):
+        b = self.backend()
+        self.assertFalse(b.cancel_order("UNI", "not-an-oid"))
+        self.assertEqual(b.exchange.seen, [])
+
+    def test_missing_arguments_are_refused(self):
+        b = self.backend()
+        self.assertFalse(b.cancel_order("", "1"))
+        self.assertFalse(b.cancel_order("UNI", ""))
+
+
 class EndpointPreferenceTest(unittest.TestCase):
     """The plain openOrders endpoint cannot carry a verifiable answer."""
 

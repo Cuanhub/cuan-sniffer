@@ -67,6 +67,7 @@ from research.levels.config import (                                  # noqa: E4
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA,
     NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
+    TRIGGER_HOLD_HOURS, TRIGGER_HOLD_HOURS_SWING,
 )
 from research.levels.config import summary as config_summary          # noqa: E402
 
@@ -761,7 +762,12 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
                        "level_price": g("level_price"),
                        "result": "fetch_failed", "detail": detail})
             return Outcome()
-        fired, why = level_has_held(bars1h, g("level_price"))
+        # A flipped resistance has to prove the flip by holding a channel;
+        # ordinary support taps and sends, and asking it to sit for two hours
+        # is asking it to behave like the thing it is not.
+        is_flip = str(ep.get("level_origin", "")) == "flipped_resistance"
+        hold_h = TRIGGER_HOLD_HOURS if is_flip else TRIGGER_HOLD_HOURS_SWING
+        fired, why = level_has_held(bars1h, g("level_price"), hold_hours=hold_h)
         if not fired:
             log_trade({"ts_utc": now_iso(), "action": "skip", "coin": coin,
                        "episode_id": ep.get("episode_id", ""), "level_price": g("level_price"),
@@ -780,7 +786,8 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
                         "why": why, "entry": entry, "stop": stop, "tp": tp,
                         "rr": g("suggested_rr")})
             return Outcome()
-        print(f"[LEVELS_LIVE] TRIGGER {coin} @ {g('level_price'):.6g}: {why}")
+        print(f"[LEVELS_LIVE] TRIGGER {coin} @ {g('level_price'):.6g}: {why} "
+              f"[{'flip, ' + str(hold_h) + 'h channel hold' if is_flip else 'swing low, tap and reclaim'}]")
         for flag in review_flags(ep, size_from_stop(equity, entry, stop, available)["size_usd"], equity):
             print(f"[LEVELS_LIVE] [REVIEW] {coin}: {flag}")
             log_trade({"ts_utc": now_iso(), "action": "review", "coin": coin,

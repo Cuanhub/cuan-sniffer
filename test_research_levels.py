@@ -191,3 +191,58 @@ class SameLevelLabelTest(unittest.TestCase):
 
     def test_a_malformed_id_is_harmless(self):
         self.assertEqual(self.call._same_level_labels("nonsense"), [])
+
+
+class HoldRuleTest(unittest.TestCase):
+    """The 2h hold belongs to flipped resistance, not to ordinary support.
+
+    Broken resistance becoming support is a claim, and holding a channel for
+    two hours is the proof. Ordinary support taps and sends -- demanding two
+    hours of sitting asks it to behave like the thing it is not, and by the
+    time the hold completes price has run and MAX_ENTRY_DRIFT_PCT refuses the
+    fill. That is the tap-and-go miss.
+    """
+
+    LEVEL = 100.0
+
+    def tap_and_reclaim(self):
+        """Price wanders above, dips through the level, then closes back over
+        it on the very next candle. The last bar is the forming one that
+        level_has_held always discards."""
+        bars = []
+        for i in range(40):
+            c = 104.0 + (i % 5) * 0.4          # varied, so sigma is defined
+            bars.append({"t": i, "o": c, "h": c + 0.5, "l": c - 0.5, "c": c})
+        # the tap: low through the level, close below it
+        bars.append({"t": 40, "o": 101.0, "h": 101.2, "l": 99.2, "c": 99.6})
+        # the reclaim: closes back above
+        bars.append({"t": 41, "o": 99.8, "h": 101.5, "l": 99.7, "c": 101.0})
+        # forming bar, discarded by level_has_held
+        bars.append({"t": 42, "o": 101.0, "h": 101.4, "l": 100.8, "c": 101.2})
+        return bars
+
+    def test_a_swing_low_fires_on_the_reclaim(self):
+        from research.levels.trigger import level_has_held
+        from research.levels.config import TRIGGER_HOLD_HOURS_SWING
+        fired, why = level_has_held(self.tap_and_reclaim(), self.LEVEL,
+                                    hold_hours=TRIGGER_HOLD_HOURS_SWING)
+        self.assertTrue(fired, why)
+
+    def test_the_same_bars_do_not_satisfy_a_flip(self):
+        # The candle before the reclaim closed below the level, so a two-hour
+        # channel has not formed -- which is exactly what a flip must prove.
+        from research.levels.trigger import level_has_held
+        from research.levels.config import TRIGGER_HOLD_HOURS
+        fired, why = level_has_held(self.tap_and_reclaim(), self.LEVEL,
+                                    hold_hours=TRIGGER_HOLD_HOURS)
+        self.assertFalse(fired)
+        self.assertIn("closed below", why)
+
+    def test_a_swing_low_still_will_not_buy_under_the_level(self):
+        from research.levels.trigger import level_has_held
+        from research.levels.config import TRIGGER_HOLD_HOURS_SWING
+        bars = self.tap_and_reclaim()
+        bars[-2]["c"] = 99.0                    # never reclaimed
+        fired, _ = level_has_held(bars, self.LEVEL,
+                                  hold_hours=TRIGGER_HOLD_HOURS_SWING)
+        self.assertFalse(fired)
