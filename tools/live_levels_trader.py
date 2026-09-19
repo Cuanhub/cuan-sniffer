@@ -75,6 +75,11 @@ TRADE_LOG = Path(__file__).resolve().parents[1] / "research" / "levels" / "data"
 
 _stop = False
 
+# The SDK fetches perp metadata inside Info.__init__, so construction can fail
+# on a transient 429. Linear backoff: 15s, 30s, 45s, 60s.
+BACKEND_START_ATTEMPTS = 5
+BACKEND_START_BACKOFF_SEC = 15
+
 # Injectable so the armed path can be tested without a venue. It defaults to
 # None and is built on first use; tests assign a fake. Constructing it at
 # import time made the test suite hang -- every armed test tried to fetch 1h
@@ -484,7 +489,15 @@ def main():
     backend = None
     if armed:
         from live_execution_backend import LiveExecutionBackend
-        backend = LiveExecutionBackend(debug=True)
+        # Retried, because the SDK's Info.__init__ fetches perp metadata
+        # itself and a 429 there raises before any of our code runs. Twice on
+        # 2026-09-19 that killed the process outright at startup. launchd
+        # restarts it, so it self-heals, but a crash loop against a rate limit
+        # is the worst possible way to wait -- every restart is another
+        # request, which is what caused the limit.
+        backend = start_backend(LiveExecutionBackend)
+        if backend is None:
+            return 0                      # stopped while waiting to retry
         print("[LEVELS_LIVE] live backend up")
 
     while not _stop:
@@ -592,9 +605,16 @@ def main():
                 f"(fires <={TRIGGER_MAX_ABOVE_SIGMA}), entry `{float(w['entry']):.6g}`, "
                 f"stop `{float(w['stop']):.6g}`, rr {float(w['rr'] or 0):.2f}"
                 for w in near)
-            notify.send(f"🔵 *Approaching buy zones* ({len(near)} of "
-                        f"{len(watchboard)} watched)\n{lines}",
-                        key="approaching", cooldown_sec=NEAR_ALERT_COOLDOWN_SEC)
+            sent = notify.send(f"🔵 *Approaching buy zones* ({len(near)} of "
+                               f"{len(watchboard)} watched)\n{lines}",
+                               key="approaching", cooldown_sec=NEAR_ALERT_COOLDOWN_SEC)
+            print(f"[LEVELS_LIVE] {len(near)} level(s) within {NEAR_ALERT_SIGMA} sigma"
+                  f" -- digest {'sent' if sent else 'suppressed (cooldown)'}; "
+                  f"nearest {near[0]['coin']} at {near[0]['above']:.1f}s")
+        else:
+            closest = min((w["above"] for w in watchboard), default=None)
+            print(f"[LEVELS_LIVE] nothing within {NEAR_ALERT_SIGMA} sigma"
+                  + (f"; nearest is {closest:.1f}s" if closest is not None else ""))
         if args.once:
             return 0
         for _ in range(POLL_SEC):
@@ -970,6 +990,38 @@ def assumed_loss(info: Dict[str, Any]) -> float:
     if entry <= 0 or stop <= 0 or size_coin <= 0:
         return 0.0
     return -abs(entry - stop) * size_coin
+
+
+def start_backend(factory, sleep=time.sleep):
+    """Build the live backend, retrying a transient venue failure.
+
+    The SDK fetches perp metadata inside Info.__init__, so construction itself
+    hits the network and a 429 there raises before any of our code runs. Twice
+    on 2026-09-19 that killed the process outright at startup. launchd restarts
+    it, so it self-heals -- but a crash loop against a rate limit is the worst
+    possible way to wait, because every restart is another request, which is
+    what caused the limit.
+
+    Returns None if a stop was requested while waiting. Re-raises if the venue
+    is still refusing after every attempt: coming up without a backend would
+    mean an armed trader that cannot trade and does not say so.
+    """
+    for attempt in range(1, BACKEND_START_ATTEMPTS + 1):
+        try:
+            return factory(debug=True)
+        except Exception as e:
+            if attempt == BACKEND_START_ATTEMPTS:
+                print(f"[LEVELS_LIVE] live backend failed to start after "
+                      f"{attempt} attempts: {str(e)[:160]}")
+                raise
+            wait = BACKEND_START_BACKOFF_SEC * attempt
+            print(f"[LEVELS_LIVE] backend start attempt {attempt} failed "
+                  f"({str(e)[:80]}); retrying in {wait}s")
+            for _ in range(wait):
+                if _stop:
+                    return None
+                sleep(1)
+    return None
 
 
 def halt(state: Dict[str, Any], reason: str, where: str = "") -> str:

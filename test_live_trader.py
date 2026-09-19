@@ -833,6 +833,54 @@ class OutcomeTest(unittest.TestCase):
         self.assertFalse(T.Outcome())
 
 
+class BackendStartTest(unittest.TestCase):
+    """Info.__init__ fetches perp metadata, so construction hits the network.
+
+    A 429 there raises before any of our code runs, and twice on 2026-09-19 it
+    killed the process at startup. launchd restarts it, but a crash loop
+    against a rate limit is the worst way to wait: every restart is another
+    request, which is what caused the limit.
+    """
+
+    def test_a_clean_start_does_not_retry(self):
+        calls = []
+        b = T.start_backend(lambda debug: calls.append(1) or "backend",
+                            sleep=lambda s: None)
+        self.assertEqual(b, "backend")
+        self.assertEqual(len(calls), 1)
+
+    def test_a_transient_failure_is_retried(self):
+        calls = []
+
+        def flaky(debug):
+            calls.append(1)
+            if len(calls) < 3:
+                raise RuntimeError("429 rate limited")
+            return "backend"
+
+        self.assertEqual(T.start_backend(flaky, sleep=lambda s: None), "backend")
+        self.assertEqual(len(calls), 3)
+
+    def test_a_persistent_failure_raises(self):
+        # Coming up without a backend would be an armed trader that cannot
+        # trade and does not say so.
+        def dead(debug):
+            raise RuntimeError("429 rate limited")
+
+        with self.assertRaises(RuntimeError):
+            T.start_backend(dead, sleep=lambda s: None)
+
+    def test_a_stop_during_backoff_gives_up_quietly(self):
+        def dead(debug):
+            raise RuntimeError("429")
+
+        T._stop = True
+        try:
+            self.assertIsNone(T.start_backend(dead, sleep=lambda s: None))
+        finally:
+            T._stop = False
+
+
 class ModuleShapeTest(unittest.TestCase):
     def test_every_function_main_calls_is_defined_before_the_guard(self):
         """Regression for the NameError on the first arming attempt: functions
