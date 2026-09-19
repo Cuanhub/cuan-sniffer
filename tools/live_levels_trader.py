@@ -1252,6 +1252,18 @@ def reconcile_pending(backend, state: Dict[str, Any]) -> None:
         placed = iso_to_ms(p.get("placed_at", ""))
         age_h = ((datetime.now(timezone.utc).timestamp() * 1000) - placed) / 3600_000 \
             if placed else 0
+        # Say so every pass. A resting bid that is being watched and one that
+        # was silently dropped from state look identical in a log that only
+        # speaks up when something changes -- and this is the one path that
+        # can open a position while nobody is looking.
+        try:
+            mid = backend.get_mid_price(coin) or 0.0
+        except Exception:
+            mid = 0.0
+        away = ((mid - float(p.get("price") or 0)) / mid * 100) if mid > 0 else 0.0
+        print(f"[LEVELS_LIVE] bid resting {coin} @ {float(p.get('price') or 0):.6g}"
+              + (f", mid {mid:.6g} ({away:+.2f}% away)" if mid > 0 else "")
+              + f", {age_h:.1f}h old of {LIMIT_ENTRY_TTL_HOURS}h")
         if placed and age_h >= LIMIT_ENTRY_TTL_HOURS:
             ok = False
             try:
