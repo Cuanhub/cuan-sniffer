@@ -315,6 +315,66 @@ class StopOnlyStatusTest(unittest.TestCase):
         self.assertIs(res["stop_verified"], False)
 
 
+class AssetMetadataTest(unittest.TestCase):
+    """_load_meta ran once, in __init__, and swallowed its own failure.
+
+    On 2026-09-19 a 429 during startup produced "assets_loaded=0" and the
+    backend carried on for the life of the process. Empty metadata is not
+    harmless: every coin falls back to szDecimals=3 and a 1e-3 price tick, so
+    sizes and trigger prices get rounded to a precision the venue never asked
+    for -- silently malformed orders on the path whose job is placing stops.
+    """
+
+    class Meta:
+        def __init__(self, fail_times=0):
+            self.fail_times, self.calls = fail_times, 0
+
+        def meta(self):
+            self.calls += 1
+            if self.calls <= self.fail_times:
+                raise RuntimeError("429 rate limited")
+            return {"universe": [{"name": "UNI", "szDecimals": 1},
+                                 {"name": "BTC", "szDecimals": 5}]}
+
+    def backend(self, fail_times=0):
+        b = Backend.__new__(Backend)
+        b._sz_decimals, b.debug = {}, False
+        b.info = self.Meta(fail_times)
+        return b
+
+    def test_populated_metadata_needs_no_reload(self):
+        b = self.backend()
+        b._sz_decimals = {"UNI": 1}
+        self.assertTrue(b._ensure_meta())
+        self.assertEqual(b.info.calls, 0)
+
+    def test_empty_metadata_is_retried_and_recovers(self):
+        b = self.backend()
+        self.assertTrue(b._ensure_meta())
+        self.assertEqual(b._sz_decimals["BTC"], 5)
+
+    def test_still_failing_metadata_reports_false(self):
+        b = self.backend(fail_times=99)
+        self.assertFalse(b._ensure_meta())
+
+    def test_protection_refuses_without_metadata(self):
+        b = StubBackend([good_stop(), good_tp()])
+        b._sz_decimals = {}
+        b.info = self.Meta(fail_times=99)
+        res = b.protect()
+        self.assertEqual(res["status"], "missing")
+        self.assertIn("asset_metadata_unavailable", res["error"])
+
+    def test_stop_only_refuses_without_metadata(self):
+        b = StubBackend([good_stop()])
+        b._sz_decimals = {}
+        b.info = self.Meta(fail_times=99)
+        res = b.place_stop_only(coin="UNI", side="LONG", size_coin=46.3,
+                                stop_price=95.0)
+        self.assertEqual(res["status"], "missing")
+        self.assertIn("asset_metadata_unavailable", res["error"])
+
+
 class EndpointPreferenceTest(unittest.TestCase):
     """The plain openOrders endpoint cannot carry a verifiable answer."""
 

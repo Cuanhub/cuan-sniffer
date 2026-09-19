@@ -179,6 +179,10 @@ class LiveExecutionBackend(ExecutionBackend):
 
         if size_usd <= 0:
             return self._reject("invalid_entry_request", price, size_usd, "entry")
+        if not self._ensure_meta():
+            # Without szDecimals every size and price is rounded to a guessed
+            # precision. Refusing is the only safe answer.
+            return self._reject("asset_metadata_unavailable", price, size_usd, "entry")
 
         ref_price = self.get_mid_price(coin)
         if not ref_price or ref_price <= 0:
@@ -380,6 +384,9 @@ class LiveExecutionBackend(ExecutionBackend):
         if send_sz <= 0:
             result["error"] = "invalid_protection_size"
             return result
+        if not self._ensure_meta():
+            result["error"] = "asset_metadata_unavailable"
+            return result
 
         venue_side_sz = self._get_venue_position_size(coin, side)
         if venue_side_sz is not None and venue_side_sz > 0:
@@ -552,6 +559,9 @@ class LiveExecutionBackend(ExecutionBackend):
 
         if send_sz <= 0:
             result["error"] = "invalid_stop_size"
+            return result
+        if not self._ensure_meta():
+            result["error"] = "asset_metadata_unavailable"
             return result
 
         stop_round_direction = "up" if side == "LONG" else "down"
@@ -1569,6 +1579,29 @@ class LiveExecutionBackend(ExecutionBackend):
 
     # ── Precision helpers ──────────────────────────────────────────────────
 
+    def _ensure_meta(self) -> bool:
+        """True when asset metadata is available, retrying the load if not.
+
+        _load_meta ran exactly once, in __init__, and swallowed its own
+        failure. A backend that started inside a rate-limit window therefore
+        stayed empty for the life of the process: on 2026-09-19 a 429 during
+        startup produced "assets_loaded=0", and nothing said so again.
+
+        Empty is not harmless. Every coin then falls back to szDecimals=3 and
+        a 1e-3 price tick, so sizes and trigger prices are rounded to a
+        precision the venue did not ask for -- silently wrong orders rather
+        than refused ones, on a path whose whole job is placing stops
+        correctly.
+        """
+        if self._sz_decimals:
+            return True
+        self._load_meta()
+        if self._sz_decimals:
+            print(f"[LIVE_BACKEND] asset metadata recovered "
+                  f"({len(self._sz_decimals)} assets)")
+            return True
+        return False
+
     def _load_meta(self):
         """Load szDecimals per asset from the perp universe."""
         try:
@@ -1578,8 +1611,7 @@ class LiveExecutionBackend(ExecutionBackend):
                 if name:
                     self._sz_decimals[name] = int(asset.get("szDecimals", 3))
         except Exception as e:
-            if self.debug:
-                print(f"[LIVE_BACKEND] _load_meta failed: {e}")
+            print(f"[LIVE_BACKEND] _load_meta failed: {str(e)[:200]}")
 
     def _notional_to_size(self, coin: str, size_usd: float, ref_price: float) -> float:
         """Convert notional USD to coin units, rounded down to venue precision."""
