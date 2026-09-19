@@ -103,6 +103,7 @@ def collect(coin_filter: str = "") -> List[Dict[str, Any]]:
             "eid": ep.get("episode_id", ""),
             "origin": ep.get("level_origin", "?"),
             "tf": "1H" if "-1H_" in str(ep.get("episode_id", "")) else "4H",
+            "buffer": float(ep.get("entry_buffer_sigma") or 0),
             "gap_pct": (px - lvl) / lvl * 100 if lvl else 0.0,
             "drift_pct": abs(px - entry) / entry * 100 if entry else 0.0,
         })
@@ -131,8 +132,12 @@ def main() -> int:
         print(f"{i}. {r['coin']} {r['tf']}  level {r['lvl']:.6g}   "
               f"now {r['px']:.6g}  ({r['gap_pct']:+.1f}%, {r['above']:.1f}s above){flag}")
         print(f"     needs : {r['block']}")
-        print(f"     entry : {r['entry']:.6g}   stop {r['stop']:.6g}   "
-              f"tp {r['tp']:.6g}   rr {r['rr']:.2f}")
+        # Lead with the level; label the entry as derived from it. Quoting
+        # the entry as though it were the level produced a wrong skip on
+        # USELESS .25817 -- the entry .260 was not recognised, because there
+        # is no level there, only the 0.35 sigma buffer above one.
+        print(f"     entry : {r['entry']:.6g} (= level +{r['buffer']:g}s buffer)"
+              f"   stop {r['stop']:.6g}   tp {r['tp']:.6g}   rr {r['rr']:.2f}")
         print(f"     drift : {r['drift_pct']:.2f}% from plan "
               f"({'fillable' if r['drift_pct'] <= MAX_ENTRY_DRIFT_PCT else 'too far to fill'})")
         print(f"     chart : https://app.hyperliquid.xyz/trade/{r['coin']}")

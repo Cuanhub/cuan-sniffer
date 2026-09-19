@@ -277,9 +277,42 @@ def _labelled() -> Dict[str, Any]:
         return {r["episode_id"]: r for r in csv.DictReader(f)}
 
 
+def _same_level_labels(eid: str) -> List[Dict[str, Any]]:
+    """Existing labels for the SAME level, under a different episode id.
+
+    episode_id is COIN-TF_BARTIMESTAMP_LEVELPRICE, so one level gets a fresh
+    id on every bar it gates, and storage dedupes on that id -- which cannot
+    see that two rows describe one level. On 2026-09-19 USELESS 1H 0.25817
+    was held as both a take and a skip a day apart. The filter is validated
+    on "keeps 8 of 11 takes and admits 0 of 5 skips", and a level sitting in
+    both halves makes that number unanswerable.
+
+    Relabelling is legitimate -- context moves -- so this warns rather than
+    blocks. It just must not happen silently.
+    """
+    import re
+    m = re.match(r"^(.+?)-(1H|4H)_(\d+)_(.+)$", eid)
+    if not m:
+        return []
+    coin, tf, level = m.group(1), m.group(2), m.group(4)
+    out = []
+    for prior_id, row in _labelled().items():
+        pm = re.match(r"^(.+?)-(1H|4H)_(\d+)_(.+)$", prior_id)
+        if not pm or prior_id == eid:
+            continue
+        if (pm.group(1), pm.group(2), pm.group(4)) == (coin, tf, level):
+            out.append(row)
+    return out
+
+
 def cmd_label(eid: str, verdict: str, note: str):
     """Record the verdict, writing the episode snapshot first so the label has
     something to join to."""
+    for prior in _same_level_labels(eid):
+        flag = "CONTRADICTS" if prior["verdict"] != verdict else "repeats"
+        print(f"  !! {flag} an existing label on this same level: "
+              f"{prior['verdict']} at {prior['labelled_at_utc']}"
+              + (f" -- {prior['note'][:60]}" if prior.get("note") else ""))
     client = HyperliquidReadOnlyClient()
     universe = select_universe(client)
     match = next((c for c in find_candidates(client, universe) if c["episode_id"] == eid), None)

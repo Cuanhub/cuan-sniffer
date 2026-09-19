@@ -148,3 +148,46 @@ class TestStorage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SameLevelLabelTest(unittest.TestCase):
+    """episode_id carries the BAR, so one level gets a new id every bar.
+
+    storage dedupes on episode_id, which cannot see that two rows describe
+    the same level. On 2026-09-19 USELESS 1H 0.25817 was held as both a take
+    and a skip a day apart, and the filter is validated on "keeps 8 of 11
+    takes and admits 0 of 5 skips" -- a level in both halves makes that
+    number unanswerable. Relabelling is legitimate; doing it silently is not.
+    """
+
+    def setUp(self):
+        from research.levels import call
+        self.call = call
+        self._orig = call._labelled
+        call._labelled = lambda: {
+            "USELESS-1H_1000_0.25817": {"episode_id": "USELESS-1H_1000_0.25817",
+                                        "verdict": "take", "labelled_at_utc": "T1",
+                                        "note": "flipped resistance"},
+            "BTC-4H_1000_50000": {"episode_id": "BTC-4H_1000_50000",
+                                  "verdict": "skip", "labelled_at_utc": "T1", "note": ""},
+        }
+
+    def tearDown(self):
+        self.call._labelled = self._orig
+
+    def test_same_level_different_bar_is_found(self):
+        hits = self.call._same_level_labels("USELESS-1H_9999_0.25817")
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["verdict"], "take")
+
+    def test_the_same_episode_is_not_its_own_prior(self):
+        self.assertEqual(self.call._same_level_labels("USELESS-1H_1000_0.25817"), [])
+
+    def test_a_different_level_is_not_matched(self):
+        self.assertEqual(self.call._same_level_labels("USELESS-1H_9999_0.24"), [])
+
+    def test_a_different_timeframe_is_not_matched(self):
+        self.assertEqual(self.call._same_level_labels("USELESS-4H_9999_0.25817"), [])
+
+    def test_a_malformed_id_is_harmless(self):
+        self.assertEqual(self.call._same_level_labels("nonsense"), [])
