@@ -195,7 +195,16 @@ WATCH_TTL_HOURS = _i("LEVELS_WATCH_TTL_HOURS", 48)
 # The trigger fires at <=2.0 sigma above the level, so 3.0 means "within about
 # one sigma of being tradeable". Alerting on everything eligible would mean
 # ~140 levels a pass, which is not a signal, it is a mailing list.
-NEAR_ALERT_SIGMA = _f("LEVELS_NEAR_ALERT_SIGMA", 3.0)
+# 5.0, raised from 3.0 on 2026-09-19 because 3.0 sent nothing at all.
+#
+# Measured against 164 tradeable levels that morning: the closest sat 3.3
+# sigma above its level, p10 was 5.5 and the median 9.8. In a market where
+# price taps support and runs, almost nothing lingers within one sigma of the
+# trigger, so a threshold one sigma out is silent exactly when there is the
+# most to watch. At 5.0 about a dozen qualify, and since the digest already
+# takes the five closest and sends at most one an hour, a looser threshold
+# costs nothing in volume -- it only decides how far out "approaching" starts.
+NEAR_ALERT_SIGMA = _f("LEVELS_NEAR_ALERT_SIGMA", 5.0)
 
 # At most one approaching-levels digest per hour. The board is there for
 # looking on purpose; this is only so a zone does not get reached unnoticed.
