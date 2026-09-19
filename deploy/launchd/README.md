@@ -1,8 +1,12 @@
-# launchd deployment — the level trader
+# launchd deployment — the trader and the scanner
 
-Keeps `tools/live_levels_trader.py` running across logout and reboot.
-Canonical copies live here; `~/Library/LaunchAgents/` holds the deployed
-copies.
+Keeps `tools/live_levels_trader.py` and `research/levels/scanner.py` running
+across logout and reboot. Canonical copies live here;
+`~/Library/LaunchAgents/` holds the deployed copies.
+
+Two jobs, not one supervisor. The trader places orders and the scanner writes
+the record those orders are judged against; a crash in one must not take the
+other with it, and only one of them should ever be able to trade.
 
 > This file described the funding and cascade collectors until 2026-09-18.
 > Both were retired in `3d4d89e`, and their plists are gone. What remains is
@@ -85,7 +89,9 @@ pass and exits 0.
 ```sh
 mkdir -p ~/Library/Logs/cuan-sniffer
 cp deploy/launchd/com.cuansniffer.trader.plist ~/Library/LaunchAgents/
+cp deploy/launchd/com.cuansniffer.scanner.plist ~/Library/LaunchAgents/
 launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.trader.plist
+launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.scanner.plist
 ```
 
 The `mkdir` is not optional. launchd does not create a missing
@@ -133,9 +139,25 @@ read at load time. Edit the copy here, re-copy to `~/Library/LaunchAgents/`,
 then reload. The deployed copy is a deployment artifact; this one is the
 source of truth.
 
-**Logs are not rotated.** launchd does not, and neither does the trader. It
-writes roughly 30 lines per 15-minute pass — about 1.5 MB a day with the
-current universe. Fine for a live-test window, not fine left for months.
+**The scanner is not optional.** It writes `episodes.csv` at detection and
+`outcomes.csv` once ~42 bars have elapsed, and `research.levels.call` joins
+labels to those rows. On 2026-09-19 it was found not running, episodes.csv
+thirteen hours stale, and the labelling loop silently dead — nothing reported
+it, because nothing was watching a process nobody had asked to stay alive. A
+collector that stops without saying so loses the only thing that cannot be
+recomputed later: what was true at the time.
+
+**The two jobs poll on separate knobs.** `LEVELS_POLL_SEC` (450s) is the
+trader, which hurries because it is trying to reach a support tap before
+price leaves. `LEVELS_SCANNER_POLL_SEC` (900s) is the scanner, which is
+accumulating a record and gains nothing from being sampled twice as often.
+scanner.py imported the trader's constant until 2026-09-19, so halving one
+silently halved the other.
+
+**Logs are not rotated.** launchd does not, and neither job does. The trader
+writes roughly 30 lines per pass — about 1.5 MB a day with the current
+universe; the scanner writes one line per pass. Fine for a live-test window,
+not fine left for months.
 
 **Config.** Unlike the retired collectors, the trader **does** load `.env`
 (`load_dotenv` at import), and the plist sets `LEVELS_LIVE_ARMED` on top of

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keeps the level scanner running across logout and reboot.
+
+  This job PLACES NO ORDERS. research/levels/ is import-isolated from every
+  order-capable module and two tests enforce it. What it does is write the
+  record everything else is judged against: episodes.csv at detection, and
+  outcomes.csv once ~42 bars have elapsed.
+
+  It is supervised for the same reason the trader is. On 2026-09-19 the
+  scanner was found not running, episodes.csv thirteen hours stale, and the
+  labelling loop -- the entire point of this project -- silently dead. Nothing
+  reported it, because nothing was watching a process nobody had asked to
+  stay alive. A collector that stops without saying so loses the one thing
+  that cannot be recomputed later: what was true at the time.
+
+  Install:
+    cp deploy/launchd/com.cuansniffer.scanner.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.scanner.plist
+  Stop:
+    launchctl unload ~/Library/LaunchAgents/com.cuansniffer.scanner.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuansniffer.scanner</string>
+
+  <!-- The venv's own python, NOT its resolved homebrew target. CPython only
+       adds the venv's site-packages when invoked through the venv directory,
+       because that is where it looks for pyvenv.cfg.
+
+       -u is not cosmetic. Run without it, the scanner's stdout is block
+       buffered and the log file sits empty for the whole first pass, which
+       is indistinguishable from a job that failed to start. That is exactly
+       how it looked when this was first run under nohup. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/myair/CuanSniffer/.venv/bin/python</string>
+    <string>-u</string>
+    <string>-m</string>
+    <string>research.levels.scanner</string>
+  </array>
+
+  <!-- -m needs the project root on sys.path, which python takes from cwd.
+       This path must stay OUT of ~/Documents, ~/Desktop and ~/Downloads: a
+       launchd job does not inherit Full Disk Access. Measured 2026-09-18;
+       see deploy/launchd/README.md. -->
+  <key>WorkingDirectory</key>
+  <string>/Users/myair/CuanSniffer</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart on abnormal exit only. The scanner traps SIGTERM, finishes its
+       pass and returns 0, so exit 0 means somebody stopped it deliberately
+       and it should stay stopped. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/scanner.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/scanner.err.log</string>
+</dict>
+</plist>

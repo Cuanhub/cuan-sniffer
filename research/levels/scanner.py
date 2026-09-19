@@ -41,7 +41,8 @@ from research.levels.venue_client import HyperliquidReadOnlyClient, VenueFetchEr
 from research.levels.universe import select_universe
 
 from research.levels.config import (               # noqa: E402
-    POLL_SEC as POLL_INTERVAL_SEC, INTERVAL, HISTORY_DAYS, RESOLVE_MIN_BARS,
+    SCANNER_POLL_SEC as POLL_INTERVAL_SEC, INTERVAL, HISTORY_DAYS, RESOLVE_MIN_BARS,
+    RUN_SIGMA_MIN, PULL_SIGMA_MIN, MIN_RETESTS,
     ENTRY_BUFFER_SIGMA, STOP_SIGMA_BELOW, ONSET_MATCH_SIGMA,
 )
 FAILURE_LOG = Path(__file__).resolve().parent / "data" / "_fetch_failures.log"
@@ -299,8 +300,15 @@ def main():
     client = HyperliquidReadOnlyClient(on_failure=_log_failure)
     universe = select_universe(client)
     print(f"[LEVEL_SCANNER] universe: {len(universe)} symbols")
-    print(f"[LEVEL_SCANNER] gate: run>={6.0}s pull>={5.0}s retests>=2 -- PLACEHOLDER thresholds "
-          f"fitted to n=2, expected to move once labelled")
+    # Read from config, never retyped. This line hardcoded run>=6.0 pull>=5.0
+    # retests>=2 while the live values were 6.0/1.0/1 -- pull had been lowered
+    # because 5.0 rejected 7 of the user's takes and retests because 2
+    # rejected another. A banner that misreports the filter is worse than no
+    # banner: it is what an operator reads when deciding whether a pass looks
+    # right.
+    print(f"[LEVEL_SCANNER] gate: run>={RUN_SIGMA_MIN}s pull>={PULL_SIGMA_MIN}s "
+          f"retests>={MIN_RETESTS} -- PLACEHOLDER thresholds fitted to n=2, "
+          f"expected to move once labelled")
 
     if args.backfill:
         total = 0

@@ -223,6 +223,19 @@ DAILY_LOSS_STOP_PCT = _f("LEVELS_DAILY_LOSS_STOP_PCT", 15.0)
 # so twice the passes cost less than the old single pass. Watch the 429 rate
 # before cutting this further; a rate limit here truncates the pass.
 POLL_SEC = _i("LEVELS_POLL_SEC", 450)
+
+# The scanner's own cadence, deliberately NOT the trader's.
+#
+# scanner.py imported POLL_SEC directly, so halving the trader's loop to
+# catch faster entries silently halved the scanner's too -- doubling the
+# universe scans of a job that has no reason to hurry. The trader polls
+# quickly because it is trying to catch a support tap before price leaves;
+# the scanner is accumulating a record, and a record does not get better for
+# being sampled twice as often, only more expensive. Two jobs, two knobs.
+#
+# 900s, which is what the scanner ran at before the trader's change reached
+# it by accident.
+SCANNER_POLL_SEC = _i("LEVELS_SCANNER_POLL_SEC", 900)
 RESOLVE_MIN_BARS = _i("LEVELS_RESOLVE_MIN_BARS", 42)       # ~7d before judging
 ONSET_MATCH_SIGMA = _f("LEVELS_ONSET_MATCH_SIGMA", 0.5)
 
