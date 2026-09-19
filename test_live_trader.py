@@ -280,6 +280,32 @@ class ArmedPathTest(unittest.TestCase):
         self.assertTrue(out.order_sent)
         self.assertFalse(out.opened)
 
+    def test_1h_bars_are_fetched_once_per_coin_per_pass(self):
+        # One coin carries several levels; 141 candidates came from ~30 coins,
+        # so this refetched the same series ~5x. Rate limits truncate passes,
+        # so the waste was not free.
+        calls = []
+        real = T._RO_CLIENT
+
+        class Counting:
+            def get_candles(self, coin, interval, start, end):
+                calls.append(coin)
+                return real.get_candles(coin, interval, start, end)
+
+        T._RO_CLIENT = Counting()
+        try:
+            cache = {}
+            for _ in range(4):
+                T.cached_1h("AAA", cache)
+            T.cached_1h("BBB", cache)
+        finally:
+            T._RO_CLIENT = real
+        self.assertEqual(calls, ["AAA", "BBB"], "one fetch per coin per pass")
+
+    def test_no_cache_still_fetches(self):
+        # cache=None is the uncached path and must still work.
+        self.assertTrue(len(T.cached_1h("AAA", None)) > 0)
+
     def test_dry_run_sends_nothing(self):
         b = FakeBackend()
         T.execute_one(b, episode("AAA"), 1000.0, 1000.0, False, self.state)

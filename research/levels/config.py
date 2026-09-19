@@ -207,7 +207,22 @@ MAX_NEW_PER_DAY = _i("LEVELS_MAX_NEW_PER_DAY", 5)
 # so three straight losses is a 46% event and the system would spend most of
 # its life halted, learning nothing. 15% allows 5, where five straight is 27%.
 DAILY_LOSS_STOP_PCT = _f("LEVELS_DAILY_LOSS_STOP_PCT", 15.0)
-POLL_SEC = _i("LEVELS_POLL_SEC", 900)
+# 450s, halved from 900 on 2026-09-19.
+#
+# The bot sends a marketable order when the trigger fires and refuses it if
+# price has drifted more than MAX_ENTRY_DRIFT_PCT from the plan. Support that
+# taps and sends is therefore gone before a 15-minute poll looks: measured
+# across 139 tradeable watched levels, NOT ONE was inside the 1.5% drift
+# guard, the nearest being 3.10%. Polling twice as often halves that blind
+# window. It does not close it -- a tap that resolves inside 7.5 minutes is
+# still missed, and catching those needs a resting bid at the level rather
+# than a faster loop.
+#
+# Affordable only because the 1h bars the trigger reads are now fetched once
+# per coin per pass instead of once per candidate: ~140 fetches became ~30,
+# so twice the passes cost less than the old single pass. Watch the 429 rate
+# before cutting this further; a rate limit here truncates the pass.
+POLL_SEC = _i("LEVELS_POLL_SEC", 450)
 RESOLVE_MIN_BARS = _i("LEVELS_RESOLVE_MIN_BARS", 42)       # ~7d before judging
 ONSET_MATCH_SIGMA = _f("LEVELS_ONSET_MATCH_SIGMA", 0.5)
 

@@ -524,6 +524,7 @@ def main():
         if intents:
             print(f"\n{'coin':10} {'entry':>12} {'stop':>12} {'tp':>12} {'stop%':>7} "
                   f"{'size$':>9} {'risk$':>7} {'rr':>5}  flags")
+        bars_cache: Dict[str, Any] = {}      # one pass, one fetch per coin
         for ep in intents:
             d = describe(ep, equity, available)
             flags = []
@@ -547,7 +548,8 @@ def main():
             if len(state.get("owned", {})) >= MAX_CONCURRENT:
                 print("[LEVELS_LIVE] concurrency cap reached, stopping this pass")
                 break
-            outcome = execute_one(backend, ep, equity, available, armed, state)
+            outcome = execute_one(backend, ep, equity, available, armed, state,
+                                  bars_cache=bars_cache)
             # Re-checked after every ORDER, not once per pass: the runaway
             # opened twelve positions inside a single pass, so a per-pass check
             # would have reported the damage rather than prevented it.
@@ -645,9 +647,29 @@ def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float, t
     return ref, None
 
 
+def cached_1h(coin: str, cache: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """1h bars for `coin`, fetched once per pass.
+
+    The trigger needs these per CANDIDATE, but one coin carries several
+    levels: 141 candidates came from about 30 coins, so this was fetching the
+    same series roughly five times over. That is ~110 wasted calls a pass
+    against a venue that returned 52 rate limits in nine hours, and a rate
+    limit here is not free -- it truncated the pass.
+
+    Per pass, deliberately. Bars must not carry between passes: what the
+    trigger asks is what price did in the last two hours.
+    """
+    if cache is None:
+        return fetch_1h(_ro_client(), coin)
+    if coin not in cache:
+        cache[coin] = fetch_1h(_ro_client(), coin)
+    return cache[coin]
+
+
 def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
-                armed: bool, state: Dict[str, Any]) -> bool:
-    """Fire one entry at market, then protect it. True if a position opened."""
+                armed: bool, state: Dict[str, Any],
+                bars_cache: Optional[Dict[str, Any]] = None) -> "Outcome":
+    """Fire one entry at market, then protect it. Truthy if a position opened."""
     def g(k, d=0.0):
         try:
             return float(ep.get(k) or d)
@@ -662,7 +684,7 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     # price was sitting on at that moment.
     if armed:
         try:
-            bars1h = fetch_1h(_ro_client(), coin)
+            bars1h = cached_1h(coin, bars_cache)
         except Exception as e:
             # Recorded, not just printed. Every other way a candidate is
             # dropped writes a row, so a setup lost to a rate limit was the
