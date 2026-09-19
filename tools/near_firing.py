@@ -104,6 +104,10 @@ def collect(coin_filter: str = "") -> List[Dict[str, Any]]:
             "origin": ep.get("level_origin", "?"),
             "tf": "1H" if "-1H_" in str(ep.get("episode_id", "")) else "4H",
             "buffer": float(ep.get("entry_buffer_sigma") or 0),
+            "since_touch": int(float(ep.get("level_bars_since_last_touch") or 0)),
+            "retests": int(float(ep.get("retests") or 0)),
+            "touches": int(float(ep.get("level_touches") or 0)),
+            "hold_rate": float(ep.get("level_hold_rate") or 0),
             "gap_pct": (px - lvl) / lvl * 100 if lvl else 0.0,
             "drift_pct": abs(px - entry) / entry * 100 if entry else 0.0,
         })
@@ -140,6 +144,16 @@ def main() -> int:
               f"   stop {r['stop']:.6g}   tp {r['tp']:.6g}   rr {r['rr']:.2f}")
         print(f"     drift : {r['drift_pct']:.2f}% from plan "
               f"({'fillable' if r['drift_pct'] <= MAX_ENTRY_DRIFT_PCT else 'too far to fill'})")
+        # Staleness is shown but NOT filtered on. STRK 0.03796 reached this
+        # board 655 bars after its last touch -- 109 days on 4h -- with zero
+        # retests, and nothing in the trading path rejects that. Until enough
+        # labels say where the boundary is, the judgement is the operator's,
+        # which means the number has to be in front of them.
+        hours = r["since_touch"] * (1 if r["tf"] == "1H" else 4)
+        age = f"{hours}h" if hours < 48 else f"{hours/24:.0f}d"
+        print(f"     tested: last touched {r['since_touch']}b ago ({age}), "
+              f"{r['touches']} touches, {r['hold_rate']*100:.0f}% held, "
+              f"{r['retests']} retests")
         print(f"     chart : https://app.hyperliquid.xyz/trade/{r['coin']}")
         # call.py, not review.py: review requires the episode to already exist
         # in episodes.csv, which only the scanner writes and which is 4h-only.

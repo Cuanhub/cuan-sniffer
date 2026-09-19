@@ -113,7 +113,15 @@ def cmd_stats(args):
         return 0
     print("feature separation between what you take and what you skip:")
     print(f"  {'feature':28} {'take avg':>10} {'skip avg':>10} {'gap':>9}")
-    for k in ("level_hold_rate", "level_touches", "run_sigma", "pull_sigma", "retests",
+    # level_bars_since_last_touch is here because the staleness question cannot
+    # be answered without it. On 2026-09-19 STRK 0.03796 reached the board
+    # having last been touched 655 bars ago -- 109 days on 4h -- and never
+    # retested since it flipped. TRADE_MIN_BARS_SINCE_TOUCH is a floor ("still
+    # sitting on it") with no ceiling, so nothing rejects a level that old.
+    # Rather than invent a cap, measure where the take/skip boundary actually
+    # falls; this is the column that shows it.
+    for k in ("level_hold_rate", "level_touches", "level_bars_since_last_touch",
+              "level_pivot_count", "run_sigma", "pull_sigma", "retests",
               "near_sigma", "suggested_rr", "vol_ratio_recent_ref", "vol_trend_slope",
               "vol_down_up_ratio", "bars_since_last_retest"):
         t = sum(_f(e, k) for e in takes) / len(takes)
