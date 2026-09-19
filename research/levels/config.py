@@ -190,6 +190,17 @@ TRIGGER_MAX_ABOVE_SIGMA = _f("LEVELS_TRIGGER_MAX_ABOVE_SIGMA", 2.0)
 # re-creates the deadlock for anything slower than the window.
 WATCH_TTL_HOURS = _i("LEVELS_WATCH_TTL_HOURS", 48)
 
+# How close a watched level must be before it is worth telling a human about.
+#
+# The trigger fires at <=2.0 sigma above the level, so 3.0 means "within about
+# one sigma of being tradeable". Alerting on everything eligible would mean
+# ~140 levels a pass, which is not a signal, it is a mailing list.
+NEAR_ALERT_SIGMA = _f("LEVELS_NEAR_ALERT_SIGMA", 3.0)
+
+# At most one approaching-levels digest per hour. The board is there for
+# looking on purpose; this is only so a zone does not get reached unnoticed.
+NEAR_ALERT_COOLDOWN_SEC = _i("LEVELS_NEAR_ALERT_COOLDOWN_SEC", 3600)
+
 # ---- operational rails ------------------------------------------------------
 MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 2)
 # 5, matching the daily loss stop's own arithmetic: at 3% risk a 15% stop

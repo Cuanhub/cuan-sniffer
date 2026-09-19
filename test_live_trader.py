@@ -164,8 +164,12 @@ class ArmedPathTest(unittest.TestCase):
         T._RO_CLIENT = FakeCandles()
         self.state = {"owned": {}, "opened_today": 0, "day": "d",
                       "realised_today": 0.0, "halted": False, "halt_reason": ""}
+        self.sent = []
+        self._orig_send = T.notify.send
+        T.notify.send = lambda text, **kw: (self.sent.append(text), True)[1]
 
     def tearDown(self):
+        T.notify.send = self._orig_send
         T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT = self._orig_state, self._orig_log, self._orig_ro
         if self._tmp.exists():
             shutil.rmtree(self._tmp)
@@ -305,6 +309,33 @@ class ArmedPathTest(unittest.TestCase):
     def test_no_cache_still_fetches(self):
         # cache=None is the uncached path and must still work.
         self.assertTrue(len(T.cached_1h("AAA", None)) > 0)
+
+    def test_an_open_position_is_announced_with_its_protection(self):
+        # Everything needed to check the fill against a chart, because the
+        # alternative is opening a laptop to find out what was bought.
+        b = FakeBackend()
+        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
+        opened = [s for s in self.sent if "OPENED" in s]
+        self.assertEqual(len(opened), 1)
+        for token in ("AAA", "stop", "tp", "size", "rr", "level"):
+            self.assertIn(token, opened[0])
+
+    def test_a_near_miss_is_recorded_on_the_watchboard(self):
+        b = FakeBackend()
+        board = []
+        T._RO_CLIENT = FakeCandles(level=100.0, held=False)
+        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state,
+                      watchboard=board)
+        self.assertEqual(len(board), 1)
+        self.assertEqual(board[0]["coin"], "AAA")
+        self.assertIn("above", board[0])
+
+    def test_a_fired_trigger_is_not_on_the_watchboard(self):
+        b = FakeBackend()
+        board = []
+        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state,
+                      watchboard=board)
+        self.assertEqual(board, [], "only near-misses belong on the board")
 
     def test_dry_run_sends_nothing(self):
         b = FakeBackend()
@@ -518,6 +549,19 @@ class RealisedPnlTest(unittest.TestCase):
         self.assertNotIn("AAA", st["owned"])
         self.assertAlmostEqual(st["realised_today"], -42.5)
         self.assertEqual(b.pnl_queries, [("AAA", 1789714800000)])
+
+    def test_a_close_is_announced(self):
+        sent = []
+        orig = T.notify.send
+        T.notify.send = lambda text, **kw: (sent.append(text), True)[1]
+        try:
+            b = FakeBackend(realised_pnl=-42.5)
+            T.reconcile(b, self.state_holding())
+        finally:
+            T.notify.send = orig
+        self.assertEqual(len(sent), 1)
+        self.assertIn("CLOSED", sent[0])
+        self.assertIn("AAA", sent[0])
 
     def test_closed_position_accrues_its_win(self):
         b = FakeBackend(realised_pnl=18.0)

@@ -57,6 +57,7 @@ from research.levels.call import find_candidates as _find_candidates  # noqa: E4
 from research.levels.venue_client import HyperliquidReadOnlyClient    # noqa: E402
 from research.levels.universe import select_universe                 # noqa: E402
 from research.levels.trigger import fetch_1h, level_has_held          # noqa: E402
+from research.levels.levels import log_sigma, sigma_distance          # noqa: E402
 
 # Rails come from research/levels/config.py -- one definition each, tagged with
 # whether they rest on a measurement or on my guess.
@@ -64,7 +65,8 @@ from research.levels.config import (                                  # noqa: E4
     RISK_PCT_PER_TRADE, MAX_CONCURRENT, MAX_NEW_PER_DAY, MAX_LEVERAGE,
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
-    MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS,
+    MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA,
+    NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA,
 )
 from research.levels.config import summary as config_summary          # noqa: E402
 
@@ -531,6 +533,7 @@ def main():
             print(f"\n{'coin':10} {'entry':>12} {'stop':>12} {'tp':>12} {'stop%':>7} "
                   f"{'size$':>9} {'risk$':>7} {'rr':>5}  flags")
         bars_cache: Dict[str, Any] = {}      # one pass, one fetch per coin
+        watchboard: List[Dict[str, Any]] = []   # how close each near-miss came
         for ep in intents:
             d = describe(ep, equity, available)
             flags = []
@@ -555,7 +558,7 @@ def main():
                 print("[LEVELS_LIVE] concurrency cap reached, stopping this pass")
                 break
             outcome = execute_one(backend, ep, equity, available, armed, state,
-                                  bars_cache=bars_cache)
+                                  bars_cache=bars_cache, watchboard=watchboard)
             # Re-checked after every ORDER, not once per pass: the runaway
             # opened twelve positions inside a single pass, so a per-pass check
             # would have reported the damage rather than prevented it.
@@ -576,6 +579,22 @@ def main():
                 # opening anything else this pass rather than trade blind.
                 print(f"[LEVELS_LIVE] cannot verify after entry ({bad}) -- pausing this pass")
                 break
+        # Levels price has nearly reached. The board exists for looking at on
+        # purpose; this is only so a zone cannot be reached unnoticed while
+        # nobody is looking. Rate limited, and capped at five -- alerting on
+        # everything eligible would be ~140 lines a pass, which is a mailing
+        # list, not a signal.
+        near = sorted((w for w in watchboard if w["above"] <= NEAR_ALERT_SIGMA),
+                      key=lambda w: w["above"])[:5]
+        if near:
+            lines = "\n".join(
+                f"`{w['coin']}` {float(w['level']):.6g} -- {w['above']:.1f}s above "
+                f"(fires <={TRIGGER_MAX_ABOVE_SIGMA}), entry `{float(w['entry']):.6g}`, "
+                f"stop `{float(w['stop']):.6g}`, rr {float(w['rr'] or 0):.2f}"
+                for w in near)
+            notify.send(f"🔵 *Approaching buy zones* ({len(near)} of "
+                        f"{len(watchboard)} watched)\n{lines}",
+                        key="approaching", cooldown_sec=NEAR_ALERT_COOLDOWN_SEC)
         if args.once:
             return 0
         for _ in range(POLL_SEC):
@@ -674,7 +693,8 @@ def cached_1h(coin: str, cache: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
 
 def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
                 armed: bool, state: Dict[str, Any],
-                bars_cache: Optional[Dict[str, Any]] = None) -> "Outcome":
+                bars_cache: Optional[Dict[str, Any]] = None,
+                watchboard: Optional[List[Dict[str, Any]]] = None) -> "Outcome":
     """Fire one entry at market, then protect it. Truthy if a position opened."""
     def g(k, d=0.0):
         try:
@@ -710,6 +730,18 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
                        "episode_id": ep.get("episode_id", ""), "level_price": g("level_price"),
                        "result": "not_triggered", "detail": why})
             print(f"[LEVELS_LIVE] wait {coin} @ {g('level_price'):.6g}: {why}")
+            # Record how far off it is, so the pass can report the ones that
+            # are nearly there. Recomputed from the bars already in hand
+            # rather than parsed back out of `why`.
+            if watchboard is not None:
+                _closed = bars1h[:-1]
+                _sig = log_sigma(_closed, len(_closed) - 1) if len(_closed) > 6 else 0.0
+                if _sig > 0:
+                    watchboard.append({
+                        "coin": coin, "level": g("level_price"),
+                        "above": sigma_distance(_closed[-1]["c"], g("level_price"), _sig),
+                        "why": why, "entry": entry, "stop": stop, "tp": tp,
+                        "rr": g("suggested_rr")})
             return Outcome()
         print(f"[LEVELS_LIVE] TRIGGER {coin} @ {g('level_price'):.6g}: {why}")
         for flag in review_flags(ep, size_from_stop(equity, entry, stop, available)["size_usd"], equity):
@@ -870,6 +902,19 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
 
     print(f"[LEVELS_LIVE] OPENED {coin} {size_coin} @ {fill_px:.6g} "
           f"stop {stop:.6g} tp {tp:.6g}")
+    # A filled, protected position is the one event worth interrupting someone
+    # for. Everything needed to check it against the chart goes in the message,
+    # because the alternative is opening a laptop to find out what was bought.
+    risk_usd = abs(fill_px - stop) * size_coin
+    reward_usd = abs(tp - fill_px) * size_coin
+    notify.send(
+        f"🟢 *OPENED {coin}* {size_coin:.6g} @ `{fill_px:.6g}`\n"
+        f"stop `{stop:.6g}`  ({(fill_px - stop) / fill_px * 100:.2f}% away, "
+        f"risk ${risk_usd:.2f})\n"
+        f"tp   `{tp:.6g}`  ({(tp - fill_px) / fill_px * 100:.2f}% away, "
+        f"target ${reward_usd:.2f})\n"
+        f"size ${size_usd:.2f}   rr {reward_usd / risk_usd if risk_usd else 0:.2f}   "
+        f"level {g('level_price'):.6g}")
     return Outcome(opened=True, order_sent=True)
 
 
@@ -1009,6 +1054,16 @@ def reconcile(backend, state: Dict[str, Any]) -> None:
                        "detail": f"no longer open at venue; {note}"})
             print(f"[LEVELS_LIVE] {coin} closed at venue -- slot released, {note} "
                   f"(day {state['realised_today']:.2f})")
+            # Closed by a venue stop, a take-profit, or by hand -- this module
+            # only ever learns after the fact, so the alert is how anyone finds
+            # out a position is gone and what it cost.
+            pnl = state.get("realised_today", 0.0)
+            entry = info.get("entry")
+            notify.send(
+                f"⚪ *CLOSED {coin}*\n{note}\n"
+                + (f"entry was `{float(entry):.6g}`, stop `{float(info.get('stop') or 0):.6g}`, "
+                   f"tp `{float(info.get('tp') or 0):.6g}`\n" if entry else "")
+                + f"day realised ${pnl:.2f}")
     save_state(state)
 
 
