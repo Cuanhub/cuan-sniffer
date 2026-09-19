@@ -136,8 +136,12 @@ def main() -> int:
         print(f"     drift : {r['drift_pct']:.2f}% from plan "
               f"({'fillable' if r['drift_pct'] <= MAX_ENTRY_DRIFT_PCT else 'too far to fill'})")
         print(f"     chart : https://app.hyperliquid.xyz/trade/{r['coin']}")
-        print(f"     label : python -m research.levels.review --label {r['eid']} "
-              f"take --note \"...\"")
+        # call.py, not review.py: review requires the episode to already exist
+        # in episodes.csv, which only the scanner writes and which is 4h-only.
+        # call.py records the episode snapshot itself before labelling, which
+        # is how every 1h label in the file got there.
+        print(f"     label : python -m research.levels.call --take {r['eid']} "
+              f"--note \"...\"")
         print()
     return 0
 
