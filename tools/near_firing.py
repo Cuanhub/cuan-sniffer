@@ -44,6 +44,26 @@ def load_watchlist() -> Dict[str, Any]:
         return {}
 
 
+def sigma_to_fire(above: float, touched: bool, below: bool, broke: int) -> float:
+    """How far price must still FALL, in sigma, before the trigger can fire.
+
+    Ranking on `above` alone is wrong, and misleadingly so. A level at 1.9
+    sigma that has not been touched is nearer than one at 4.6 that has: the
+    first needs a 0.9 sigma dip to register a touch, the second needs 2.6 to
+    get back under the ceiling. Both then need the 2h hold, which is time
+    rather than distance and so is not counted here.
+
+    An untouched level is the binding case: price must reach within
+    TRIGGER_ZONE_SIGMA of the level to count as a touch at all, and that is a
+    deeper requirement than the ceiling it also satisfies on the way.
+    """
+    if below or broke:
+        return float("inf")     # price is under the level; not a buy setup yet
+    if not touched:
+        return max(0.0, above - TRIGGER_ZONE_SIGMA)
+    return max(0.0, above - TRIGGER_MAX_ABOVE_SIGMA)
+
+
 def blocking_reason(px: float, lvl: float, above: float, touched: bool,
                     broke: int) -> str:
     """The single condition standing between this level and an entry."""
@@ -96,6 +116,7 @@ def collect(coin_filter: str = "") -> List[Dict[str, Any]]:
         rows.append({
             "coin": coin, "lvl": lvl, "px": px, "above": above,
             "touched": touched,
+            "to_fire": sigma_to_fire(above, touched, px <= lvl, broke),
             "block": blocking_reason(px, lvl, above, touched, broke),
             "rr": float(ep.get("suggested_rr") or 0), "entry": entry,
             "stop": float(ep.get("suggested_stop") or 0),
@@ -111,7 +132,7 @@ def collect(coin_filter: str = "") -> List[Dict[str, Any]]:
             "gap_pct": (px - lvl) / lvl * 100 if lvl else 0.0,
             "drift_pct": abs(px - entry) / entry * 100 if entry else 0.0,
         })
-    rows.sort(key=lambda r: (r["block"] != "FIRING NOW", not r["touched"], r["above"]))
+    rows.sort(key=lambda r: (r["block"] != "FIRING NOW", r["to_fire"], r["above"]))
     return rows
 
 
@@ -133,9 +154,11 @@ def main() -> int:
 
     for i, r in enumerate(rows if args.all else rows[:args.top], 1):
         flag = " [FLIPPED resistance -> support]" if r["origin"] == "flipped_resistance" else ""
+        dist = ("-" if r["to_fire"] == float("inf")
+                else f"{r['to_fire']:.1f}s further down")
         print(f"{i}. {r['coin']} {r['tf']}  level {r['lvl']:.6g}   "
               f"now {r['px']:.6g}  ({r['gap_pct']:+.1f}%, {r['above']:.1f}s above){flag}")
-        print(f"     needs : {r['block']}")
+        print(f"     needs : {r['block']}   [{dist}]")
         # Lead with the level; label the entry as derived from it. Quoting
         # the entry as though it were the level produced a wrong skip on
         # USELESS .25817 -- the entry .260 was not recognised, because there
