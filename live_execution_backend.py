@@ -515,6 +515,68 @@ class LiveExecutionBackend(ExecutionBackend):
 
         return result
 
+    def place_limit_entry(
+        self,
+        coin: str,
+        side: str,
+        price: float,
+        size_usd: float,
+    ) -> Dict[str, Any]:
+        """Rest a GTC limit order at `price`. Does not wait for a fill.
+
+        execute_entry sends a marketable IOC and takes whatever the book
+        offers, which is the right shape for "enter now" and the wrong one for
+        support that taps and leaves. Measured on 2026-09-19: across 139
+        tradeable watched levels not one was inside the 1.5% entry drift
+        guard, the nearest 3.10% away -- every tap had resolved before a poll
+        could see it. A bid sitting at the level is filled BY the tap instead
+        of chasing it.
+
+        Returns {"oid", "price", "size_coin", "error"}. An empty oid means
+        nothing is resting.
+        """
+        coin = coin.upper()
+        out: Dict[str, Any] = {"coin": coin, "side": side.upper(), "oid": "",
+                               "price": 0.0, "size_coin": 0.0, "error": ""}
+        if size_usd <= 0 or price <= 0:
+            out["error"] = "invalid_limit_request"
+            return out
+        if not self._ensure_meta():
+            out["error"] = "asset_metadata_unavailable"
+            return out
+
+        limit_px = self._round_price(coin, float(price))
+        sz = self._notional_to_size(coin, size_usd, limit_px)
+        if limit_px <= 0:
+            out["error"] = "invalid_rounded_limit_price"
+            return out
+        if sz <= 0:
+            out["error"] = "size_rounds_to_zero"
+            return out
+
+        try:
+            resp = self.exchange.order(
+                coin,
+                side.upper() == "LONG",
+                sz,
+                limit_px,
+                {"limit": {"tif": "Gtc"}},
+                reduce_only=False,
+            )
+        except Exception as e:
+            out["error"] = f"sdk_error:{str(e)[:160]}"
+            return out
+
+        # Same envelope as a trigger order: statuses carry resting.oid.
+        oid, err = self._parse_trigger_order_response(resp)
+        out.update({"oid": oid or "", "price": limit_px, "size_coin": sz,
+                    "error": "" if oid else (err or "no_resting_oid")})
+        if LIVE_LOG_ORDERS:
+            print(f"[LIVE_BACKEND] LIMIT_ENTRY {coin} {side.upper()} "
+                  f"{'RESTING' if oid else 'FAILED'} px={limit_px:.8f} sz={sz:.8f} "
+                  f"oid={oid or '-'} err={out['error'] or '-'}")
+        return out
+
     def cancel_order(self, coin: str, oid: str) -> bool:
         coin = str(coin or "").upper().strip()
         oid = str(oid or "").strip()

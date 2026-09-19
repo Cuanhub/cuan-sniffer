@@ -66,7 +66,7 @@ from research.levels.config import (                                  # noqa: E4
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA,
-    NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA,
+    NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
 )
 from research.levels.config import summary as config_summary          # noqa: E402
 
@@ -412,6 +412,11 @@ def main():
                          "in a shell history nor a leftover env var can trade on its own.")
     ap.add_argument("--resume", action="store_true",
                     help="clear a daily-loss halt and resume trading")
+    ap.add_argument("--limit-entry", nargs=2, metavar=("COIN", "LEVEL"),
+                    help="rest a GTC bid at that level's planned entry, then "
+                         "exit. Needs --arm. The bid is protected on fill by "
+                         "the normal pass, and pulled after "
+                         "LEVELS_LIMIT_ENTRY_TTL_HOURS if it never fills.")
     ap.add_argument("--seed-watchlist", action="store_true",
                     help="admit levels the trade log shows already cleared the "
                          "quality bar, then exit. Run once after the watchlist "
@@ -500,8 +505,19 @@ def main():
             return 0                      # stopped while waiting to retry
         print("[LEVELS_LIVE] live backend up")
 
+    if args.limit_entry:
+        if not armed:
+            print("[LEVELS_LIVE] --limit-entry places a REAL order and needs "
+                  "--arm plus LEVELS_LIVE_ARMED=yes")
+            return 1
+        return place_resting_bid(backend, ro, universe, args.limit_entry[0],
+                                 args.limit_entry[1], equity, available, state)
+
     while not _stop:
         if backend is not None:
+            # Pending first: a bid that filled must become a known, protected
+            # position before venue_sanity can meet it as an unknown one.
+            reconcile_pending(backend, state)
             reconcile(backend, state)
             why = preflight(backend, state)
             if why:
@@ -567,7 +583,8 @@ def main():
                            "risk_usd": round(d["risk_usd"], 2),
                            "detail": ",".join(flags)})
                 continue
-            if len(state.get("owned", {})) >= MAX_CONCURRENT:
+            if (len(state.get("owned", {}))
+                    + len(state.get("pending", {}))) >= MAX_CONCURRENT:
                 print("[LEVELS_LIVE] concurrency cap reached, stopping this pass")
                 break
             outcome = execute_one(backend, ep, equity, available, armed, state,
@@ -1080,6 +1097,176 @@ def accrue_close(backend, state: Dict[str, Any], coin: str,
     return note
 
 
+def place_resting_bid(backend, client, universe, coin: str, level: str,
+                      equity: float, available: float, state: Dict[str, Any]) -> int:
+    """Rest a bid at a level's planned entry. One order, then exit.
+
+    Sized from the PLANNED entry and stop, never from the live price -- the
+    whole point is that the live price is somewhere else. Everything the
+    normal path checks still applies: reward/risk, minimum notional, the
+    concurrency cap and the daily cap.
+    """
+    coin = coin.upper()
+    try:
+        want = float(level)
+    except (TypeError, ValueError):
+        print(f"[LEVELS_LIVE] '{level}' is not a level price")
+        return 1
+
+    ep = next((e for e in _find_candidates(client, universe)
+               if str(e.get("coin", "")).upper() == coin
+               and abs(float(e.get("level_price") or 0) - want) < 1e-9), None)
+    if ep is None:
+        print(f"[LEVELS_LIVE] no current candidate for {coin} at {want:g}")
+        return 1
+
+    why = passes_quality(ep, watched=True)
+    if why:
+        print(f"[LEVELS_LIVE] {coin} {want:g} does not clear the entry bar: {why}")
+        return 1
+    if coin in state.get("owned", {}) or coin in state.get("pending", {}):
+        print(f"[LEVELS_LIVE] already holding or bidding on {coin}")
+        return 1
+    if len(state.get("owned", {})) + len(state.get("pending", {})) >= MAX_CONCURRENT:
+        print(f"[LEVELS_LIVE] at the concurrency cap ({MAX_CONCURRENT})")
+        return 1
+    if MAX_NEW_PER_DAY and state.get("opened_today", 0) >= MAX_NEW_PER_DAY:
+        print(f"[LEVELS_LIVE] daily cap reached ({MAX_NEW_PER_DAY})")
+        return 1
+
+    entry = float(ep["suggested_entry"]); stop = float(ep["suggested_stop"])
+    tp = float(ep["suggested_tp"])
+    d = size_from_stop(equity, entry, stop, available)
+    if d["size_usd"] < MIN_NOTIONAL_USD:
+        print(f"[LEVELS_LIVE] size ${d['size_usd']:.2f} below the "
+              f"${MIN_NOTIONAL_USD:g} minimum")
+        return 1
+
+    print(f"[LEVELS_LIVE] resting bid {coin} @ {entry:.6g} "
+          f"(stop {stop:.6g}, tp {tp:.6g}, rr {float(ep.get('suggested_rr') or 0):.2f}, "
+          f"${d['size_usd']:.2f})")
+    res = backend.place_limit_entry(coin=coin, side="LONG", price=entry,
+                                    size_usd=d["size_usd"])
+    if not res.get("oid"):
+        print(f"[LEVELS_LIVE] bid REJECTED: {res.get('error')}")
+        log_trade({"ts_utc": now_iso(), "action": "entry", "coin": coin,
+                   "episode_id": ep.get("episode_id", ""), "entry": entry,
+                   "stop": stop, "tp": tp, "result": "bid_rejected",
+                   "detail": str(res.get("error"))[:400]})
+        return 1
+
+    state.setdefault("pending", {})[coin] = {
+        "oid": res["oid"], "price": res["price"], "size_coin": res["size_coin"],
+        "stop": stop, "tp": tp, "episode_id": ep.get("episode_id", ""),
+        "placed_at": now_iso()}
+    save_state(state)
+    log_trade({"ts_utc": now_iso(), "action": "entry", "coin": coin,
+               "episode_id": ep.get("episode_id", ""), "entry": res["price"],
+               "stop": stop, "tp": tp, "size_usd": round(d["size_usd"], 2),
+               "size_coin": res["size_coin"], "rr": ep.get("suggested_rr"),
+               "result": "bid_resting", "detail": f"oid={res['oid']}"})
+    notify.send(
+        f"🟡 *BID RESTING {coin}* {res['size_coin']:.6g} @ `{res['price']:.6g}`\n"
+        f"stop `{stop:.6g}`   tp `{tp:.6g}`   "
+        f"rr {float(ep.get('suggested_rr') or 0):.2f}   ${d['size_usd']:.2f}\n"
+        f"protected on fill; pulled after {LIMIT_ENTRY_TTL_HOURS}h if unfilled")
+    print(f"[LEVELS_LIVE] bid resting, oid={res['oid']}")
+    return 0
+
+
+def reconcile_pending(backend, state: Dict[str, Any]) -> None:
+    """Turn a filled resting bid into a protected position, or retire it.
+
+    A resting bid is the only path here that can put on a position while
+    nothing is watching, so this runs FIRST in the pass -- before
+    venue_sanity, which would otherwise meet the new position as one this
+    module did not open and halt.
+
+    The gap between fill and protection is one poll interval. That is the
+    honest cost of resting a bid instead of sending a marketable order, and
+    it is why the position is protected here before anything else happens,
+    and closed immediately if protection will not attach.
+    """
+    pending = state.setdefault("pending", {})
+    for coin in list(pending):
+        p = pending[coin]
+        try:
+            szi = backend._get_venue_signed_size(coin)
+        except Exception:
+            continue
+        if szi is None:
+            continue
+
+        if abs(szi) > 1e-12:
+            size_coin = abs(float(szi))
+            entry = float(p.get("price") or 0)
+            stop, tp = float(p.get("stop") or 0), float(p.get("tp") or 0)
+            size_usd = size_coin * entry
+            print(f"[LEVELS_LIVE] resting bid FILLED {coin} {size_coin} @ ~{entry:.6g}")
+            state.setdefault("owned", {})[coin] = {
+                "episode_id": p.get("episode_id", ""), "entry": entry, "stop": stop,
+                "tp": tp, "size_usd": size_usd, "size_coin": size_coin,
+                "opened_at": p.get("placed_at") or now_iso(), "confirmed": True}
+            state["opened_today"] = state.get("opened_today", 0) + 1
+            pending.pop(coin, None)
+            save_state(state)
+            log_trade({"ts_utc": now_iso(), "action": "entry", "coin": coin,
+                       "episode_id": p.get("episode_id", ""), "entry": entry,
+                       "stop": stop, "tp": tp, "size_usd": round(size_usd, 2),
+                       "size_coin": size_coin, "result": "filled",
+                       "detail": f"resting bid oid={p.get('oid','')}"})
+
+            prot = backend.place_native_protection(coin=coin, side="LONG",
+                                                   size_coin=size_coin,
+                                                   stop_price=stop, tp_price=tp)
+            log_trade({"ts_utc": now_iso(), "action": "protection", "coin": coin,
+                       "episode_id": p.get("episode_id", ""),
+                       "result": prot.get("status", ""),
+                       "detail": (f"stop={prot.get('stop_order_id','')} "
+                                  f"tp={prot.get('tp_order_id','')} "
+                                  f"verified={prot.get('stop_verified')}/"
+                                  f"{prot.get('tp_verified')} "
+                                  f"{prot.get('error','')}")[:400]})
+            if prot.get("status") != "protected":
+                print(f"[LEVELS_LIVE] !! protection FAILED on {coin} -- closing")
+                backend.execute_exit(coin=coin, side="LONG", price=entry,
+                                     size_usd=size_usd, reason="protection_failed")
+                for oid in (prot.get("stop_order_id"), prot.get("tp_order_id")):
+                    if oid:
+                        try:
+                            backend.cancel_order(coin=coin, oid=oid)
+                        except Exception:
+                            pass
+                note = accrue_close(backend, state, coin, state["owned"].get(coin, {}))
+                state["owned"].pop(coin, None)
+                save_state(state)
+                notify.send(f"⚠️ *{coin}* resting bid filled but protection came back "
+                            f"`{prot.get('status','?')}` -- closed immediately\n{note}")
+                continue
+            notify.send(
+                f"🟢 *OPENED {coin}* (resting bid) {size_coin:.6g} @ `{entry:.6g}`\n"
+                f"stop `{stop:.6g}`   tp `{tp:.6g}`   size ${size_usd:.2f}")
+            continue
+
+        # Still resting. Pull it once the setup is too old to still be the setup.
+        placed = iso_to_ms(p.get("placed_at", ""))
+        age_h = ((datetime.now(timezone.utc).timestamp() * 1000) - placed) / 3600_000 \
+            if placed else 0
+        if placed and age_h >= LIMIT_ENTRY_TTL_HOURS:
+            ok = False
+            try:
+                ok = backend.cancel_order(coin=coin, oid=p.get("oid", ""))
+            except Exception as e:
+                print(f"[LEVELS_LIVE] cancel failed {coin}: {str(e)[:80]}")
+            print(f"[LEVELS_LIVE] resting bid on {coin} expired after "
+                  f"{age_h:.1f}h -- cancel {'ok' if ok else 'FAILED'}")
+            log_trade({"ts_utc": now_iso(), "action": "skip", "coin": coin,
+                       "episode_id": p.get("episode_id", ""), "result": "bid_expired",
+                       "detail": f"unfilled after {age_h:.1f}h, cancel={'ok' if ok else 'failed'}"})
+            pending.pop(coin, None)
+            save_state(state)
+
+
 def reconcile(backend, state: Dict[str, Any]) -> None:
     """Release slots for positions no longer open at the venue -- stopped out,
     took profit, or closed by hand. Without this the module believes it still
@@ -1124,8 +1311,13 @@ def preflight(backend, state: Dict[str, Any]):
     if state.get("halted"):
         return f"halted: {state.get('halt_reason', '')}"
     owned = state.get("owned", {})
-    if len(owned) >= MAX_CONCURRENT:
-        return f"holding {len(owned)} of max {MAX_CONCURRENT}"
+    pending = state.get("pending", {})
+    # A resting bid is a position the account has already committed to; it
+    # just has not been filled yet. Counting only `owned` would let the bot
+    # open its full allowance alongside bids that then fill on top.
+    if len(owned) + len(pending) >= MAX_CONCURRENT:
+        return (f"holding {len(owned)} and bidding on {len(pending)}, "
+                f"max {MAX_CONCURRENT}")
     if MAX_NEW_PER_DAY and state.get("opened_today", 0) >= MAX_NEW_PER_DAY:
         return f"opened {state['opened_today']} today, max {MAX_NEW_PER_DAY}"
     ms = backend.get_margin_summary()

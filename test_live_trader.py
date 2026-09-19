@@ -69,7 +69,8 @@ class FakeFill:
 
 class FakeBackend:
     def __init__(self, equity=1000.0, protection_ok=True, fill=True, mid=None,
-                 exit_fills=True, protection_oids=False, realised_pnl=0.0):
+                 exit_fills=True, protection_oids=False, realised_pnl=0.0,
+                 bid_ok=True):
         self.equity = equity
         self.mid = mid
         self.protection_ok = protection_ok
@@ -78,6 +79,8 @@ class FakeBackend:
         self.protections = []
         self.exits = []
         self.cancels = []
+        self.bids = []
+        self.bid_ok = bid_ok
         self.pnl_queries = []
         self.realised_pnl = realised_pnl   # None models a failed query
         self.exit_fills = exit_fills
@@ -131,6 +134,13 @@ class FakeBackend:
     def get_realised_pnl(self, coin, since_ms):
         self.pnl_queries.append((coin, since_ms))
         return self.realised_pnl
+
+    def place_limit_entry(self, coin, side, price, size_usd):
+        self.bids.append((coin, price, size_usd))
+        if not self.bid_ok:
+            return {"oid": "", "error": "rejected", "price": 0.0, "size_coin": 0.0}
+        return {"oid": "B1", "price": price, "size_coin": size_usd / price,
+                "error": ""}
 
     def cancel_order(self, coin, oid):
         self.cancels.append((coin, oid))
@@ -879,6 +889,91 @@ class BackendStartTest(unittest.TestCase):
             self.assertIsNone(T.start_backend(dead, sleep=lambda s: None))
         finally:
             T._stop = False
+
+
+class RestingBidTest(unittest.TestCase):
+    """A resting bid is the only path that can open a position unattended.
+
+    execute_entry sends a marketable IOC, so a fill is known instantly. A bid
+    is filled by the market whenever the market feels like it, and this module
+    only finds out on its next pass -- so the fill has to become a KNOWN,
+    protected position before venue_sanity can meet it as an unknown one and
+    halt.
+    """
+
+    def setUp(self):
+        self._tmp = Path("/tmp/_test_resting_bid")
+        if self._tmp.exists():
+            shutil.rmtree(self._tmp)
+        self._tmp.mkdir(parents=True)
+        self._orig = (T.STATE_PATH, T.TRADE_LOG, T.notify.send)
+        T.STATE_PATH = self._tmp / "state.json"
+        T.TRADE_LOG = self._tmp / "trades.csv"
+        self.sent = []
+        T.notify.send = lambda text, **kw: (self.sent.append(text), True)[1]
+        self.state = {"owned": {}, "pending": {}, "opened_today": 0, "day": "d",
+                      "realised_today": 0.0, "halted": False, "halt_reason": ""}
+
+    def tearDown(self):
+        T.STATE_PATH, T.TRADE_LOG, T.notify.send = self._orig
+        if self._tmp.exists():
+            shutil.rmtree(self._tmp)
+
+    def pending(self, coin="AAA", price=100.0, hours_ago=0):
+        from datetime import datetime, timedelta, timezone
+        ts = (datetime.now(timezone.utc)
+              - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return {coin: {"oid": "B1", "price": price, "size_coin": 2.0,
+                       "stop": 95.0, "tp": 115.0, "episode_id": "e1",
+                       "placed_at": ts}}
+
+    def test_a_fill_becomes_a_known_protected_position(self):
+        b = FakeBackend()
+        b.venue = {"AAA": 200.0}                 # the bid filled
+        self.state["pending"] = self.pending()
+        T.reconcile_pending(b, self.state)
+        self.assertIn("AAA", self.state["owned"], "must be known before venue_sanity")
+        self.assertNotIn("AAA", self.state["pending"])
+        self.assertEqual(b.protections, ["AAA"], "a fill must be protected at once")
+        self.assertEqual(self.state["opened_today"], 1)
+        self.assertTrue(any("OPENED" in s for s in self.sent))
+
+    def test_a_fill_that_cannot_be_protected_is_closed(self):
+        b = FakeBackend(protection_ok=False)
+        b.venue = {"AAA": 200.0}
+        self.state["pending"] = self.pending()
+        T.reconcile_pending(b, self.state)
+        self.assertEqual(b.exits, ["AAA"], "an unprotected fill is not the trade")
+        self.assertNotIn("AAA", self.state["owned"])
+
+    def test_a_resting_bid_counts_toward_the_concurrency_cap(self):
+        # A bid is exposure the account has already committed to; it just has
+        # not filled yet. Counting only `owned` would let the bot open its
+        # full allowance alongside bids that then fill on top of it.
+        b = FakeBackend(equity=1000.0)
+        st = {"owned": {}, "pending": {f"C{i}": {} for i in range(T.MAX_CONCURRENT)},
+              "opened_today": 0, "day": "2026-09-19", "realised_today": 0.0,
+              "halted": False, "halt_reason": ""}
+        why = T.preflight(b, st)
+        self.assertIsNotNone(why)
+        self.assertIn("bidding", why)
+
+    def test_an_unfilled_bid_is_left_alone_inside_its_ttl(self):
+        b = FakeBackend()
+        b.venue = {}
+        self.state["pending"] = self.pending(hours_ago=1)
+        T.reconcile_pending(b, self.state)
+        self.assertIn("AAA", self.state["pending"])
+        self.assertEqual(b.cancels, [])
+
+    def test_an_expired_bid_is_cancelled(self):
+        # A bid left sitting is an opinion nobody is holding any more.
+        b = FakeBackend()
+        b.venue = {}
+        self.state["pending"] = self.pending(hours_ago=T.LIMIT_ENTRY_TTL_HOURS + 1)
+        T.reconcile_pending(b, self.state)
+        self.assertEqual(b.cancels, [("AAA", "B1")])
+        self.assertNotIn("AAA", self.state["pending"])
 
 
 class ModuleShapeTest(unittest.TestCase):

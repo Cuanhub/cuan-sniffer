@@ -210,6 +210,14 @@ NEAR_ALERT_SIGMA = _f("LEVELS_NEAR_ALERT_SIGMA", 5.0)
 # looking on purpose; this is only so a zone does not get reached unnoticed.
 NEAR_ALERT_COOLDOWN_SEC = _i("LEVELS_NEAR_ALERT_COOLDOWN_SEC", 3600)
 
+# How long a resting entry bid stays on the book before it is pulled.
+#
+# A bid is only useful while the setup it was placed for is still the setup:
+# levels break, the channel ceiling moves, and a bid left sitting is an
+# opinion nobody is holding any more. 12h, against a 48h watchlist TTL,
+# because an order carries money and a watch does not.
+LIMIT_ENTRY_TTL_HOURS = _i("LEVELS_LIMIT_ENTRY_TTL_HOURS", 12)
+
 # ---- operational rails ------------------------------------------------------
 MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 2)
 # 5, matching the daily loss stop's own arithmetic: at 3% risk a 15% stop
