@@ -172,6 +172,16 @@ STOP_STRUCT_LOOKBACK = _i("LEVELS_STOP_STRUCT_LOOKBACK", 120)
 # stop, not a per-trade risk budget.
 FLAT_LEVERAGE = _f("LEVELS_FLAT_LEVERAGE", 5.0)
 
+# Share of equity committed as MARGIN on each trade. The position is this
+# times FLAT_LEVERAGE, so 3% at 5x is a 15%-of-equity position: $23 of margin
+# controlling $115 of notional on a $768 account.
+#
+# Note this is margin allocated, NOT risk taken. What the trade actually
+# risks is the notional times the stop distance, which is smaller again -- a
+# 1% stop on $115 risks $1.15. Deliberately small: these are test trades,
+# and at 5x a 2% move is 10% on the margin committed.
+MARGIN_PCT_PER_TRADE = _f("LEVELS_MARGIN_PCT", 3.0)
+
 # Kept because the review flags and the trade log still report what a position
 # risks; it no longer decides size.
 RISK_PCT_PER_TRADE = _f("LEVELS_RISK_PCT", 3.0)

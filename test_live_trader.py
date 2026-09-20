@@ -1179,12 +1179,12 @@ class AccountModelTest(unittest.TestCase):
 
 
 class FlatSizingTest(unittest.TestCase):
-    """Every position is the same size, whatever the stop distance.
+    """Fixed margin, fixed leverage: the position is the same every time.
 
-    Size used to be derived from the stop so risk stayed pinned at 3% of
-    equity, and that is exactly what made it unpredictable: a 0.9% stop asked
-    for 3.3x equity, a 13% stop for 0.22x. Same idea, wildly different
-    position, purely because of where the stop landed.
+    MARGIN_PCT_PER_TRADE of equity is committed as margin and levered
+    FLAT_LEVERAGE times. 3% at 5x on a $1000 account is $30 of margin
+    controlling $150 of notional -- not $5000, which is what equity x leverage
+    would mean and would put the whole account behind one trade.
     """
 
     EQ = 1000.0
@@ -1193,14 +1193,24 @@ class FlatSizingTest(unittest.TestCase):
         return T.size_from_stop(self.EQ, entry, stop, available=self.EQ,
                                 venue_max_leverage=vmax)
 
+    def expected(self, lev=None):
+        lev = T.FLAT_LEVERAGE if lev is None else lev
+        return self.EQ * T.MARGIN_PCT_PER_TRADE / 100.0 * lev
+
+    def test_margin_is_a_share_of_equity_not_the_whole_of_it(self):
+        d = self.size(100.0, 99.0)
+        self.assertAlmostEqual(d["margin_usd"],
+                               self.EQ * T.MARGIN_PCT_PER_TRADE / 100.0)
+        self.assertAlmostEqual(d["size_usd"], self.expected())
+        self.assertLess(d["size_usd"], self.EQ,
+                        "a test-sized position must be smaller than the account")
+
     def test_size_is_the_same_whatever_the_stop(self):
         tight = self.size(100.0, 99.0)      # 1% stop
         wide = self.size(100.0, 87.0)       # 13% stop
         self.assertAlmostEqual(tight["size_usd"], wide["size_usd"])
-        self.assertAlmostEqual(tight["size_usd"], self.EQ * T.FLAT_LEVERAGE)
 
     def test_risk_moves_with_the_stop_and_is_reported(self):
-        # The trade-off taken deliberately: constant size, variable risk.
         tight = self.size(100.0, 99.0)
         wide = self.size(100.0, 87.0)
         self.assertLess(tight["risk_usd"], wide["risk_usd"])
@@ -1209,12 +1219,12 @@ class FlatSizingTest(unittest.TestCase):
     def test_the_venue_ceiling_is_respected(self):
         # 130 of the venue's 234 perps cap at 3x, PONS and CASHCAT among them.
         d = self.size(100.0, 99.0, vmax=3)
-        self.assertAlmostEqual(d["size_usd"], self.EQ * 3)
+        self.assertAlmostEqual(d["size_usd"], self.expected(3))
         self.assertEqual(d["capped"], 1.0)
 
     def test_a_generous_venue_ceiling_does_not_raise_the_flat_rate(self):
         d = self.size(100.0, 99.0, vmax=40)
-        self.assertAlmostEqual(d["size_usd"], self.EQ * T.FLAT_LEVERAGE)
+        self.assertAlmostEqual(d["size_usd"], self.expected())
         self.assertEqual(d["capped"], 0.0)
 
     def test_an_inverted_stop_sizes_to_nothing(self):

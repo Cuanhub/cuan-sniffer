@@ -66,6 +66,7 @@ from research.levels.config import (                                  # noqa: E4
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
+    MARGIN_PCT_PER_TRADE,
     NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
     TRIGGER_HOLD_HOURS, TRIGGER_HOLD_HOURS_SWING,
 )
@@ -275,7 +276,7 @@ def account_equity(info, addr: str) -> Dict[str, float]:
 def size_from_stop(equity: float, entry: float, stop: float,
                    available: float = None,
                    venue_max_leverage: float = None) -> Dict[str, float]:
-    """Flat size: equity x FLAT_LEVERAGE, whatever the stop distance is.
+    """Flat size: MARGIN_PCT_PER_TRADE of equity, levered FLAT_LEVERAGE times.
 
     Size was derived from the stop so risk stayed pinned at 3% of equity, and
     that is exactly what made it unpredictable -- a 0.9% stop asked for 3.3x
@@ -300,7 +301,10 @@ def size_from_stop(equity: float, entry: float, stop: float,
     if venue_max_leverage and venue_max_leverage > 0 and lev > venue_max_leverage:
         lev = float(venue_max_leverage)
         capped = 1.0
-    size_usd = equity * lev
+    # Margin committed, then levered. NOT equity x leverage: that would put
+    # the whole account behind every trade.
+    margin_usd = equity * MARGIN_PCT_PER_TRADE / 100.0
+    size_usd = margin_usd * lev
     # A position also has to fit the margin actually free right now, which is
     # not the same as equity once something else is already held.
     margin_capped = 0.0
@@ -311,8 +315,8 @@ def size_from_stop(equity: float, entry: float, stop: float,
             size_usd = max_by_margin
     return {"size_usd": size_usd, "risk_usd": size_usd * stop_dist,
             "stop_dist_pct": stop_dist * 100, "capped": capped,
-            "margin_capped": margin_capped,
-            "leverage": (size_usd / equity) if equity > 0 else 0.0}
+            "margin_capped": margin_capped, "margin_usd": margin_usd,
+            "leverage": lev}
 
 
 @dataclass(frozen=True)
