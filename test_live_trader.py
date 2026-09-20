@@ -1062,6 +1062,93 @@ class DayRolloverTest(unittest.TestCase):
                       "a process that runs for days must roll the day itself")
 
 
+class StateFileTest(unittest.TestCase):
+    """A corrupt state file is not a new account.
+
+    load_state used to fall through to a fresh empty dict, which is the worst
+    available answer: `halted` comes back False, clearing a halt no human
+    cleared; `owned` comes back empty, forgetting live positions; `pending`
+    comes back empty, orphaning resting bids at the venue. save_state was
+    also non-atomic, and this process is SIGKILLed routinely -- so an
+    interrupted write produced exactly that corrupt file.
+    """
+
+    def setUp(self):
+        self._tmp = Path("/tmp/_test_statefile")
+        if self._tmp.exists():
+            shutil.rmtree(self._tmp)
+        self._tmp.mkdir(parents=True)
+        self._orig = T.STATE_PATH
+        T.STATE_PATH = self._tmp / "state.json"
+
+    def tearDown(self):
+        T.STATE_PATH = self._orig
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_no_file_is_a_first_run(self):
+        st = T.load_state()
+        self.assertEqual(st["owned"], {})
+        self.assertFalse(st["halted"])
+
+    def test_a_corrupt_file_refuses_to_start(self):
+        T.STATE_PATH.write_text('{"owned": {"AAA": ')      # truncated write
+        with self.assertRaises(SystemExit):
+            T.load_state()
+
+    def test_a_non_object_file_refuses_to_start(self):
+        T.STATE_PATH.write_text('["not", "an", "object"]')
+        with self.assertRaises(SystemExit):
+            T.load_state()
+
+    def test_a_halt_survives_a_round_trip(self):
+        T.save_state({"owned": {"AAA": {}}, "halted": True,
+                      "halt_reason": "venue mismatch", "pending": {}})
+        st = T.load_state()
+        self.assertTrue(st["halted"])
+        self.assertEqual(st["halt_reason"], "venue mismatch")
+        self.assertIn("AAA", st["owned"])
+
+    def test_the_write_is_atomic(self):
+        # tmp-then-replace, so a reader sees the old file or the new one,
+        # never a fragment.
+        T.save_state({"owned": {}, "halted": False})
+        self.assertFalse((self._tmp / "state.json.tmp").exists(),
+                         "the temp file must be renamed away, not left behind")
+        self.assertTrue(T.STATE_PATH.exists())
+
+
+class AccountModelTest(unittest.TestCase):
+    """Never guess the account model.
+
+    A failed query used to fall through to `standard`, which on this account
+    reads marginSummary.accountValue -- $70.88 against a real $786.25, an 11x
+    under-read. Every position would size off that and fall under
+    MIN_NOTIONAL, so the trader would stop trading and look like a quiet
+    market. The query fails on a 429, which happens routinely.
+    """
+
+    class Info:
+        def __init__(self, boom=False):
+            self.boom = boom
+
+        def query_user_abstraction_state(self, addr):
+            if self.boom:
+                raise RuntimeError("429 rate limited")
+            return "unifiedAccount"
+
+        def spot_user_state(self, addr):
+            return {"balances": [{"coin": "USDC", "total": "786.25", "hold": "0.0"}]}
+
+    def test_a_unified_account_reads_spot_usdc(self):
+        acc = T.account_equity(self.Info(), "0xabc")
+        self.assertEqual(acc["model"], "unified")
+        self.assertAlmostEqual(acc["equity"], 786.25)
+
+    def test_an_unknown_model_refuses_rather_than_guessing(self):
+        with self.assertRaises(RuntimeError):
+            T.account_equity(self.Info(boom=True), "0xabc")
+
+
 class ModuleShapeTest(unittest.TestCase):
     def test_every_function_main_calls_is_defined_before_the_guard(self):
         """Regression for the NameError on the first arming attempt: functions

@@ -1819,11 +1819,16 @@ class LiveExecutionBackend(ExecutionBackend):
                 oid = status["resting"].get("oid")
                 if oid:
                     resting_oids.append(oid)
-                    try:
-                        self.exchange.cancel(coin, oid)
-                        print(f"[LIVE_BACKEND] WARNING: IOC rested — cancelled oid={oid}")
-                    except Exception as ce:
-                        print(f"[LIVE_BACKEND] Cancel failed for oid={oid}: {ce}")
+                    # Through cancel_order, not exchange.cancel directly: that
+                    # bypassed the int coercion that the other call site needed,
+                    # and the validation and logging with it. It happens to work
+                    # only because the response JSON yields an int.
+                    if not self.cancel_order(coin, oid):
+                        print(f"[LIVE_BACKEND] WARNING: IOC rested and the cancel "
+                              f"FAILED oid={oid} -- an unintended resting order "
+                              f"is live at the venue")
+                    else:
+                        print(f"[LIVE_BACKEND] WARNING: IOC rested -- cancelled oid={oid}")
 
             elif "error" in status:
                 errors.append(str(status["error"]))

@@ -115,18 +115,54 @@ def iso_to_ms(ts: str) -> Optional[int]:
 
 
 def load_state() -> Dict[str, Any]:
+    """Read the state file. A file that exists but will not parse is FATAL.
+
+    This used to fall through to a fresh empty state, which is the most
+    dangerous thing it could do: `halted` would come back False, clearing a
+    halt no human cleared; `owned` would come back empty, forgetting live
+    positions; `pending` would come back empty, orphaning resting bids at the
+    venue. A corrupt file is not a new account, and the difference is the
+    whole safety model.
+
+    Returning the empty default is correct only when there is genuinely no
+    file -- a first run.
+    """
     if STATE_PATH.exists():
+        raw = STATE_PATH.read_text()
         try:
-            return json.loads(STATE_PATH.read_text())
-        except Exception:
-            pass
-    return {"owned": {}, "watching": {}, "opened_today": 0, "day": "", "realised_today": 0.0,
-            "halted": False, "halt_reason": ""}
+            parsed = json.loads(raw)
+        except ValueError as e:
+            raise SystemExit(
+                f"[LEVELS_LIVE] !! state file {STATE_PATH} exists but will not "
+                f"parse ({e}). Refusing to start on a blank state: that would "
+                f"clear any halt and forget open positions. Inspect it by hand, "
+                f"or move it aside if this account is genuinely flat.")
+        if not isinstance(parsed, dict):
+            raise SystemExit(
+                f"[LEVELS_LIVE] !! state file {STATE_PATH} is {type(parsed).__name__}, "
+                f"not an object. Refusing to start.")
+        return parsed
+    return {"owned": {}, "watching": {}, "pending": {}, "opened_today": 0, "day": "",
+            "realised_today": 0.0, "halted": False, "halt_reason": ""}
 
 
 def save_state(s: Dict[str, Any]) -> None:
+    """Write the state file atomically.
+
+    write_text truncates and then writes, so a kill mid-write leaves a
+    half-written file -- and this process is SIGKILLed routinely by launchd
+    and by deploys. Paired with the old load_state, which silently replaced an
+    unparseable file with a clean slate, that turned an interrupted write into
+    a cleared halt and forgotten positions.
+
+    storage.py has always written its CSVs tmp-then-replace. This is the same
+    thing: rename is atomic on POSIX, so a reader sees either the old file or
+    the new one, never a fragment.
+    """
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(s, indent=2))
+    tmp = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
+    tmp.write_text(json.dumps(s, indent=2))
+    tmp.replace(STATE_PATH)
 
 
 def log_trade(row: Dict[str, Any]) -> None:
@@ -208,11 +244,18 @@ def account_equity(info, addr: str) -> Dict[str, float]:
     by about 11x. live_execution_backend._get_margin_summary_unified() has
     always handled this; this planner bypassed it and got it wrong.
     """
-    unified = False
+    # Never guess the account model. A failed query used to fall through to
+    # `standard`, which on THIS account reads marginSummary.accountValue --
+    # $70.88 against a real $786.25, an 11x under-read. Every position would
+    # then size off 11x too little equity and fall under MIN_NOTIONAL, so the
+    # trader would stop trading entirely and look like a quiet market. The
+    # query fails on a 429, which happens routinely.
     try:
         unified = str(info.query_user_abstraction_state(addr)).strip().lower() == "unifiedaccount"
-    except Exception:
-        pass
+    except Exception as e:
+        raise RuntimeError(
+            f"cannot determine account model ({str(e)[:120]}); refusing to "
+            f"size against a guess") from e
     if unified:
         sp = info.spot_user_state(addr)
         usdc = next((b for b in sp.get("balances", [])
@@ -485,8 +528,18 @@ def main():
             print(f"[LEVELS_LIVE] account model: {acc['model']}   equity ${equity:.2f}   "
                   f"used ${acc['used']:.2f}   available ${available:.2f}")
         except Exception as e:
+            if armed:
+                # The armed loop re-reads equity from the backend every pass,
+                # so this figure is only the banner -- but a banner that
+                # invents $100 against a real $768 is the kind of number an
+                # operator checks a pass against and believes.
+                raise SystemExit(
+                    f"[LEVELS_LIVE] !! equity query failed ({str(e)[:120]}) and "
+                    f"this process is ARMED. Refusing to start on a guessed "
+                    f"balance.")
             equity = 100.0
-            print(f"[LEVELS_LIVE] equity query failed ({e}); defaulting to ${equity:.2f}")
+            print(f"[LEVELS_LIVE] equity query failed ({e}); dry run, "
+                  f"assuming ${equity:.2f} to print sizes")
     print(f"[LEVELS_LIVE] risk per trade: ${equity * RISK_PCT_PER_TRADE / 100:.2f}")
 
     backend = None
