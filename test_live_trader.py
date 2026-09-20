@@ -1055,6 +1055,18 @@ class DayRolloverTest(unittest.TestCase):
         self.assertTrue(st["halted"])
         self.assertEqual(st["halt_reason"], "venue mismatch")
 
+    def test_the_universe_refreshes_on_the_day_roll(self):
+        # "top N perps by 24h volume, refreshed daily" -- the trader picked it
+        # once at startup and ran on it for the life of the process, which
+        # under launchd is days.
+        src = Path("tools/live_levels_trader.py").read_text()
+        loop = src.index("while not _stop:")
+        window = src[loop:loop + 900]
+        self.assertIn("roll_day(state)", window)
+        self.assertIn("select_universe", window,
+                      "a frozen universe trades names that dropped out for "
+                      "illiquidity and never sees the ones that came in")
+
     def test_the_loop_rolls_the_day_not_just_startup(self):
         src = Path("tools/live_levels_trader.py").read_text()
         loop = src.index("while not _stop:")

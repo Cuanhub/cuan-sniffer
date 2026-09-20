@@ -565,7 +565,19 @@ def main():
                                  args.limit_entry[1], equity, available, state)
 
     while not _stop:
-        roll_day(state)
+        if roll_day(state):
+            # The universe is "top N perps by 24h volume, refreshed daily" --
+            # and this loop never refreshed it. scanner.py has always rolled
+            # it on the date change; the trader picked it once at startup and
+            # ran on it for as long as the process lived, which under launchd
+            # is days. A frozen universe keeps trading names that have dropped
+            # out for illiquidity and never sees the ones that came in.
+            try:
+                universe = select_universe(ro)
+                print(f"[LEVELS_LIVE] universe refreshed: {len(universe)} symbols")
+            except Exception as e:
+                print(f"[LEVELS_LIVE] universe refresh failed ({str(e)[:80]}); "
+                      f"keeping yesterday's {len(universe)} symbols")
         if backend is not None:
             # Pending first: a bid that filled must become a known, protected
             # position before venue_sanity can meet it as an unknown one.
