@@ -65,7 +65,7 @@ from research.levels.config import (                                  # noqa: E4
     RISK_PCT_PER_TRADE, MAX_CONCURRENT, MAX_NEW_PER_DAY, MAX_LEVERAGE,
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
-    MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA,
+    MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
     NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
     TRIGGER_HOLD_HOURS, TRIGGER_HOLD_HOURS_SWING,
 )
@@ -273,18 +273,34 @@ def account_equity(info, addr: str) -> Dict[str, float]:
 
 
 def size_from_stop(equity: float, entry: float, stop: float,
-                   available: float = None) -> Dict[str, float]:
-    """Notional implied by risking RISK_PCT_PER_TRADE of equity down to the
-    structural stop, then capped by MAX_LEVERAGE. Size comes from the stop
-    distance; leverage is only ever a ceiling on the result."""
+                   available: float = None,
+                   venue_max_leverage: float = None) -> Dict[str, float]:
+    """Flat size: equity x FLAT_LEVERAGE, whatever the stop distance is.
+
+    Size was derived from the stop so risk stayed pinned at 3% of equity, and
+    that is exactly what made it unpredictable -- a 0.9% stop asked for 3.3x
+    equity, a 13% stop for 0.22x. Same idea, wildly different position, purely
+    because of where the stop landed.
+
+    Flat sizing trades constant risk for a system that behaves the same way
+    every time. risk_usd is still reported, because the trade log and the
+    review flags need to say what a position actually risks, but it no longer
+    decides anything.
+
+    venue_max_leverage is the per-coin ceiling Hyperliquid enforces -- 3x on
+    130 of its 234 perps, including PONS, CASHCAT, VVV and USELESS. Asking for
+    5x there is rejected by the venue, so the ask is lowered instead.
+    """
     if entry <= 0 or stop <= 0 or entry <= stop:
         return {"size_usd": 0.0, "risk_usd": 0.0, "stop_dist_pct": 0.0,
-                "capped": 0.0, "margin_capped": 0.0}
+                "capped": 0.0, "margin_capped": 0.0, "leverage": 0.0}
     stop_dist = (entry - stop) / entry
-    risk_usd = equity * RISK_PCT_PER_TRADE / 100.0
-    size_usd = risk_usd / stop_dist
-    capped = 1.0 if size_usd > equity * MAX_LEVERAGE else 0.0
-    size_usd = min(size_usd, equity * MAX_LEVERAGE)
+    lev = min(FLAT_LEVERAGE, MAX_LEVERAGE)
+    capped = 0.0
+    if venue_max_leverage and venue_max_leverage > 0 and lev > venue_max_leverage:
+        lev = float(venue_max_leverage)
+        capped = 1.0
+    size_usd = equity * lev
     # A position also has to fit the margin actually free right now, which is
     # not the same as equity once something else is already held.
     margin_capped = 0.0
@@ -293,9 +309,10 @@ def size_from_stop(equity: float, entry: float, stop: float,
         if size_usd > max_by_margin:
             margin_capped = 1.0
             size_usd = max_by_margin
-    return {"size_usd": size_usd, "risk_usd": risk_usd,
+    return {"size_usd": size_usd, "risk_usd": size_usd * stop_dist,
             "stop_dist_pct": stop_dist * 100, "capped": capped,
-            "margin_capped": margin_capped}
+            "margin_capped": margin_capped,
+            "leverage": (size_usd / equity) if equity > 0 else 0.0}
 
 
 @dataclass(frozen=True)
@@ -851,7 +868,8 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
             return Outcome()
         print(f"[LEVELS_LIVE] TRIGGER {coin} @ {g('level_price'):.6g}: {why} "
               f"[{'flip, ' + str(hold_h) + 'h channel hold' if is_flip else 'swing low, tap and reclaim'}]")
-        for flag in review_flags(ep, size_from_stop(equity, entry, stop, available)["size_usd"], equity):
+        for flag in review_flags(ep, size_from_stop(equity, entry, stop, available,
+                                                    venue_max_leverage=None)["size_usd"], equity):
             print(f"[LEVELS_LIVE] [REVIEW] {coin}: {flag}")
             log_trade({"ts_utc": now_iso(), "action": "review", "coin": coin,
                        "episode_id": ep.get("episode_id", ""),
@@ -872,7 +890,12 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
             return Outcome()
         entry = ref
 
-    szi = size_from_stop(equity, entry, stop, available)
+    vmax = None
+    try:
+        vmax = backend.max_leverage_for(coin) if backend is not None else None
+    except Exception:
+        vmax = None
+    szi = size_from_stop(equity, entry, stop, available, venue_max_leverage=vmax)
     size_usd = szi["size_usd"]
     row = {"ts_utc": now_iso(), "coin": coin, "episode_id": ep.get("episode_id", ""),
            "level_price": g("level_price"), "entry": entry, "stop": stop, "tp": tp,
@@ -904,6 +927,11 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         "episode_id": ep.get("episode_id", ""), "entry": entry, "stop": stop,
         "tp": tp, "size_usd": size_usd, "opened_at": now_iso(), "confirmed": False}
     save_state(state)
+
+    # Hyperliquid enforces leverage per asset, so a 5x-sized order into a coin
+    # the account has set to 3x is refused for margin. Set it to match before
+    # the order, capped at whatever the venue allows on this coin.
+    backend.set_leverage(coin, int(szi.get("leverage") or FLAT_LEVERAGE))
 
     fill = backend.execute_entry(coin=coin, side="LONG", price=entry,
                                  size_usd=size_usd, confidence=0.5)
@@ -1229,7 +1257,13 @@ def place_resting_bid(backend, client, universe, coin: str, level: str,
 
     entry = float(ep["suggested_entry"]); stop = float(ep["suggested_stop"])
     tp = float(ep["suggested_tp"])
-    d = size_from_stop(equity, entry, stop, available)
+    vmax = None
+    try:
+        vmax = backend.max_leverage_for(coin)
+    except Exception:
+        vmax = None
+    d = size_from_stop(equity, entry, stop, available, venue_max_leverage=vmax)
+    backend.set_leverage(coin, int(d.get("leverage") or FLAT_LEVERAGE))
     if d["size_usd"] < MIN_NOTIONAL_USD:
         print(f"[LEVELS_LIVE] size ${d['size_usd']:.2f} below the "
               f"${MIN_NOTIONAL_USD:g} minimum")

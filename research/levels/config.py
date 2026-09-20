@@ -156,6 +156,24 @@ STOP_STRUCT_LOOKBACK = _i("LEVELS_STOP_STRUCT_LOOKBACK", 120)
 # 3% for the initial trials, to be raised only as the system demonstrates
 # profitability. Nothing measures this strategy's edge yet, so the first
 # trades are being bought as information at roughly $24 each.
+# Flat leverage. Every position is the same size: equity x FLAT_LEVERAGE,
+# capped by what the venue allows on that coin and by free margin.
+#
+# Size used to be derived from the stop distance so that risk stayed pinned at
+# RISK_PCT_PER_TRADE. That is defensible and it is also why sizing was
+# unpredictable: a 0.9% stop asked for 3.3x equity, a 13% stop asked for
+# 0.22x. The same idea produced a huge position or a pointless one depending
+# on where the stop happened to land.
+#
+# Flat sizing gives up constant risk to get a system that behaves the same way
+# every time. Risk per trade is then whatever the stop distance implies --
+# 5x into a 2% stop risks 10% of equity, into a 10% stop risks 50% -- so the
+# rails that still bind are MAX_CONCURRENT, MAX_NEW_PER_DAY and the daily loss
+# stop, not a per-trade risk budget.
+FLAT_LEVERAGE = _f("LEVELS_FLAT_LEVERAGE", 5.0)
+
+# Kept because the review flags and the trade log still report what a position
+# risks; it no longer decides size.
 RISK_PCT_PER_TRADE = _f("LEVELS_RISK_PCT", 3.0)
 MAX_LEVERAGE = _f("LEVELS_MAX_LEVERAGE", 10.0)
 # Lowered from 2.5: at 2.5 the filter kept 6 of 11 takes, at 2.0 it keeps 7

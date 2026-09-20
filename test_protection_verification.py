@@ -168,6 +168,7 @@ class StubBackend(Backend):
 
     def __init__(self, resting, stop_oid="S1", tp_oid="T1"):
         self._sz_decimals = {"UNI": 1}
+        self._max_leverage = {"UNI": 10}
         self._resting = resting          # None models an unreachable endpoint
         self._stop_oid, self._tp_oid = stop_oid, tp_oid
         self.debug = False
@@ -338,7 +339,7 @@ class AssetMetadataTest(unittest.TestCase):
 
     def backend(self, fail_times=0):
         b = Backend.__new__(Backend)
-        b._sz_decimals, b.debug = {}, False
+        b._sz_decimals, b._max_leverage, b.debug = {}, {}, False
         b.info = self.Meta(fail_times)
         return b
 
@@ -359,7 +360,7 @@ class AssetMetadataTest(unittest.TestCase):
 
     def test_protection_refuses_without_metadata(self):
         b = StubBackend([good_stop(), good_tp()])
-        b._sz_decimals = {}
+        b._sz_decimals, b._max_leverage = {}, {}
         b.info = self.Meta(fail_times=99)
         res = b.protect()
         self.assertEqual(res["status"], "missing")
@@ -367,7 +368,7 @@ class AssetMetadataTest(unittest.TestCase):
 
     def test_stop_only_refuses_without_metadata(self):
         b = StubBackend([good_stop()])
-        b._sz_decimals = {}
+        b._sz_decimals, b._max_leverage = {}, {}
         b.info = self.Meta(fail_times=99)
         res = b.place_stop_only(coin="UNI", side="LONG", size_coin=46.3,
                                 stop_price=95.0)

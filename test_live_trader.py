@@ -70,7 +70,7 @@ class FakeFill:
 class FakeBackend:
     def __init__(self, equity=1000.0, protection_ok=True, fill=True, mid=None,
                  exit_fills=True, protection_oids=False, realised_pnl=0.0,
-                 bid_ok=True):
+                 bid_ok=True, venue_max_lev=10):
         self.equity = equity
         self.mid = mid
         self.protection_ok = protection_ok
@@ -81,6 +81,8 @@ class FakeBackend:
         self.cancels = []
         self.bids = []
         self.bid_ok = bid_ok
+        self.leverage_set = []
+        self.venue_max_lev = venue_max_lev
         self.pnl_queries = []
         self.realised_pnl = realised_pnl   # None models a failed query
         self.exit_fills = exit_fills
@@ -141,6 +143,13 @@ class FakeBackend:
             return {"oid": "", "error": "rejected", "price": 0.0, "size_coin": 0.0}
         return {"oid": "B1", "price": price, "size_coin": size_usd / price,
                 "error": ""}
+
+    def max_leverage_for(self, coin):
+        return self.venue_max_lev
+
+    def set_leverage(self, coin, leverage, is_cross=True):
+        self.leverage_set.append((coin, leverage))
+        return True
 
     def cancel_order(self, coin, oid):
         self.cancels.append((coin, oid))
@@ -346,6 +355,14 @@ class ArmedPathTest(unittest.TestCase):
         T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state,
                       watchboard=board)
         self.assertEqual(board, [], "only near-misses belong on the board")
+
+    def test_leverage_is_set_on_the_venue_before_the_order(self):
+        # Hyperliquid enforces leverage per asset: a 5x-sized order into a coin
+        # the account has set to 3x is simply refused for margin.
+        b = FakeBackend()
+        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
+        self.assertTrue(b.leverage_set, "leverage must be set before entry")
+        self.assertEqual(b.leverage_set[0][0], "AAA")
 
     def test_dry_run_sends_nothing(self):
         b = FakeBackend()
@@ -1159,6 +1176,50 @@ class AccountModelTest(unittest.TestCase):
     def test_an_unknown_model_refuses_rather_than_guessing(self):
         with self.assertRaises(RuntimeError):
             T.account_equity(self.Info(boom=True), "0xabc")
+
+
+class FlatSizingTest(unittest.TestCase):
+    """Every position is the same size, whatever the stop distance.
+
+    Size used to be derived from the stop so risk stayed pinned at 3% of
+    equity, and that is exactly what made it unpredictable: a 0.9% stop asked
+    for 3.3x equity, a 13% stop for 0.22x. Same idea, wildly different
+    position, purely because of where the stop landed.
+    """
+
+    EQ = 1000.0
+
+    def size(self, entry, stop, vmax=None):
+        return T.size_from_stop(self.EQ, entry, stop, available=self.EQ,
+                                venue_max_leverage=vmax)
+
+    def test_size_is_the_same_whatever_the_stop(self):
+        tight = self.size(100.0, 99.0)      # 1% stop
+        wide = self.size(100.0, 87.0)       # 13% stop
+        self.assertAlmostEqual(tight["size_usd"], wide["size_usd"])
+        self.assertAlmostEqual(tight["size_usd"], self.EQ * T.FLAT_LEVERAGE)
+
+    def test_risk_moves_with_the_stop_and_is_reported(self):
+        # The trade-off taken deliberately: constant size, variable risk.
+        tight = self.size(100.0, 99.0)
+        wide = self.size(100.0, 87.0)
+        self.assertLess(tight["risk_usd"], wide["risk_usd"])
+        self.assertAlmostEqual(wide["risk_usd"] / tight["risk_usd"], 13.0, places=1)
+
+    def test_the_venue_ceiling_is_respected(self):
+        # 130 of the venue's 234 perps cap at 3x, PONS and CASHCAT among them.
+        d = self.size(100.0, 99.0, vmax=3)
+        self.assertAlmostEqual(d["size_usd"], self.EQ * 3)
+        self.assertEqual(d["capped"], 1.0)
+
+    def test_a_generous_venue_ceiling_does_not_raise_the_flat_rate(self):
+        d = self.size(100.0, 99.0, vmax=40)
+        self.assertAlmostEqual(d["size_usd"], self.EQ * T.FLAT_LEVERAGE)
+        self.assertEqual(d["capped"], 0.0)
+
+    def test_an_inverted_stop_sizes_to_nothing(self):
+        self.assertEqual(self.size(100.0, 100.0)["size_usd"], 0.0)
+        self.assertEqual(self.size(100.0, 101.0)["size_usd"], 0.0)
 
 
 class ModuleShapeTest(unittest.TestCase):

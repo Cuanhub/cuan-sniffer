@@ -153,6 +153,7 @@ class LiveExecutionBackend(ExecutionBackend):
         self._mid_cache: Dict[str, float] = {}
         self._mid_cache_ts: float = 0.0
         self._sz_decimals: Dict[str, int] = {}
+        self._max_leverage: Dict[str, int] = {}
         self._unified_account_cache: Optional[bool] = None
 
         self._load_meta()
@@ -1657,6 +1658,36 @@ class LiveExecutionBackend(ExecutionBackend):
 
     # ── Precision helpers ──────────────────────────────────────────────────
 
+    def max_leverage_for(self, coin: str) -> Optional[int]:
+        """The venue's per-coin leverage ceiling, or None if unknown."""
+        if not self._ensure_meta():
+            return None
+        return self._max_leverage.get(coin.upper()) or None
+
+    def set_leverage(self, coin: str, leverage: int, is_cross: bool = True) -> bool:
+        """Set the account's leverage for one coin before sizing into it.
+
+        Hyperliquid enforces leverage per asset, so opening 5x notional while
+        the account is set to 3x on that coin is simply refused for margin.
+        Flat sizing is meaningless unless this is set to match.
+        """
+        coin = str(coin or "").upper().strip()
+        cap = self.max_leverage_for(coin)
+        want = int(max(1, leverage))
+        if cap:
+            want = min(want, int(cap))
+        try:
+            resp = self.exchange.update_leverage(want, coin, is_cross)
+        except Exception as e:
+            print(f"[LIVE_BACKEND] set_leverage FAILED {coin} -> {want}x: {str(e)[:140]}")
+            return False
+        ok = isinstance(resp, dict) and str(resp.get("status", "")).lower() == "ok"
+        if LIVE_LOG_ORDERS or not ok:
+            print(f"[LIVE_BACKEND] set_leverage {coin} -> {want}x "
+                  f"({'cross' if is_cross else 'isolated'}) "
+                  f"{'ok' if ok else 'NOT_OK'} resp={str(resp)[:120]}")
+        return ok
+
     def _ensure_meta(self) -> bool:
         """True when asset metadata is available, retrying the load if not.
 
@@ -1688,6 +1719,9 @@ class LiveExecutionBackend(ExecutionBackend):
                 name = str(asset.get("name", "")).upper()
                 if name:
                     self._sz_decimals[name] = int(asset.get("szDecimals", 3))
+                    # 130 of the venue's 234 perps cap at 3x. Asking for more
+                    # is rejected, so the ask has to know the ceiling.
+                    self._max_leverage[name] = int(asset.get("maxLeverage", 0) or 0)
         except Exception as e:
             print(f"[LIVE_BACKEND] _load_meta failed: {str(e)[:200]}")
 
