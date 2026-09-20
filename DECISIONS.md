@@ -284,3 +284,43 @@ question.
 `review --stats` when the skip count reaches roughly 15, and treat a gap that
 has grown rather than shrunk as the signal to look again. Capture costs
 nothing, so nothing is removed in the meantime.
+
+---
+
+## 2026-09-20 — The stop goes below the structure, because a break is information
+
+**Decision:** stops are placed just under the lows that formed the level
+(`structural_stop`), never at a noise-width distance chosen to flatter the
+reward/risk. Stated by the user: *"I would lean more towards the wider
+structural stop to be less likely to get shaken out. If it broke structure
+high chance it will continue down further."*
+
+**Why it matters.** A stop can be wrong in two ways, and they are not
+symmetrical. A stop too tight gets taken by ordinary movement and tells you
+nothing -- the level may still be perfectly good, and you have paid to find
+out that ETH wiggles. A stop below the structure only triggers when the thing
+you were betting on has actually failed, and that failure is itself evidence:
+the level broke, so the next level down is now in play.
+
+This is the same reasoning already recorded against `STOP_SIGMA_BELOW` -- *"A
+level breaking and price reaching the next level are different events and only
+the first invalidates the trade"* -- arrived at independently from the chart
+rather than from the code.
+
+**What it costs.** Very little, and that is the point. On the ETH 2562.9 setup
+priced at 5x on 3% margin:
+
+| stop | below the level | risk | rr |
+|---|---|---|---|
+| structural 2550.67 | 12.2 | $1.08 | 3.20 |
+| just under the level, 2559 | 3.9 | $0.71 | 4.89 |
+
+The tighter stop prices better by every number the filter can see, and it sits
+3.9 points under a level ETH crosses routinely. The 37 cents of extra risk buys
+a stop that means something.
+
+**How to apply going forward:** do not tune `STOP_MIN_SIGMA` (0.5) upward to
+improve reward/risk on a rejected setup. If a setup only clears the rr floor
+with a stop inside the noise, it has not cleared the floor. The structural stop
+may be widened by evidence that levels are being broken and recovered; it must
+not be narrowed by a setup wanting to qualify.
