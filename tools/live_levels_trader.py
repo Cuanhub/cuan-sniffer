@@ -428,10 +428,7 @@ def main():
     signal.signal(signal.SIGINT, _sig)
 
     state = load_state()
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if state.get("day") != today:
-        state.update({"day": today, "opened_today": 0, "realised_today": 0.0})
-        save_state(state)
+    roll_day(state)
     if args.status:
         print(json.dumps(state, indent=2))
         return 0
@@ -515,6 +512,7 @@ def main():
                                  args.limit_entry[1], equity, available, state)
 
     while not _stop:
+        roll_day(state)
         if backend is not None:
             # Pending first: a bid that filled must become a known, protected
             # position before venue_sanity can meet it as an unknown one.
@@ -1046,6 +1044,29 @@ def start_backend(factory, sleep=time.sleep):
                     return None
                 sleep(1)
     return None
+
+
+def roll_day(state: Dict[str, Any]) -> bool:
+    """Reset the daily counters when the UTC date changes. True if it rolled.
+
+    This ran once, at startup, and the pass loop never called it again -- so a
+    process that stays up across midnight keeps yesterday's counters forever.
+    Both are safety rails and both fail quietly the longer the process runs:
+    opened_today never clears, so after MAX_NEW_PER_DAY fills the trader stops
+    opening anything until someone restarts it; realised_today never clears,
+    so the daily loss stop starts summing losses across days and halts on a
+    drawdown that was never a day's worth. This trader is built to run for
+    days under launchd, which is exactly the case it got wrong.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if state.get("day") == today:
+        return False
+    was = state.get("day")
+    state.update({"day": today, "opened_today": 0, "realised_today": 0.0})
+    save_state(state)
+    print(f"[LEVELS_LIVE] new UTC day {today} (was {was}) -- "
+          f"daily counters reset")
+    return True
 
 
 def halt(state: Dict[str, Any], reason: str, where: str = "") -> str:

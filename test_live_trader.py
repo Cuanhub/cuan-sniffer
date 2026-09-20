@@ -1009,6 +1009,59 @@ class HoldRuleSelectionTest(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class DayRolloverTest(unittest.TestCase):
+    """The daily counters reset once, at startup, and never again.
+
+    This trader runs for days under launchd. Across midnight, opened_today
+    never cleared -- so after MAX_NEW_PER_DAY fills it would stop opening
+    anything until someone restarted it -- and realised_today never cleared,
+    so the daily loss stop began summing losses across days and would halt on
+    a drawdown that was never a single day's worth.
+    """
+
+    def setUp(self):
+        self._tmp = Path("/tmp/_test_rollover")
+        if self._tmp.exists():
+            shutil.rmtree(self._tmp)
+        self._tmp.mkdir(parents=True)
+        self._orig = T.STATE_PATH
+        T.STATE_PATH = self._tmp / "state.json"
+
+    def tearDown(self):
+        T.STATE_PATH = self._orig
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_a_new_day_clears_the_counters(self):
+        st = {"day": "2020-01-01", "opened_today": 5, "realised_today": -80.0,
+              "owned": {}, "halted": False, "halt_reason": ""}
+        self.assertTrue(T.roll_day(st))
+        self.assertEqual(st["opened_today"], 0)
+        self.assertEqual(st["realised_today"], 0.0)
+
+    def test_the_same_day_is_left_alone(self):
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        st = {"day": today, "opened_today": 3, "realised_today": -40.0,
+              "owned": {}, "halted": False, "halt_reason": ""}
+        self.assertFalse(T.roll_day(st))
+        self.assertEqual(st["opened_today"], 3, "must not reset mid-day")
+        self.assertEqual(st["realised_today"], -40.0)
+
+    def test_a_halt_survives_the_rollover(self):
+        # A halt is a human-cleared condition; midnight is not a human.
+        st = {"day": "2020-01-01", "opened_today": 5, "realised_today": -80.0,
+              "owned": {}, "halted": True, "halt_reason": "venue mismatch"}
+        T.roll_day(st)
+        self.assertTrue(st["halted"])
+        self.assertEqual(st["halt_reason"], "venue mismatch")
+
+    def test_the_loop_rolls_the_day_not_just_startup(self):
+        src = Path("tools/live_levels_trader.py").read_text()
+        loop = src.index("while not _stop:")
+        self.assertIn("roll_day(state)", src[loop:loop + 200],
+                      "a process that runs for days must roll the day itself")
+
+
 class ModuleShapeTest(unittest.TestCase):
     def test_every_function_main_calls_is_defined_before_the_guard(self):
         """Regression for the NameError on the first arming attempt: functions
