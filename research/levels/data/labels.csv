@@ -36,3 +36,7 @@ ENA-1H_1789783200000_0.16124,2026-09-19T02:21:44Z,take,low,"take, but .15 and .1
 CASHCAT-1H_1789815600000_0.19984,2026-09-19T11:11:08Z,skip,,double bottom is real but it would be a gamble -- rr 2.07 with the channel ceiling close overhead
 ZEC-1H_1789891200000_1439.75,2026-09-20T08:29:25Z,take,,support forming and already tested here; stop at 1426 (tighter than the 3-sigma stop). System blocks it on headroom 2.94s < 5.0s
 UNI-1H_1789891200000_8.5254,2026-09-20T08:31:02Z,take,,"double bottom on 1h and 4h, take at 8.5; lows 8.4516/8.4554. System blocks on headroom 2.89s < 5.0s"
+ETH-4H_1789905600000_2562.9,2026-09-20T12:34:13Z,take,,blue zone off the chart; headroom 3.404s is below the 5.0 floor but rr 4.09 under the structural stop
+SOL-1H_1789905600000_107.555,2026-09-20T12:34:13Z,take,,blue zone off the chart; headroom 4.305s is below the 5.0 floor but rr 5.15 under the structural stop
+LIT-1H_1789905600000_4.6,2026-09-20T12:34:13Z,take,,blue zone off the chart; headroom 3.193s is below the 5.0 floor but rr 3.11 under the structural stop
+HYPE-4H_1789905600000_89.597,2026-09-20T12:34:13Z,take,,blue zone off the chart; headroom 4.04s is below the 5.0 floor but rr 4.90 under the structural stop

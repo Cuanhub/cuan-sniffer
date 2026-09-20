@@ -105,9 +105,28 @@ TRADE_MIN_NEAR_SIGMA = _f("LEVELS_TRADE_MIN_NEAR_SIGMA", 5.0)
 # skips and both maybes. Takes were last tested 9-40 bars ago; skips 0-9.
 TRADE_MIN_BARS_SINCE_TOUCH = _i("LEVELS_TRADE_MIN_BARS_SINCE_TOUCH", 9)
 
-# EVIDENCED. Overhead resistance was the stated reason for the AAVE skip and
-# the ETH rejection. Takes average 7.58 sigma of headroom, skips 2.98.
-TRADE_MIN_OVERHEAD_SIGMA = _f("LEVELS_TRADE_MIN_OVERHEAD_SIGMA", 5.0)
+# EVIDENCED at 5.0, lowered to 3.0 on 2026-09-20 because the evidence went
+# stale. Overhead resistance was the stated reason for the AAVE skip and the
+# ETH rejection, and takes averaged 7.58 sigma of headroom against 2.98 for
+# skips -- at 37 labels it was 8.53 against 4.90, so the separation held.
+#
+# What changed is the stop. Every one of those labels was made when the stop
+# sat a fixed 3 sigma below the level, and under that rule low headroom really
+# did mean a bad trade: a wide stop needs a distant target to clear the rr
+# floor, so the two moved together. The structural stop broke the link. ETH
+# 2562.9 now prices at rr 4.09 with 3.40 sigma of headroom, because its stop is
+# 0.94% rather than 5%. Headroom and reward/risk have decoupled, and the floor
+# is still measuring the old relationship.
+#
+# 3.0 admits ETH 2562.9 (3.40s, rr 4.09), LIT 4.6 (3.19s, rr 3.11), HYPE 89.597
+# (4.04s, rr 4.90) and SOL 107.555 (4.31s, rr 5.15) -- four setups labelled
+# take by the user on 2026-09-20, each priced under the new stop rule.
+#
+# This is a threshold set to get trades rather than one fitted to evidence, and
+# it should be treated as provisional until there are labels and outcomes on
+# setups priced the new way. MIN_RR stays at 2.0: this loosens where the target
+# may sit, not what the trade has to pay.
+TRADE_MIN_OVERHEAD_SIGMA = _f("LEVELS_TRADE_MIN_OVERHEAD_SIGMA", 3.0)
 
 # ---- rules 2 and 3: entry and stop ------------------------------------------
 # EVIDENCED. Both levels the user named would have MISSED as exact limits:
