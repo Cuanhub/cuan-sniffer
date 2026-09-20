@@ -45,7 +45,11 @@ class FakeCandles:
             # When the level was never reached, the whole series sits higher:
             # price that has not come down is also not holding in the zone, so
             # either rejection is the correct one.
-            base = 1.004 if self.touched else 1.035
+            # 1.002 puts the last closed bar ~0.77 sigma above the level.
+            # It was 1.004 (~1.02 sigma), which fitted under the old 2.0
+            # ceiling and no longer fits the 1.0 one -- the fixture has to
+            # hold in the zone the trigger actually accepts.
+            base = 1.002 if self.touched else 1.035
             c = lv * (base + 0.004 * ((i % 5) - 2))
             low = lv * 0.999 if (self.touched and i == 35) else c * 0.998
             bars.append({"t": i * 3600_000, "o": c, "h": c * 1.002, "l": low, "c": c})
@@ -464,9 +468,11 @@ class TriggerTest(unittest.TestCase):
         about to be filled stand in for two hours of support."""
         from research.levels.trigger import level_has_held
         lv = 100.0
-        bars = [{"t": i * 3600_000, "o": lv * 1.004, "h": lv * 1.006,
-                 "l": lv * 0.999 if i == 30 else lv * 1.002,
-                 "c": lv * (1.004 + 0.004 * ((i % 5) - 2))} for i in range(40)]
+        # 1.002 keeps the last closed bar inside TRIGGER_MAX_ABOVE_SIGMA;
+        # this test is about the forming bar, not about the ceiling.
+        bars = [{"t": i * 3600_000, "o": lv * 1.002, "h": lv * 1.006,
+                 "l": lv * 0.999 if i == 30 else lv * 1.001,
+                 "c": lv * (1.002 + 0.004 * ((i % 5) - 2))} for i in range(40)]
         bars[-1]["c"] = lv * 0.90        # forming bar collapsing -- must be ignored
         fired, _ = level_has_held(bars, lv)
         self.assertTrue(fired)

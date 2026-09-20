@@ -258,7 +258,26 @@ TRIGGER_TOUCH_LOOKBACK_HOURS = _i("LEVELS_TRIGGER_TOUCH_LOOKBACK_HOURS", 12)
 # has run away from satisfies trivially: UNI touched 7.5078 twelve hours ago,
 # rallied to 8.64, and the trigger read that as two hours of support 16% below
 # the market. The channel has a ceiling as well as a floor.
-TRIGGER_MAX_ABOVE_SIGMA = _f("LEVELS_TRIGGER_MAX_ABOVE_SIGMA", 2.0)
+# 1.0, tightened from 2.0 on 2026-09-20 because 2.0 could not be filled.
+#
+# The trigger and the entry drift guard were arithmetically incompatible. The
+# trigger fired up to 2.0 sigma above the level; entry sits 0.35 sigma above
+# it; so at the trigger's own limit price is 1.65 sigma past the entry, and
+# MAX_ENTRY_DRIFT_PCT allows 1.5%. That only fits where sigma <= 0.909% --
+# seven of thirty coins. Everything volatile enough to trigger often was
+# barred from filling by arithmetic, not by judgement. USELESS triggered three
+# times on 2026-09-20 at 4.28%, 4.42% drift; at sigma 2.40% it could not have
+# done otherwise.
+#
+# At 1.0 the worst case is 0.65 sigma past entry, which fits 1.5% wherever
+# sigma <= 2.31% -- 26 of 30. It also matches TRIGGER_ZONE_SIGMA: price must
+# still be inside the band that counts as touching the level, rather than a
+# band twice that wide.
+#
+# The cost is fewer triggers: price has to be caught nearer the level instead
+# of anywhere in a 2-sigma window above it. That is the intended trade. A
+# trigger that cannot be filled is not a signal, it is a log line.
+TRIGGER_MAX_ABOVE_SIGMA = _f("LEVELS_TRIGGER_MAX_ABOVE_SIGMA", 1.0)
 
 # How long a level stays on the watchlist after it clears the quality bar.
 #

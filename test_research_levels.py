@@ -221,6 +221,27 @@ class HoldRuleTest(unittest.TestCase):
         bars.append({"t": 42, "o": 101.0, "h": 101.4, "l": 100.8, "c": 101.2})
         return bars
 
+    def test_the_ceiling_and_the_drift_guard_are_compatible(self):
+        """A trigger that cannot be filled is not a signal.
+
+        The trigger fires up to TRIGGER_MAX_ABOVE_SIGMA above the level and
+        entry sits ENTRY_BUFFER_SIGMA above it, so at the trigger's limit
+        price is the difference past the entry. If that exceeds
+        MAX_ENTRY_DRIFT_PCT for a typical coin, the two rules are
+        arithmetically incompatible -- which they were at a 2.0 ceiling,
+        where only 7 of 30 coins could ever fill.
+        """
+        from research.levels.config import (TRIGGER_MAX_ABOVE_SIGMA,
+                                            ENTRY_BUFFER_SIGMA,
+                                            MAX_ENTRY_DRIFT_PCT)
+        worst = TRIGGER_MAX_ABOVE_SIGMA - ENTRY_BUFFER_SIGMA
+        self.assertGreater(worst, 0, "entry must sit inside the trigger window")
+        # sigma of 2.0%/hr is an ordinary memecoin on this venue; the ceiling
+        # has to leave room for one to fill.
+        self.assertLessEqual(worst * 2.0, MAX_ENTRY_DRIFT_PCT,
+                             "at this ceiling a 2%-sigma coin can trigger but "
+                             "never fill")
+
     def test_a_swing_low_fires_on_the_reclaim(self):
         from research.levels.trigger import level_has_held
         from research.levels.config import TRIGGER_HOLD_HOURS_SWING
