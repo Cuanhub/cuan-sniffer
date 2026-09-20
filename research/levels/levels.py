@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 # All tunables live in config.py, each tagged STRUCTURAL / EVIDENCED / GUESSED.
 from research.levels.config import (               # noqa: E402
     PIVOT_WINDOW, CLUSTER_SIGMA, TOUCH_BAND_SIGMA, BREAK_SIGMA, BREAK_WINDOW,
+    STOP_STRUCT_BUFFER_SIGMA, STOP_MIN_SIGMA, STOP_SIGMA_BELOW, STOP_STRUCT_LOOKBACK,
     VOL_LOOKBACK,
 )
 from research.levels.config import MIN_TOUCHES_DETECT as MIN_TOUCHES  # noqa: E402
@@ -121,6 +122,34 @@ def _score_level(bars: List[Dict[str, Any]], price: float, kind: str,
         elif not near:
             in_touch = False
     return lvl
+
+
+def structural_stop(bars: List[Dict[str, Any]], i: int, level: float,
+                    sigma: float) -> Optional[float]:
+    """Stop just under the lows that actually formed the level.
+
+    A fixed multiple of sigma ignores the level's own shape. On a tight double
+    bottom it lands far below anything that would invalidate the idea, which
+    inflates the risk, collapses the reward/risk and gets the setup rejected
+    for a reason the stop invented.
+
+    Returns None when no touch is found in the lookback, so the caller can
+    fall back rather than guess.
+    """
+    if sigma <= 0 or level <= 0:
+        return None
+    lo = max(0, i - STOP_STRUCT_LOOKBACK)
+    lows = [b["l"] for b in bars[lo:i + 1]
+            if b["l"] > 0 and abs(sigma_distance(b["l"], level, sigma)) <= TOUCH_BAND_SIGMA]
+    if not lows:
+        return None
+    # Below the deepest wick that tested it, plus a small buffer.
+    candidate = min(lows) * math.exp(-STOP_STRUCT_BUFFER_SIGMA * sigma)
+    # Never tighter than STOP_MIN_SIGMA, never wider than the old fixed rule:
+    # this may only move the stop UP toward the structure, never further away.
+    tightest = level * math.exp(-STOP_MIN_SIGMA * sigma)
+    widest = level * math.exp(-STOP_SIGMA_BELOW * sigma)
+    return max(widest, min(tightest, candidate))
 
 
 def detect_levels(bars: List[Dict[str, Any]], upto: Optional[int] = None,

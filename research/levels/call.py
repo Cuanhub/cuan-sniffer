@@ -31,7 +31,7 @@ from research.levels import config as C
 from research.levels import storage
 from research.levels.gate import evaluate
 from research.levels.levels import (
-    detect_levels, flipped_supports, log_sigma, sigma_distance,
+    detect_levels, flipped_supports, log_sigma, sigma_distance, structural_stop,
 )
 from research.levels.scanner import _atr_pct
 from research.levels.venue_client import HyperliquidReadOnlyClient, VenueFetchError
@@ -142,7 +142,13 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
                 continue
             feats = evaluate(bars, i, L.price) or {}
             entry = L.price * math.exp(C.ENTRY_BUFFER_SIGMA * sigma)
-            stop = L.price * math.exp(-C.STOP_SIGMA_BELOW * sigma)
+            # Below the lows that formed the level, not a fixed multiple of
+            # sigma. The fixed rule stopped UNI 8.5254 -- a double bottom with
+            # lows at 8.4516 -- down at 8.073, which made a 3.3 reward/risk
+            # read as 0.91 and had the floor reject it. Falls back when the
+            # level has no touch in the lookback to measure against.
+            stop = structural_stop(bars, i, L.price, sigma) \
+                or L.price * math.exp(-C.STOP_SIGMA_BELOW * sigma)
             # Show the resistance LADDER rather than pre-picking a target.
             # Taking the nearest resistance produced RRs of 0.4-1.1 on every
             # candidate, which would have had the user skipping setups for a

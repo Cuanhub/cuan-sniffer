@@ -34,3 +34,5 @@ USELESS-1H_1789783200000_0.25817,2026-09-19T02:13:16Z,take,,"REVISED from skip -
 STRK-4H_1789776000000_0.03796,2026-09-19T02:13:16Z,skip,,do not see an entry at that .037 level
 ENA-1H_1789783200000_0.16124,2026-09-19T02:21:44Z,take,low,"take, but .15 and .135 are stronger entries"
 CASHCAT-1H_1789815600000_0.19984,2026-09-19T11:11:08Z,skip,,double bottom is real but it would be a gamble -- rr 2.07 with the channel ceiling close overhead
+ZEC-1H_1789891200000_1439.75,2026-09-20T08:29:25Z,take,,support forming and already tested here; stop at 1426 (tighter than the 3-sigma stop). System blocks it on headroom 2.94s < 5.0s
+UNI-1H_1789891200000_8.5254,2026-09-20T08:31:02Z,take,,"double bottom on 1h and 4h, take at 8.5; lows 8.4516/8.4554. System blocks on headroom 2.89s < 5.0s"

@@ -246,3 +246,88 @@ class HoldRuleTest(unittest.TestCase):
         fired, _ = level_has_held(bars, self.LEVEL,
                                   hold_hours=TRIGGER_HOLD_HOURS_SWING)
         self.assertFalse(fired)
+
+
+class StructuralStopTest(unittest.TestCase):
+    """The stop goes under the lows that formed the level, not a fixed sigma.
+
+    STOP_SIGMA_BELOW=3.0 ignores the level's own shape. UNI 8.5254 is a double
+    bottom with lows at 8.4516 -- invalidation 0.9% away -- and the fixed rule
+    stopped it at 8.073, 5.9% below, which read a 3.3 reward/risk as 0.91 and
+    had the floor reject it. The stop was manufacturing the rejection.
+    """
+
+    LEVEL = 100.0
+    SIGMA = 0.02
+
+    def bars_with_lows(self, *lows):
+        """Filler well above the level, then bars wicking to each low."""
+        out = [{"t": i, "o": 106.0, "h": 106.5, "l": 105.5, "c": 106.0}
+               for i in range(30)]
+        for j, lo in enumerate(lows):
+            out.append({"t": 30 + j, "o": 101.0, "h": 101.5, "l": lo, "c": 101.0})
+        return out
+
+    def stop(self, *lows):
+        from research.levels.levels import structural_stop
+        b = self.bars_with_lows(*lows)
+        return structural_stop(b, len(b) - 1, self.LEVEL, self.SIGMA)
+
+    def test_it_sits_under_the_deepest_touch(self):
+        s = self.stop(99.4, 99.6)
+        self.assertLess(s, 99.4, "must clear the wick that made the level")
+        self.assertGreater(s, 98.0, "but not a fixed 3 sigma below")
+
+    def test_it_is_tighter_than_the_fixed_rule(self):
+        import math
+        from research.levels.config import STOP_SIGMA_BELOW
+        fixed = self.LEVEL * math.exp(-STOP_SIGMA_BELOW * self.SIGMA)
+        self.assertGreater(self.stop(99.4, 99.6), fixed)
+
+    def test_a_low_outside_the_touch_band_is_not_a_touch(self):
+        # A wick far below is not a test of THIS level, it is a break of it.
+        # 90 against a level of 100 at sigma 0.02 is 5.3 sigma away, so there
+        # is no touch to measure and the caller falls back to the fixed rule.
+        self.assertIsNone(self.stop(90.0))
+
+    def test_it_never_goes_wider_than_the_fixed_rule(self):
+        # The widest a touch can sit is TOUCH_BAND_SIGMA below, plus the
+        # buffer -- so the clamp is defensive rather than reachable. Assert
+        # the guarantee anyway: this may only move the stop toward the
+        # structure, never further away.
+        import math
+        from research.levels.config import STOP_SIGMA_BELOW, TOUCH_BAND_SIGMA
+        fixed = self.LEVEL * math.exp(-STOP_SIGMA_BELOW * self.SIGMA)
+        # just inside the band; exactly on it is a float coin-flip
+        deepest = self.LEVEL * math.exp(-0.99 * TOUCH_BAND_SIGMA * self.SIGMA)
+        s = self.stop(deepest)
+        self.assertIsNotNone(s)
+        self.assertGreaterEqual(s, fixed - 1e-9)
+
+    def test_it_is_never_tighter_than_the_floor(self):
+        # Touches landing exactly on the level would otherwise stop inches
+        # away, at the price most likely to be wicked.
+        import math
+        from research.levels.config import STOP_MIN_SIGMA
+        floor = self.LEVEL * math.exp(-STOP_MIN_SIGMA * self.SIGMA)
+        self.assertLessEqual(self.stop(100.0, 100.0), floor + 1e-9)
+
+    def test_no_touch_returns_none_so_the_caller_falls_back(self):
+        from research.levels.levels import structural_stop
+        b = [{"t": i, "o": 130.0, "h": 131.0, "l": 129.0, "c": 130.0} for i in range(40)]
+        self.assertIsNone(structural_stop(b, len(b) - 1, self.LEVEL, self.SIGMA))
+
+    def test_undefined_sigma_returns_none(self):
+        from research.levels.levels import structural_stop
+        self.assertIsNone(structural_stop(self.bars_with_lows(99.5), 30, self.LEVEL, 0.0))
+
+    def test_it_lifts_reward_to_risk(self):
+        # The point of the change, in one assertion.
+        import math
+        from research.levels.config import STOP_SIGMA_BELOW
+        entry, tp = 100.4, 106.0
+        fixed = self.LEVEL * math.exp(-STOP_SIGMA_BELOW * self.SIGMA)
+        struct = self.stop(99.4, 99.6)
+        rr_fixed = (tp - entry) / (entry - fixed)
+        rr_struct = (tp - entry) / (entry - struct)
+        self.assertGreater(rr_struct, rr_fixed * 1.5)

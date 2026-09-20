@@ -120,8 +120,14 @@ def cmd_stats(args):
     # sitting on it") with no ceiling, so nothing rejects a level that old.
     # Rather than invent a cap, measure where the take/skip boundary actually
     # falls; this is the column that shows it.
+    # overhead_sigma is here because TRADE_MIN_OVERHEAD_SIGMA was set from an
+    # earlier batch of labels -- "takes average 7.58 sigma of headroom, skips
+    # 2.98" -- and later labels have been contradicting it. Three consecutive
+    # takes on 2026-09-20 carried 2.89, 2.94 and 3.68 sigma of headroom, all
+    # below the 5.0 floor that rejected them. A threshold fitted to labels has
+    # to be re-answerable from labels.
     for k in ("level_hold_rate", "level_touches", "level_bars_since_last_touch",
-              "level_pivot_count", "run_sigma", "pull_sigma", "retests",
+              "level_pivot_count", "overhead_sigma", "run_sigma", "pull_sigma", "retests",
               "near_sigma", "suggested_rr", "vol_ratio_recent_ref", "vol_trend_slope",
               "vol_down_up_ratio", "bars_since_last_retest"):
         t = sum(_f(e, k) for e in takes) / len(takes)

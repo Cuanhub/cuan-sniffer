@@ -121,6 +121,33 @@ ENTRY_BUFFER_SIGMA = _f("LEVELS_ENTRY_BUFFER_SIGMA", 0.35)   # size GUESSED
 # events and only the first invalidates the trade.
 STOP_SIGMA_BELOW = _f("LEVELS_STOP_SIGMA_BELOW", 3.0)        # size GUESSED
 
+# ---- the structural stop -----------------------------------------------------
+# STOP_SIGMA_BELOW alone puts the stop a fixed distance under the level
+# regardless of where the level's own lows sit, and on a tight base that is
+# absurd. UNI 8.5254 is a double bottom whose lows are 8.4516 and 8.4554 -- an
+# invalidation 0.9% away -- and the 3-sigma rule stopped it at 8.073, 5.9%
+# below, which priced the trade at rr 0.91 and had the rr floor reject it. The
+# user's own stop was 8.44. Same story on ZEC: 3-sigma gave rr 0.92, their
+# 1426 gave 2.97. The stop was manufacturing the rejection.
+#
+# The structural stop goes just under the lows that actually formed the level,
+# because that is where the idea is wrong rather than where a fixed multiple
+# lands.
+#
+# Buffer under the lowest touch. Small: the point is to sit below the wick
+# that made the level, not to add another sigma of room on top of it.
+STOP_STRUCT_BUFFER_SIGMA = _f("LEVELS_STOP_STRUCT_BUFFER_SIGMA", 0.25)
+
+# Never tighter than this below the level, whatever the lows say. A stop
+# placed at the exact low is the price most likely to be wicked, and a base
+# whose touches all land on one candle would otherwise produce a stop inches
+# away. The user's own stops on ZEC and UNI sat 0.55-0.67 sigma under their
+# levels, so 0.5 admits how they actually trade without permitting tighter.
+STOP_MIN_SIGMA = _f("LEVELS_STOP_MIN_SIGMA", 0.5)
+
+# How far back to look for the touches that define the level.
+STOP_STRUCT_LOOKBACK = _i("LEVELS_STOP_STRUCT_LOOKBACK", 120)
+
 # ---- rule 4: sizing ---------------------------------------------------------
 # STRUCTURAL. Size comes from the distance to the stop; leverage is only ever a
 # ceiling on the result, never an input. At fixed 10x a 10% stop costs the whole
