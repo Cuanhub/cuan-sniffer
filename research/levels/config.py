@@ -330,7 +330,24 @@ NEAR_ALERT_COOLDOWN_SEC = _i("LEVELS_NEAR_ALERT_COOLDOWN_SEC", 3600)
 LIMIT_ENTRY_TTL_HOURS = _i("LEVELS_LIMIT_ENTRY_TTL_HOURS", 12)
 
 # ---- operational rails ------------------------------------------------------
-MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 2)
+# 4, raised from 2 on 2026-09-26. EVIDENCED: across the log to that date, 130
+# passes declined to open with the message "holding 2 and bidding on 0, max 2"
+# -- roughly 16 hours where a qualifying setup could not be taken because the
+# cap, not the strategy, said no. One of those two slots was held for about two
+# days by a PONS position the venue had already closed, which is fixed
+# separately; the rail was still the binding constraint the rest of the time.
+#
+# What this costs, at MARGIN_PCT_PER_TRADE=3 and FLAT_LEVERAGE=5: four
+# positions commit 12% of equity as margin and 60% as notional, and four
+# structural stops firing together is about 8% of equity -- inside the 15%
+# daily loss stop, so that rail still bites first and this one does not
+# quietly become the risk limit.
+#
+# Watch the interaction with MAX_NEW_PER_DAY below: filling four slots spends
+# four of the five daily opens, leaving one replacement. Live fill rate is
+# ~1.1/day so it should not bind, but if the daily cap starts refusing trades
+# while slots are free, that is this change asking for the other one.
+MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 4)
 # 5, matching the daily loss stop's own arithmetic: at 3% risk a 15% stop
 # halts after five losing trades, so a cap of five never takes a trade the
 # risk budget would have allowed. What it bounds is the case that budget
