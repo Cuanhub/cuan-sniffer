@@ -221,6 +221,7 @@ class LiveExecutionBackend(ExecutionBackend):
             requested_notional=size_usd,
             ref_price=ref_price,
             is_exit=False,
+            is_buy=is_buy,
         )
         result.reason = "entry"
 
@@ -333,6 +334,8 @@ class LiveExecutionBackend(ExecutionBackend):
             requested_notional=size_usd,
             ref_price=ref_price,
             is_exit=True,
+            slip_ref=mid_price,
+            is_buy=is_buy,
         )
         result.reason = reason
 
@@ -1807,11 +1810,24 @@ class LiveExecutionBackend(ExecutionBackend):
         requested_notional: float,
         ref_price: float,
         is_exit: bool,
+        slip_ref: Optional[float] = None,
+        is_buy: Optional[bool] = None,
     ) -> FillResult:
         """
         Parse Hyperliquid order response.
         Sums ALL filled status entries (handles multi-fill IOC responses).
         Cancels any resting orders immediately (IOC should never rest).
+
+        `slip_ref` is the price slippage is measured against, when that is not
+        the same as `ref_price`. Slippage means "how much worse than the market
+        did we fill", so the reference has to be the price the market was
+        actually showing. On entry those coincide, because ref_price IS the
+        mid. On exit they do not: ref_price is deliberately min(mid, trigger)
+        for a sell, which is how the limit is guaranteed to sit at or below the
+        book and the fill is assured -- but measuring against it reports the
+        gap between the trigger and the market, which for a profitable exit is
+        the P&L. PONS closed at the mid exactly on 2026-09-26 and was logged as
+        376bps of slippage.
         """
         if not isinstance(resp, dict):
             return self._reject(
@@ -1892,9 +1908,21 @@ class LiveExecutionBackend(ExecutionBackend):
 
         avg_px = weighted_px_sum / total_sz
         fill_notional = total_sz * avg_px
-        slippage_bps = (
-            abs(avg_px - ref_price) / ref_price * 10_000 if ref_price > 0 else 0.0
-        )
+        # Signed against the direction that hurts: a fill better than the
+        # market is not slippage, and reporting it as though it were is what
+        # made a perfect PONS fill look like a disaster.
+        # Which direction hurts depends on whether we bought or sold, not on
+        # whether this was an entry: a short entry sells and a long exit sells.
+        # `is_buy` is passed by both call sites; None keeps the old unsigned
+        # magnitude for any caller that does not know its side.
+        slip_base = slip_ref if slip_ref and slip_ref > 0 else ref_price
+        if slip_base <= 0:
+            slippage_bps = 0.0
+        elif is_buy is None:
+            slippage_bps = abs(avg_px - slip_base) / slip_base * 10_000
+        else:
+            adverse = (avg_px - slip_base) if is_buy else (slip_base - avg_px)
+            slippage_bps = max(0.0, adverse) / slip_base * 10_000
         fill_ratio = (
             min(fill_notional / requested_notional, 1.0)
             if requested_notional > 0 else 1.0
