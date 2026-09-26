@@ -389,19 +389,31 @@ class LiveExecutionBackend(ExecutionBackend):
             result["error"] = "asset_metadata_unavailable"
             return result
 
+        # The venue's own position size wins whenever it can be read. It is the
+        # only authoritative number: protection has to cover what is actually
+        # held, not what the caller believed it bought.
+        #
+        # This used to override only when the gap exceeded max(one tick, 0.1%),
+        # with a strict >. With a one-tick threshold a one-tick discrepancy
+        # could never be corrected -- and one tick is exactly what this path
+        # produces. PONS on 2026-09-24: filled_usd / fill_px came out as
+        # 114.99999999999999, a float artifact of dividing notional by price,
+        # and _round_size rounds DOWN, so a 115-coin position was protected for
+        # 114. The gap was 1.0 against a threshold of 1.0, so the override
+        # declined to fire and one coin sat naked until the take-profit closed
+        # the other 114.
         venue_side_sz = self._get_venue_position_size(coin, side)
         if venue_side_sz is not None and venue_side_sz > 0:
             venue_send_sz = self._round_size(coin, float(venue_side_sz))
-            if venue_send_sz > 0:
-                size_gap = abs(venue_send_sz - send_sz)
-                if size_gap > max(self._size_tick(coin), venue_send_sz * 0.001):
-                    if LIVE_LOG_ORDERS:
-                        print(
-                            f"[LIVE_BACKEND] PROTECTION size override {coin} {side} "
-                            f"req_sz={send_sz:.8f} venue_sz={venue_send_sz:.8f}"
-                        )
-                    send_sz = venue_send_sz
-                    result["size_coin"] = send_sz
+            if venue_send_sz > 0 and venue_send_sz != send_sz:
+                if LIVE_LOG_ORDERS:
+                    print(
+                        f"[LIVE_BACKEND] PROTECTION size override {coin} {side} "
+                        f"req_sz={send_sz:.8f} venue_sz={venue_send_sz:.8f} "
+                        f"(the venue is authoritative)"
+                    )
+                send_sz = venue_send_sz
+                result["size_coin"] = send_sz
 
         stop_round_direction = "up" if side == "LONG" else "down"
         rounded_stop_px = self.round_to_tick(

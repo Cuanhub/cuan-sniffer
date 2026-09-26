@@ -376,6 +376,47 @@ class AssetMetadataTest(unittest.TestCase):
         self.assertIn("asset_metadata_unavailable", res["error"])
 
 
+class ProtectionSizeTest(unittest.TestCase):
+    """Protection must cover what the venue actually holds.
+
+    PONS on 2026-09-24: filled_usd / fill_px came out 114.99999999999999 for a
+    115-coin fill, _round_size rounds DOWN, and a 115-coin position was
+    protected for 114. The override meant to catch it compared the gap against
+    max(one tick, 0.1%) with a strict > -- and with a one-tick threshold a
+    one-tick gap can never be corrected. One coin sat naked until the
+    take-profit closed the other 114, leaving a phantom position behind.
+    """
+
+    class Stub(StubBackend):
+        def __init__(self, resting, venue_sz):
+            super().__init__(resting)
+            self._venue_sz = venue_sz
+
+        def _get_venue_signed_size(self, coin):
+            return self._venue_sz
+
+    def test_a_one_tick_shortfall_is_corrected(self):
+        b = self.Stub([good_stop(), good_tp()], venue_sz=115.0)
+        b._sz_decimals = {"UNI": 0}
+        res = b.place_native_protection(coin="UNI", side="LONG",
+                                        size_coin=114.99999999999999,
+                                        stop_price=95.0, tp_price=115.0)
+        self.assertEqual(res["size_coin"], 115.0,
+                         "protection must cover the whole position")
+
+    def test_the_venue_size_wins_when_they_disagree(self):
+        b = self.Stub([good_stop(), good_tp()], venue_sz=46.0)
+        res = b.place_native_protection(coin="UNI", side="LONG", size_coin=99.0,
+                                        stop_price=95.0, tp_price=115.0)
+        self.assertEqual(res["size_coin"], 46.0)
+
+    def test_an_unreadable_venue_size_leaves_the_request_alone(self):
+        b = self.Stub([good_stop(), good_tp()], venue_sz=None)
+        res = b.place_native_protection(coin="UNI", side="LONG", size_coin=46.3,
+                                        stop_price=95.0, tp_price=115.0)
+        self.assertAlmostEqual(res["size_coin"], 46.3)
+
+
 class CancelOrderTest(unittest.TestCase):
     """The SDK is cancel(name, oid: int). We were sending a string.
 

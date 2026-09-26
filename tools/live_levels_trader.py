@@ -952,7 +952,11 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
 
     fill_px = float(getattr(fill, "fill_price", 0) or 0)
     filled_usd = float(getattr(fill, "fill_size_usd", 0) or 0) or size_usd
-    size_coin = (filled_usd / fill_px) if fill_px > 0 else 0.0
+    # Dividing notional by price does not land on a clean coin count: PONS came
+    # out 114.99999999999999 for a 115-coin fill, and every consumer of this
+    # number rounds DOWN. Snap it to 12 significant places so a float artifact
+    # cannot cost a whole unit of size.
+    size_coin = round(filled_usd / fill_px, 12) if fill_px > 0 else 0.0
     if fill_px <= 0 or size_coin <= 0:
         # filled=True but unusable numbers: the position may well exist at the
         # venue, so halt rather than guess. Leaving the slot claimed is
