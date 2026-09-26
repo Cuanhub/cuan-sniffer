@@ -26,6 +26,21 @@ import requests
 
 TIMEOUT_SEC = 10
 
+# Transport failures are retried; a Telegram rejection is not. On 2026-09-23 a
+# brief DNS/connection failure lost three messages outright -- including both
+# OPENED alerts for that day's trades, which is why the positions came as a
+# surprise. There was no retry of any kind: one failed POST and the message
+# was gone.
+#
+# Three attempts with 1s then 2s of backoff. Deliberately small: send() is
+# called from inside the trading pass, so the ceiling has to be a bounded
+# fraction of POLL_SEC. A transport failure breaks out after one request, so
+# the worst case is 3 timeouts plus the backoff -- 3*TIMEOUT_SEC + 3s = 33s,
+# against a 450s pass. Raising either number is what would make an outage
+# start delaying trades.
+SEND_ATTEMPTS = 3
+SEND_BACKOFF_SEC = 1.0
+
 # key -> unix seconds of last CONFIRMED delivery
 _last_sent: Dict[str, float] = {}
 
@@ -47,7 +62,8 @@ def reset_cooldowns() -> None:
     _last_sent.clear()
 
 
-def send(text: str, key: Optional[str] = None, cooldown_sec: float = 0.0) -> bool:
+def send(text: str, key: Optional[str] = None, cooldown_sec: float = 0.0,
+         attempts: int = SEND_ATTEMPTS, sleep=time.sleep) -> bool:
     """Deliver `text`. Returns True only when Telegram confirms delivery.
 
     `key` names a recurring alert so it can be rate limited. The trader polls
@@ -75,16 +91,34 @@ def send(text: str, key: Optional[str] = None, cooldown_sec: float = 0.0) -> boo
     # a venue error string quoted verbatim -- makes Telegram reject the whole
     # message, and the fallback is the difference between a mangled alert and
     # no alert.
-    for payload in ({**base, "text": text, "parse_mode": "Markdown"},
-                    {**base, "text": text}):
-        try:
-            resp = _transport(url, payload)
-            if resp.json().get("ok"):
-                if key:
-                    _last_sent[key] = time.time()
-                return True
-        except Exception as e:
-            print(f"[ALERT] send failed: {str(e)[:160]}")
+    # Markdown first, then plain. A rejection means the text upset Telegram, so
+    # the fallback is worth trying immediately; a raised exception means the
+    # request never landed, which is worth trying AGAIN.
+    variants = ({**base, "text": text, "parse_mode": "Markdown"},
+                {**base, "text": text})
+    for attempt in range(1, max(1, attempts) + 1):
+        transport_failed = False
+        for payload in variants:
+            try:
+                resp = _transport(url, payload)
+            except Exception as e:
+                transport_failed = True
+                print(f"[ALERT] send failed (attempt {attempt}): {str(e)[:160]}")
+                break          # the network is the problem, not the formatting
+            try:
+                if resp.json().get("ok"):
+                    if key:
+                        _last_sent[key] = time.time()
+                    return True
+            except Exception as e:
+                transport_failed = True
+                print(f"[ALERT] unreadable reply (attempt {attempt}): {str(e)[:120]}")
+                break
+        if not transport_failed:
+            # Telegram answered and refused both forms. Retrying will not help.
+            break
+        if attempt < max(1, attempts):
+            sleep(SEND_BACKOFF_SEC * attempt)
 
     print(f"[ALERT undelivered] {text}")
     return False
