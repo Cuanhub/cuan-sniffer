@@ -1432,6 +1432,71 @@ def reconcile(backend, state: Dict[str, Any]) -> None:
             sz = backend._get_venue_signed_size(coin)
         except Exception:
             continue
+        believed = 0.0
+        try:
+            believed = abs(float(owned[coin].get("size_coin") or 0))
+        except (TypeError, ValueError):
+            believed = 0.0
+
+        # A partial close is not a close, and it was invisible here. reconcile
+        # only ever asked "is it flat?", so a take-profit that filled 114 of
+        # 115 PONS on 2026-09-25 left one coin behind: the slot stayed
+        # occupied, the recorded size stayed at 115, the protection left
+        # resting covered a position that no longer existed, and the $5.04 the
+        # trade actually made was never accrued. venue_sanity could not help
+        # either -- it looks for positions this module does NOT know about,
+        # never for ones whose size has moved.
+        if (sz is not None and abs(sz) > 1e-12 and believed > 0
+                and abs(sz) < believed * 0.99):
+            entry = float(owned[coin].get("entry") or 0)
+            residual_usd = abs(sz) * entry
+            print(f"[LEVELS_LIVE] {coin} partially closed at venue: holding "
+                  f"{abs(sz):g} of {believed:g} ({residual_usd:.2f} USD left)")
+            if residual_usd < MIN_NOTIONAL_USD:
+                # Dust. Not worth a concurrency slot, and too small to
+                # re-protect -- close it and book the trade.
+                print(f"[LEVELS_LIVE] {coin} residual is below the "
+                      f"${MIN_NOTIONAL_USD:g} minimum -- closing it out")
+                try:
+                    backend.execute_exit(coin=coin, side="LONG", price=entry,
+                                         size_usd=residual_usd,
+                                         reason="residual_after_partial_close")
+                except Exception as e:
+                    print(f"[LEVELS_LIVE] residual exit failed: {str(e)[:100]}")
+                for oid in (owned[coin].get("stop_oid"), owned[coin].get("tp_oid")):
+                    if oid:
+                        try:
+                            backend.cancel_order(coin=coin, oid=oid)
+                        except Exception:
+                            pass
+                info = owned.pop(coin, {})
+                note = accrue_close(backend, state, coin, info)
+                save_state(state)
+                log_trade({"ts_utc": now_iso(), "action": "closed", "coin": coin,
+                           "episode_id": info.get("episode_id", ""),
+                           "result": "flat", "detail": f"partial close, residual "
+                           f"{abs(sz):g} closed out; {note}"})
+                print(f"[LEVELS_LIVE] {coin} slot released, {note} "
+                      f"(day {state['realised_today']:.2f})")
+                notify.send(f"⚪ *CLOSED {coin}* (partial fill, residual closed)\n{note}\n"
+                            f"day realised ${state.get('realised_today', 0.0):.2f}")
+                continue
+            # Big enough to keep: correct the record and re-protect the size
+            # that is actually there.
+            owned[coin]["size_coin"] = abs(sz)
+            save_state(state)
+            prot = backend.place_native_protection(
+                coin=coin, side="LONG", size_coin=abs(sz),
+                stop_price=float(owned[coin].get("stop") or 0),
+                tp_price=float(owned[coin].get("tp") or 0))
+            print(f"[LEVELS_LIVE] {coin} re-protected at {abs(sz):g}: "
+                  f"{prot.get('status')}")
+            log_trade({"ts_utc": now_iso(), "action": "protection", "coin": coin,
+                       "episode_id": owned[coin].get("episode_id", ""),
+                       "result": prot.get("status", ""),
+                       "detail": f"re-protected after partial close at {abs(sz):g}"})
+            continue
+
         if sz is not None and abs(sz) < 1e-12:
             info = owned.pop(coin, {})
             note = accrue_close(backend, state, coin, info)

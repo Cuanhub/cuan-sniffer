@@ -86,6 +86,7 @@ class FakeBackend:
         self.bids = []
         self.bid_ok = bid_ok
         self.leverage_set = []
+        self.signed = None
         self.venue_max_lev = venue_max_lev
         self.pnl_queries = []
         self.realised_pnl = realised_pnl   # None models a failed query
@@ -111,7 +112,11 @@ class FakeBackend:
             for c, v in self.venue.items()]}
 
     def _get_venue_signed_size(self, coin):
-        return 1.0 if coin in self.venue else 0.0
+        # `signed` lets a test model a PARTIAL close: the coin is still held,
+        # but at a smaller size than the module believes.
+        if coin not in self.venue:
+            return 0.0
+        return self.signed if self.signed is not None else 1.0
 
     # -- venue writes ------------------------------------------------------
     def execute_entry(self, coin, side, price, size_usd, confidence):
@@ -565,6 +570,7 @@ class RealisedPnlTest(unittest.TestCase):
 
     def state_holding(self, coin="AAA", entry=100.0, stop=95.0, size_coin=2.0):
         return {"owned": {coin: {"episode_id": "e1", "entry": entry, "stop": stop,
+                                 "tp": entry * 1.15,
                                  "size_coin": size_coin, "size_usd": entry * size_coin,
                                  "opened_at": "2026-09-18T07:00:00Z", "confirmed": True}},
                 "opened_today": 1, "day": "2026-09-18", "realised_today": 0.0,
@@ -595,6 +601,44 @@ class RealisedPnlTest(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         self.assertIn("CLOSED", sent[0])
         self.assertIn("AAA", sent[0])
+
+    def test_a_partial_close_leaving_dust_releases_the_slot(self):
+        # PONS 2026-09-25: the take-profit filled 114 of 115 coins. reconcile
+        # only asked "is it flat?", so one coin held a concurrency slot, the
+        # recorded size stayed at 115, and the $5.04 the trade made was never
+        # accrued.
+        b = FakeBackend(realised_pnl=5.04)
+        b.venue = {"PONS": 0.64}
+        b.signed = 1.0                      # 1 coin left of 115
+        st = self.state_holding(coin="PONS", entry=0.61842, stop=0.597,
+                                size_coin=115.0)
+        T.reconcile(b, st)
+        self.assertNotIn("PONS", st["owned"], "dust must not hold a slot")
+        self.assertEqual(b.exits, ["PONS"], "the residual must be closed out")
+        self.assertAlmostEqual(st["realised_today"], 5.04)
+
+    def test_a_material_partial_close_is_re_protected(self):
+        # Half the position still there is a position, not dust: correct the
+        # record and re-protect the size that actually exists.
+        b = FakeBackend()
+        b.venue = {"AAA": 100.0}
+        b.signed = 1.0
+        st = self.state_holding(coin="AAA", entry=100.0, stop=95.0, size_coin=2.0)
+        T.reconcile(b, st)
+        self.assertIn("AAA", st["owned"], "a real remainder keeps its slot")
+        self.assertEqual(st["owned"]["AAA"]["size_coin"], 1.0,
+                         "the recorded size must follow the venue")
+        self.assertEqual(b.protections, ["AAA"], "re-protect the real size")
+
+    def test_an_unchanged_position_is_left_alone(self):
+        b = FakeBackend()
+        b.venue = {"AAA": 200.0}
+        b.signed = 2.0
+        st = self.state_holding(coin="AAA", entry=100.0, stop=95.0, size_coin=2.0)
+        T.reconcile(b, st)
+        self.assertIn("AAA", st["owned"])
+        self.assertEqual(b.exits, [])
+        self.assertEqual(b.protections, [])
 
     def test_closed_position_accrues_its_win(self):
         b = FakeBackend(realised_pnl=18.0)
