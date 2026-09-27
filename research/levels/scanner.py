@@ -35,7 +35,7 @@ from typing import Any, Dict, List
 from research.levels import storage
 from research.levels.gate import evaluate
 from research.levels.levels import (
-    detect_levels, log_sigma, sigma_distance, nearest_level,
+    detect_levels, log_sigma, sigma_distance, nearest_level, structural_stop,
 )
 from research.levels.venue_client import HyperliquidReadOnlyClient, VenueFetchError
 from research.levels.universe import select_universe
@@ -173,7 +173,17 @@ def scan_coin(coin: str, bars: List[Dict[str, Any]], i: int = None,
         if onset_only and _fired_previous_bar(bars, i, L.price, sigma):
             continue
         entry = L.price * math.exp(ENTRY_BUFFER_SIGMA * sigma)
-        stop = L.price * math.exp(-STOP_SIGMA_BELOW * sigma)
+        # The SAME rule the trader prices its stop with. This line was a bare
+        # fixed multiple of sigma until 2026-09-27, while call.py -- the path
+        # the live trader actually calls -- moved to the structural stop on
+        # 2026-09-20. The two are the same concept implemented twice, and only
+        # one of them was updated, so for a week every episode logged here
+        # carried a flat 3.35 sigma stop while the trades it was supposed to
+        # describe were being placed at 0.47-0.80 sigma. No money was at risk
+        # -- this module cannot place an order -- but the research set is the
+        # thing the gate gets calibrated against, so a stop it never used makes
+        # that calibration fit a strategy nobody trades.
+        stop = structural_stop(bars, i, L.price, sigma)             or L.price * math.exp(-STOP_SIGMA_BELOW * sigma)
         opp = nearest_level(resistances, px, sigma, below=False)
         tp = opp.price if opp else px * math.exp(8 * sigma)
         rr = ((tp - entry) / (entry - stop)) if entry > stop else 0.0
