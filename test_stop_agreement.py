@@ -82,11 +82,21 @@ class StopAgreement(unittest.TestCase):
                 scanner_rule(lvl), call_rule(lvl), places=10,
                 msg=f"the two paths disagree at level {lvl}")
 
-    def test_both_modules_import_the_same_structural_stop(self):
-        """A cheap guard against one file growing its own copy."""
+    def test_both_modules_take_structural_stop_from_levels(self):
+        """A cheap guard against one file growing its own copy.
+
+        Identity is the wrong assertion here: the isolation test deletes
+        research.levels.* from sys.modules on purpose, so a later import builds
+        a fresh function object and `is` fails on an accident of test order
+        rather than on anything real. What has to hold is that both names
+        resolve to the one definition in research.levels.levels.
+        """
         import research.levels.call as call_mod
-        self.assertIs(scanner.structural_stop, structural_stop)
-        self.assertIs(call_mod.structural_stop, structural_stop)
+        for mod in (scanner, call_mod):
+            fn = getattr(mod, "structural_stop", None)
+            self.assertIsNotNone(fn, f"{mod.__name__} does not import it at all")
+            self.assertEqual(fn.__module__, "research.levels.levels")
+            self.assertEqual(fn.__qualname__, "structural_stop")
 
     def test_scanner_source_no_longer_hardcodes_the_fixed_rule_alone(self):
         """The literal shape of the bug: a stop assigned straight from
