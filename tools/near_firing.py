@@ -32,8 +32,8 @@ from research.levels.universe import select_universe                  # noqa: E4
 from research.levels.levels import log_sigma, sigma_distance          # noqa: E402
 from research.levels.trigger import fetch_1h                          # noqa: E402
 from research.levels.config import (                                  # noqa: E402
-    TRIGGER_ZONE_SIGMA, TRIGGER_HOLD_HOURS, TRIGGER_TOUCH_LOOKBACK_HOURS,
-    TRIGGER_MAX_ABOVE_SIGMA, MAX_ENTRY_DRIFT_PCT,
+    TRIGGER_ZONE_SIGMA, TRIGGER_HOLD_HOURS, TRIGGER_HOLD_HOURS_SWING,
+    TRIGGER_TOUCH_LOOKBACK_HOURS, TRIGGER_MAX_ABOVE_SIGMA, MAX_ENTRY_DRIFT_PCT,
 )
 
 
@@ -50,8 +50,9 @@ def sigma_to_fire(above: float, touched: bool, below: bool, broke: int) -> float
     Ranking on `above` alone is wrong, and misleadingly so. A level at 1.9
     sigma that has not been touched is nearer than one at 4.6 that has: the
     first needs a 0.9 sigma dip to register a touch, the second needs 2.6 to
-    get back under the ceiling. Both then need the 2h hold, which is time
-    rather than distance and so is not counted here.
+    get back under the ceiling. Both then need their hold -- 2h for a flipped
+    resistance, 1h for an ordinary swing low -- which is time rather than
+    distance and so is not counted here.
 
     An untouched level is the binding case: price must reach within
     TRIGGER_ZONE_SIGMA of the level to count as a touch at all, and that is a
@@ -146,9 +147,12 @@ def main() -> int:
     rows = collect(args.coin)
     watching = load_watchlist()
     print(f"{len(rows)} tradeable level(s); {len(watching)} on the watchlist")
+    # The hold is not one number: a flipped resistance has to prove it holds as
+    # support, an ordinary support taps and sends. Printing only the flipped
+    # value made the bar look higher than it is for most rows on the board.
     print(f"trigger needs: touched within {TRIGGER_TOUCH_LOOKBACK_HOURS}h, held "
-          f"{TRIGGER_HOLD_HOURS}h, and <= {TRIGGER_MAX_ABOVE_SIGMA} sigma above "
-          f"the level")
+          f"{TRIGGER_HOLD_HOURS}h if flipped / {TRIGGER_HOLD_HOURS_SWING}h if a "
+          f"swing low, and <= {TRIGGER_MAX_ABOVE_SIGMA} sigma above the level")
     print(f"entry also needs live price within {MAX_ENTRY_DRIFT_PCT}% of the "
           f"planned entry\n")
 
