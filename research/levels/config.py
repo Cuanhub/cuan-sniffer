@@ -211,6 +211,23 @@ MAX_LEVERAGE = _f("LEVELS_MAX_LEVERAGE", 10.0)
 MIN_RR = _f("LEVELS_MIN_RR", 2.0)
 MIN_NOTIONAL_USD = _f("LEVELS_MIN_NOTIONAL", 12.0)
 
+# How many resistance rungs above price the target may choose between.
+#
+# 3, which is what call.py already displayed as its ladder -- this only makes
+# the choice from it rather than always taking the first. Aiming at the nearest
+# rung tied the target to the admission test: the ceiling above a support
+# barely moves, so a support near price has little headroom and poor
+# reward/risk however good the support itself is, and every freshly formed
+# shelf was refused for it. Measured 2026-09-28 across the live universe, 41
+# levels were being refused that way, median 42% return on margin and median 7
+# touches on the rung they should have aimed at.
+#
+# GUESSED at 3. Raising it reaches for bigger targets that are less likely to
+# be hit and hold a slot longer; the take-profit study found per-slot-day
+# return is U-shaped in target distance, so further is not automatically
+# better. Worth revisiting once there are labels on which rung was right.
+TARGET_MAX_RUNGS = _i("LEVELS_TARGET_MAX_RUNGS", 3)
+
 # STRUCTURAL. execute_entry sends a marketable IOC at the CURRENT price and
 # ignores the limit price it is given, so a setup identified while price was
 # far away will fill nowhere near its planned entry. On 2026-09-18 that bought

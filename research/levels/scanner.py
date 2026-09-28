@@ -35,7 +35,7 @@ from typing import Any, Dict, List
 from research.levels import storage
 from research.levels.gate import evaluate
 from research.levels.levels import (
-    detect_levels, log_sigma, sigma_distance, nearest_level, structural_stop,
+    detect_levels, log_sigma, sigma_distance, structural_stop, choose_target,
 )
 from research.levels.venue_client import HyperliquidReadOnlyClient, VenueFetchError
 from research.levels.universe import select_universe
@@ -184,9 +184,18 @@ def scan_coin(coin: str, bars: List[Dict[str, Any]], i: int = None,
         # thing the gate gets calibrated against, so a stop it never used makes
         # that calibration fit a strategy nobody trades.
         stop = structural_stop(bars, i, L.price, sigma)             or L.price * math.exp(-STOP_SIGMA_BELOW * sigma)
-        opp = nearest_level(resistances, px, sigma, below=False)
+        # choose_target, shared with call.py. This used to take the nearest
+        # resistance unconditionally; the two modules are one idea implemented
+        # twice and the stop rule already diverged that way once, so the choice
+        # lives in levels.py and both callers ask it the same question.
+        opp, _ladder, _qualified = choose_target(resistances, px, entry, stop, sigma)
         tp = opp.price if opp else px * math.exp(8 * sigma)
         rr = ((tp - entry) / (entry - stop)) if entry > stop else 0.0
+        # overhead_sigma is in the episode schema and was never written here,
+        # so every scanner row read as "no resistance mapped above" to the very
+        # filter these rows exist to calibrate.
+        head_sigma = sigma_distance(opp.price, entry, sigma) if opp else None
+        head_pct = ((opp.price - entry) / entry * 100) if opp else None
         rows.append({
             "episode_id": storage.make_episode_id(coin, bars[i]["t"], L.price),
             "coin": coin,
@@ -206,6 +215,8 @@ def scan_coin(coin: str, bars: List[Dict[str, Any]], i: int = None,
             "suggested_tp": round(tp, 10),
             "suggested_rr": round(rr, 3),
             "opposing_level_price": round(opp.price, 10) if opp else "",
+            "overhead_sigma": round(head_sigma, 3) if head_sigma is not None else "",
+            "overhead_pct": round(head_pct, 4) if head_pct is not None else "",
             **feats,
         })
     return rows

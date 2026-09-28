@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 from research.levels.config import (               # noqa: E402
     PIVOT_WINDOW, CLUSTER_SIGMA, TOUCH_BAND_SIGMA, BREAK_SIGMA, BREAK_WINDOW,
     STOP_STRUCT_BUFFER_SIGMA, STOP_MIN_SIGMA, STOP_SIGMA_BELOW, STOP_STRUCT_LOOKBACK,
-    VOL_LOOKBACK,
+    VOL_LOOKBACK, TARGET_MAX_RUNGS, TRADE_MIN_OVERHEAD_SIGMA, MIN_RR,
 )
 from research.levels.config import MIN_TOUCHES_DETECT as MIN_TOUCHES  # noqa: E402
 
@@ -227,3 +227,53 @@ def nearest_level(levels: List[Level], price: float, sigma: float,
     if not cands:
         return None
     return min(cands, key=lambda L: abs(sigma_distance(price, L.price, sigma)))
+
+
+def resistance_ladder(resistances: List[Level], px: float,
+                      max_rungs: int = TARGET_MAX_RUNGS) -> List[Level]:
+    """The mapped resistances above price, nearest first."""
+    return sorted([L for L in resistances if L.price > px],
+                  key=lambda L: L.price)[:max_rungs]
+
+
+def choose_target(resistances: List[Level], px: float, entry: float,
+                  stop: float, sigma: float,
+                  max_rungs: int = TARGET_MAX_RUNGS):
+    """Which resistance to aim at, and the ladder it came from.
+
+    Returns (rung, ladder, qualified). `rung` is the Level to target or None
+    when nothing is mapped above; `ladder` is the rungs considered, nearest
+    first; `qualified` says whether the pick cleared both admission gates.
+
+    Aiming at the NEAREST rung -- which is what both callers used to do --
+    couples the target to the admission test in a way that quietly excludes
+    every shelf near price. The ceiling above a support barely moves, so the
+    closer the support sits to price, the less headroom it has and the worse
+    its reward/risk looks, however good the support itself is. Measured across
+    the live universe on 2026-09-28: XPL 0.10327 (11 touches) was refused at
+    rung 1 for 2.62 sigma of headroom while rung 2 offered 5.8 sigma, rr 7.28
+    and a 59% return on margin; 41 levels were being refused the same way,
+    median 42% ROE and median 7 touches on the rung they should have been
+    aiming at.
+
+    So: the nearest rung that clears BOTH gates. Nearest rather than furthest,
+    because a nearer target is likelier to be reached and this is meant to be
+    the smallest change that unblocks the setups, not a reach for maximum
+    payoff.
+
+    When no rung qualifies, the nearest is returned with qualified=False --
+    deliberately, so the caller's own gate refuses the setup for exactly the
+    reason it refuses it today. That makes this strictly additive: it can turn
+    a rejection into a trade, never a trade into a rejection.
+    """
+    ladder = resistance_ladder(resistances, px, max_rungs)
+    if not ladder:
+        return None, [], False
+    if not (entry > stop > 0) or sigma <= 0:
+        return ladder[0], ladder, False
+    for L in ladder:
+        rr = (L.price - entry) / (entry - stop)
+        if (sigma_distance(L.price, entry, sigma) >= TRADE_MIN_OVERHEAD_SIGMA
+                and rr >= MIN_RR):
+            return L, ladder, True
+    return ladder[0], ladder, False

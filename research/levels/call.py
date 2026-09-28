@@ -31,7 +31,8 @@ from research.levels import config as C
 from research.levels import storage
 from research.levels.gate import evaluate
 from research.levels.levels import (
-    detect_levels, flipped_supports, log_sigma, sigma_distance, structural_stop,
+    choose_target, detect_levels, flipped_supports, log_sigma, sigma_distance,
+    structural_stop,
 )
 from research.levels.scanner import _atr_pct
 from research.levels.venue_client import HyperliquidReadOnlyClient, VenueFetchError
@@ -157,8 +158,10 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
             # the judgement these calls exist to capture, so it is displayed,
             # not decided. suggested_tp keeps the nearest rung for continuity
             # with episodes.csv, and rr_ladder carries the alternatives.
-            above = sorted([L for L in resistances if L.price > px], key=lambda L: L.price)[:3]
-            opp = above[0] if above else None
+            # Which rung, not just the first one. choose_target is shared with
+            # the scanner so the research set and the traded path cannot drift
+            # apart the way the stop rule did.
+            opp, above, _qualified = choose_target(resistances, px, entry, stop, sigma)
             tp = opp.price if opp else px * math.exp(8 * sigma)
             rr = ((tp - entry) / (entry - stop)) if entry > stop else 0.0
             ladder = []
@@ -177,8 +180,11 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
             # no trade thesis to act on. Reported as None rather than a
             # sentinel 99.0, which was being read as "maximum headroom" and
             # floated exactly the untradeable setups to the top of a scan.
-            head_sigma = sigma_distance(above[0].price, entry, sigma) if above else None
-            head_pct = ((above[0].price - entry) / entry * 100) if above else None
+            # To the rung actually being aimed at. Measuring it against the
+            # nearest rung while targeting a further one would report headroom
+            # the trade is not taking, and the gate reads this number.
+            head_sigma = sigma_distance(opp.price, entry, sigma) if opp else None
+            head_pct = ((opp.price - entry) / entry * 100) if opp else None
             # How long this level spent CAPPING price, and how recently. The
             # user reads "many are trying to flip resistance levels" off the
             # chart and treats those as needing observation, while calling a
