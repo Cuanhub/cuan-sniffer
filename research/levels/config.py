@@ -375,6 +375,29 @@ MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 4)
 # spends one of the five; for a churn bound that is the point.
 # 0 disables the rail entirely, which is what it was set to.
 MAX_NEW_PER_DAY = _i("LEVELS_MAX_NEW_PER_DAY", 5)
+# How long a coin is left alone after it stopped us out. 0 disables.
+#
+# EVIDENCED, and specifically NOT after a winning close. Across the 26 live
+# trades to 2026-09-30 there were 12 re-entries:
+#
+#   after a LOSS, under 2h :  3 trades   0W/3L   -$10.06
+#   after a LOSS, 15h plus :  7 trades   2W/5L   +$ 3.96
+#   after a WIN            :  2 trades   2W/0L   +$26.63
+#
+# The harm is concentrated and obvious. LIT was bought three times inside four
+# hours on 2026-09-30 -- twice at the same level, 28 and 19 minutes after being
+# stopped out of it -- while being the worst performer in the universe at -10%.
+# That one coin was $13.16 of a $19.99 losing run. A level that just stopped us
+# out is a level that broke; buying it again immediately is buying the break.
+#
+# A WIN means the level did its job, and both re-entries after one were
+# profitable (PUMP +20.35 re-entered 3.4h after a +4.25). So this keys off the
+# realised result, not merely off closing.
+#
+# 6h is the middle of the gap in the evidence: nothing in the sample sits
+# between 0.8h and 15.9h, so any value from 1h to 15h blocks the same three
+# losers and preserves the same winners. 6h claims no more precision than that.
+COIN_REENTRY_COOLDOWN_HOURS = _f("LEVELS_COIN_REENTRY_COOLDOWN_HOURS", 6.0)
 # 15%, not 10%. At 3% risk a 10% stop halts after 3 losing trades, and at the
 # ~3.4 reward/risk this filter selects for, a no-edge win rate would be ~23% --
 # so three straight losses is a 46% event and the system would spend most of

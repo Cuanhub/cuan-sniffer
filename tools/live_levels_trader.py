@@ -66,6 +66,7 @@ from research.levels.config import (                                  # noqa: E4
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
+    COIN_REENTRY_COOLDOWN_HOURS,
     MARGIN_PCT_PER_TRADE,
     NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
     TRIGGER_HOLD_HOURS, TRIGGER_HOLD_HOURS_SWING,
@@ -357,6 +358,36 @@ def prune_watchlist(watching: Dict[str, Any]) -> int:
     return dropped
 
 
+def cooldown_remaining(state: Dict[str, Any], coin: str) -> float:
+    """Hours left before `coin` may be traded again, 0.0 when it is free.
+
+    Set by a LOSING close only -- see COIN_REENTRY_COOLDOWN_HOURS for the
+    numbers. A level that just stopped us out is a level that broke, and buying
+    it again minutes later is buying the break; a level that paid is a level
+    that worked.
+    """
+    if not COIN_REENTRY_COOLDOWN_HOURS:
+        return 0.0
+    at = iso_to_ms((state.get("cooled") or {}).get(coin.upper(), ""))
+    if at is None:
+        return 0.0
+    elapsed_h = (datetime.now(timezone.utc).timestamp() * 1000 - at) / 3_600_000.0
+    return max(0.0, COIN_REENTRY_COOLDOWN_HOURS - elapsed_h)
+
+
+def start_cooldown(state: Dict[str, Any], coin: str) -> None:
+    state.setdefault("cooled", {})[coin.upper()] = now_iso()
+
+
+def prune_cooldowns(state: Dict[str, Any]) -> int:
+    """Drop expired stamps so the state file cannot grow without bound."""
+    cooled = state.get("cooled") or {}
+    for coin in list(cooled):
+        if cooldown_remaining(state, coin) <= 0.0:
+            cooled.pop(coin, None)
+    return len(cooled)
+
+
 def seed_watchlist_from_log(watching: Dict[str, Any]) -> int:
     """Admit levels the trade log shows already cleared the full bar.
 
@@ -632,8 +663,13 @@ def main():
                 continue
         watching = state.setdefault("watching", {})
         expired = prune_watchlist(watching)
+        on_cooldown = prune_cooldowns(state)
         intents, rejected = build_intents(ro, universe, watching)
         save_state(state)
+        if on_cooldown:
+            print("[LEVELS_LIVE] cooling off: "
+                  + ", ".join(f"{c} {cooldown_remaining(state, c):.1f}h left"
+                              for c in sorted(state.get("cooled") or {})))
         n_watched = sum(1 for e in intents if e.get("_watched"))
         print(f"\n[LEVELS_LIVE] {len(intents)} setup(s) cleared the quality bar "
               f"({n_watched} of them on the watchlist as price came back), "
@@ -671,6 +707,17 @@ def main():
             if (len(state.get("owned", {}))
                     + len(state.get("pending", {}))) >= MAX_CONCURRENT:
                 print("[LEVELS_LIVE] concurrency cap reached, stopping this pass")
+                break
+            # The daily cap belongs in this guard too, not only in preflight.
+            # preflight runs ONCE per pass, so on 2026-09-28 it saw
+            # opened_today=4, allowed the pass, and BTC then filled (5) with
+            # DOGE filling six seconds later (6) -- one over the cap. The
+            # comment below already says this lesson for venue_sanity; the
+            # daily cap was simply left out of the same re-check.
+            if MAX_NEW_PER_DAY and state.get("opened_today", 0) >= MAX_NEW_PER_DAY:
+                print(f"[LEVELS_LIVE] daily cap reached "
+                      f"({state['opened_today']}/{MAX_NEW_PER_DAY}), "
+                      f"stopping this pass")
                 break
             outcome = execute_one(backend, ep, equity, available, armed, state,
                                   bars_cache=bars_cache, watchboard=watchboard)
@@ -912,6 +959,13 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         log_trade(row)
         return Outcome()
     if coin in state.get("owned", {}):
+        return Outcome()
+    left = cooldown_remaining(state, coin)
+    if left > 0:
+        row.update({"action": "skip", "result": "coin_cooldown",
+                    "detail": f"stopped out {COIN_REENTRY_COOLDOWN_HOURS - left:.1f}h "
+                              f"ago; {left:.1f}h of cooldown left"})
+        log_trade(row)
         return Outcome()
     if not armed:
         row.update({"action": "dry_run", "result": "not_armed"})
@@ -1223,6 +1277,14 @@ def accrue_close(backend, state: Dict[str, Any], coin: str,
     else:
         note = f"realised {pnl:.2f}"
     state["realised_today"] = state.get("realised_today", 0.0) + pnl
+    # Stamped here because this is the single path every close comes through,
+    # and it is the only place that knows the realised result -- which is what
+    # decides whether a cooldown is warranted at all.
+    if pnl <= 0:
+        start_cooldown(state, coin)
+        if COIN_REENTRY_COOLDOWN_HOURS:
+            note += (f"; {coin} on cooldown for "
+                     f"{COIN_REENTRY_COOLDOWN_HOURS:g}h")
     return note
 
 
@@ -1255,6 +1317,11 @@ def place_resting_bid(backend, client, universe, coin: str, level: str,
         return 1
     if coin in state.get("owned", {}) or coin in state.get("pending", {}):
         print(f"[LEVELS_LIVE] already holding or bidding on {coin}")
+        return 1
+    left = cooldown_remaining(state, coin)
+    if left > 0:
+        print(f"[LEVELS_LIVE] {coin} is on cooldown for another {left:.1f}h "
+              f"after a losing close")
         return 1
     if len(state.get("owned", {})) + len(state.get("pending", {})) >= MAX_CONCURRENT:
         print(f"[LEVELS_LIVE] at the concurrency cap ({MAX_CONCURRENT})")
