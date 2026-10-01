@@ -66,7 +66,7 @@ from research.levels.config import (                                  # noqa: E4
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
-    COIN_REENTRY_COOLDOWN_HOURS,
+    COIN_REENTRY_COOLDOWN_HOURS, ACCOUNT_DD_HALT_PCT,
     MARGIN_PCT_PER_TRADE,
     NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
     TRIGGER_HOLD_HOURS, TRIGGER_HOLD_HOURS_SWING,
@@ -550,7 +550,8 @@ def main():
     print(f"[LEVELS_LIVE] mode: {'ARMED -- PLACING REAL ORDERS' if armed else 'DRY RUN'}")
     print(f"[LEVELS_LIVE] rails: risk {RISK_PCT_PER_TRADE}%/trade, max {MAX_CONCURRENT} "
           f"concurrent, {'unlimited' if not MAX_NEW_PER_DAY else str(MAX_NEW_PER_DAY)+'/day'}, "
-          f"lev cap {MAX_LEVERAGE}x, daily stop {DAILY_LOSS_STOP_PCT}%")
+          f"lev cap {MAX_LEVERAGE}x, daily stop {DAILY_LOSS_STOP_PCT}%, "
+          f"account dd halt {ACCOUNT_DD_HALT_PCT:g}%")
     print(f"[LEVELS_LIVE] {config_summary()}")
     print("[LEVELS_LIVE] NOTE: this gate measured -0.0413R vs random entry "
           "(z=-0.93, n=688 backfill trades).")
@@ -560,7 +561,8 @@ def main():
         notify.send(
             f"▶️ *Level trader armed*\nrisk {RISK_PCT_PER_TRADE}%/trade, "
             f"max {MAX_CONCURRENT} concurrent, {MAX_NEW_PER_DAY}/day, "
-            f"daily stop {DAILY_LOSS_STOP_PCT}%",
+            f"daily stop {DAILY_LOSS_STOP_PCT}%, "
+            f"account dd halt {ACCOUNT_DD_HALT_PCT:g}%",
             key="armed_start", cooldown_sec=300)
 
     ro = HyperliquidReadOnlyClient()
@@ -1609,6 +1611,26 @@ def preflight(backend, state: Dict[str, Any]):
     if lost <= -abs(equity) * DAILY_LOSS_STOP_PCT / 100.0:
         return halt(state, f"daily loss stop: {lost:.2f} against "
                            f"{equity:.2f} equity")
+    # Account drawdown from the high-water mark. The daily stop resets at
+    # 00:00 UTC, so a slow bleed never trips it -- the three days to
+    # 2026-09-30 lost $19.99 across 17 trades without any single day coming
+    # close. This is the rail that watches the trajectory instead of the day.
+    #
+    # The peak is persisted, so it survives restarts; load_state refuses to
+    # start on a corrupt file rather than silently handing back an empty one,
+    # which is what stops a lost state file from quietly resetting the mark
+    # and forgiving a drawdown already incurred.
+    peak = float(state.get("equity_peak") or 0.0)
+    if equity > peak:
+        state["equity_peak"] = equity
+        save_state(state)
+        peak = equity
+    if ACCOUNT_DD_HALT_PCT and peak > 0:
+        dd_pct = (peak - equity) / peak * 100.0
+        if dd_pct >= ACCOUNT_DD_HALT_PCT:
+            return halt(state, f"account drawdown {dd_pct:.1f}% "
+                               f"({equity:.2f} against a {peak:.2f} peak), "
+                               f"limit {ACCOUNT_DD_HALT_PCT:g}%")
     return None
 
 

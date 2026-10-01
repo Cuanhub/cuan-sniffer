@@ -374,7 +374,17 @@ MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 4)
 # protection is placed, so a trade that is immediately emergency-closed still
 # spends one of the five; for a churn bound that is the point.
 # 0 disables the rail entirely, which is what it was set to.
-MAX_NEW_PER_DAY = _i("LEVELS_MAX_NEW_PER_DAY", 5)
+# 20, raised from 5 on 2026-10-01, and demoted from the primary rail to a
+# backstop. Drawdown is what should bound the day -- a count cap refuses good
+# setups while the account is flat and perfectly healthy, which it did 433
+# times in the log, more than every other reason combined.
+#
+# It is not removed, because the case it bounds is the one no loss stop can
+# see: opening and closing repeatedly while losing too little to trip
+# anything. The per-coin cooldown now covers most of that, and 20 sits well
+# above the ~18 losses the 5% daily stop allows, so in practice drawdown binds
+# first and this only catches a runaway loop.
+MAX_NEW_PER_DAY = _i("LEVELS_MAX_NEW_PER_DAY", 20)
 # How long a coin is left alone after it stopped us out. 0 disables.
 #
 # EVIDENCED, and specifically NOT after a winning close. Across the 26 live
@@ -398,11 +408,39 @@ MAX_NEW_PER_DAY = _i("LEVELS_MAX_NEW_PER_DAY", 5)
 # between 0.8h and 15.9h, so any value from 1h to 15h blocks the same three
 # losers and preserves the same winners. 6h claims no more precision than that.
 COIN_REENTRY_COOLDOWN_HOURS = _f("LEVELS_COIN_REENTRY_COOLDOWN_HOURS", 6.0)
-# 15%, not 10%. At 3% risk a 10% stop halts after 3 losing trades, and at the
-# ~3.4 reward/risk this filter selects for, a no-edge win rate would be ~23% --
-# so three straight losses is a 46% event and the system would spend most of
-# its life halted, learning nothing. 15% allows 5, where five straight is 27%.
-DAILY_LOSS_STOP_PCT = _f("LEVELS_DAILY_LOSS_STOP_PCT", 15.0)
+# 5%, lowered from 15% on 2026-10-01. The old value was calibrated against a
+# risk-per-trade that was wrong by about 11x.
+#
+# Its reasoning -- "at 3% risk a 10% stop halts after 3 losing trades" -- was
+# sound, but 3% is MARGIN_PCT_PER_TRADE, the margin committed, not the amount
+# at risk. The structural stop sits a median 1.76% below the fill, so at 5x the
+# real risk is $2.11 on $797 of equity: 0.26%, not 3%. Measured against the
+# observed $2.20 average loss, a 15% stop halts after FIFTY-FOUR consecutive
+# losses, which is not a rail. 5% halts after ~18.
+#
+# Same margin-vs-risk conflation that once sized positions off equity x
+# leverage instead of margin x leverage.
+#
+# EVIDENCED against the live book: the worst day so far was 6 trades for
+# -$12.44, or 1.5%, so this leaves roughly 3x headroom over anything actually
+# seen while still bounding a blowout.
+DAILY_LOSS_STOP_PCT = _f("LEVELS_DAILY_LOSS_STOP_PCT", 5.0)
+
+# Halt when equity falls this far below its own high-water mark. 0 disables.
+#
+# The rail that did not exist. The daily stop resets at 00:00 UTC, so a slow
+# bleed never trips it: three days to 2026-09-30 lost $19.99 across 17 trades
+# and no single day came close to halting. Nothing measured the account's
+# trajectory at all.
+#
+# 10% of the peak. Worst drawdown through the first 26 trades was 3.25%, so
+# this is about 3x headroom -- loose enough not to fire on normal variance,
+# tight enough to stop a strategy that has quietly stopped working.
+#
+# Reads realised equity, which excludes unrealised PnL on open positions, so it
+# lags by whatever the open book is down. Bounded by the fact that every
+# position carries a stop: four at once risks about $8.44, around 1% of equity.
+ACCOUNT_DD_HALT_PCT = _f("LEVELS_ACCOUNT_DD_HALT_PCT", 10.0)
 # 450s, halved from 900 on 2026-09-19.
 #
 # The bot sends a marketable order when the trigger fires and refuses it if
