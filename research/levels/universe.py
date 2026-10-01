@@ -27,8 +27,27 @@ from typing import Any, Dict, List
 
 from research.levels.venue_client import HyperliquidReadOnlyClient
 
+# 45, raised from 30 on 2026-10-01, to be reviewed after three days of
+# trading.
+#
+# The top 30 by 24h volume is a list that barely moves -- BTC and ETH are not
+# going to drop out of it -- so the same names recurred on every board while
+# 204 of the venue's 234 perps were never looked at. The cut also fell straight
+# through setups that had been called by hand: CASHCAT, FARTCOIN, USELESS and
+# BNB all sat at ranks 31-45.
+#
+# What made this affordable rather than merely desirable is the request budget.
+# At 30 coins a pass cost 90 venue calls; after removing the duplicate 1h fetch
+# and caching the 4h series between bar boundaries it costs 31. So 45 coins now
+# runs at about 46 calls a pass -- roughly half the load that was producing
+# rate limits at half the universe size.
+#
+# The floor moves from $10.3M to $4.9M of 24h notional. At a $119 position that
+# is not a liquidity constraint; what it does buy is thinner, more erratic
+# names, which is exactly the thing three days of trading is meant to measure.
+# Review against the pre-change book: 26 closed trades, 8W/18L, +$28.94.
 UNIVERSE_TOP_N = int(os.getenv("LEVELS_UNIVERSE_TOP_N",
-                               os.getenv("FUNDING_UNIVERSE_TOP_N", "30")))
+                               os.getenv("FUNDING_UNIVERSE_TOP_N", "45")))
 
 UNIVERSE_EXCLUDE = {
     s.strip().upper()

@@ -324,3 +324,43 @@ improve reward/risk on a rejected setup. If a setup only clears the rr floor
 with a stop inside the noise, it has not cleared the floor. The structural stop
 may be widened by evidence that levels are being broken and recovered; it must
 not be narrowed by a setup wanting to qualify.
+
+## 2026-10-01 -- universe 30 -> 45, to be reviewed after three days
+
+The top 30 perps by 24h volume is a list that barely moves, so the same names
+recurred on every board while 204 of the venue's 234 perps were never scanned.
+The cut also fell straight through setups called by hand: CASHCAT, FARTCOIN,
+USELESS and BNB all sit at ranks 31-45.
+
+Affordable only because of the request budget. A pass cost 90 venue calls at 30
+coins; removing the duplicate 1h fetch (7c745f6) and caching the 4h series to
+its bar boundary (ca60aa3) brought that to 31, so 45 coins runs at about 46 --
+roughly half the load that was producing rate limits at half the universe size.
+
+The 15 added, with 24h notional at the time of the change:
+
+  PENGU 9.1M, GRAM 9.1M, XMR 9.0M, FARTCOIN 8.6M, CASHCAT 8.1M, HBAR 8.0M,
+  TRUMP 7.5M, XLM 7.4M, ETHFI 7.2M, LDO 6.7M, USELESS 6.1M, BNB 5.9M,
+  KBONK 5.4M, JUP 5.3M, VIRTUAL 4.9M
+
+The volume floor moves from $10.3M to $4.9M. At a $119 position that is not a
+liquidity constraint; what it buys is thinner, more erratic names, which is the
+thing the review is for.
+
+BASELINE to judge it against -- the book immediately before the change:
+
+  26 closed since 2026-09-20, 8W/18L (31%), net +$28.94
+  avg win +$8.58, avg loss -$2.20, profit factor 1.73
+  equity $768.58 -> $797.01, peak $817.51
+  coins traded: LIT x4, DOGE x3, PUMP x3, HYPE x3, PONS x2, XPL x2, WLD x2,
+                ZEC, NEAR, LTC, ETH, VVV, BTC, SUI
+
+The question the review answers is NOT whether the three days are profitable --
+n will be far too small for that. It is whether the added names behave
+differently from the existing 30: their share of trades taken, their win rate
+and average loss against the incumbents', and whether any of them produce the
+LIT pattern of repeated entries into a falling market. The per-coin cooldown
+(18a688d) now bounds that, so this is also the first real test of it.
+
+Rails unchanged and now the binding constraint: 4 concurrent, 20/day, 5% daily
+loss stop, 10% account drawdown halt from the high-water mark.
