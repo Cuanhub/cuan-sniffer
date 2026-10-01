@@ -25,6 +25,7 @@ rejects nothing the user would reject.
 
 import argparse
 import math
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from research.levels import config as C
@@ -400,6 +401,100 @@ def _same_level_labels(eid: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _record(match, eid: str, verdict: str, note: str) -> bool:
+    """Write the episode snapshot, then the label. Shared by both paths so a
+    batch cannot drift from a single label."""
+    for prior in _same_level_labels(eid):
+        flag = "CONTRADICTS" if prior["verdict"] != verdict else "repeats"
+        print(f"  !! {flag} an existing label on this same level: "
+              f"{prior['verdict']} at {prior['labelled_at_utc']}"
+              + (f" -- {prior['note'][:60]}" if prior.get("note") else ""))
+    if match is not None:
+        storage.append_episode({k: v for k, v in match.items()
+                                if not k.startswith("_")})
+    return storage.append_label({"episode_id": eid,
+                                 "labelled_at_utc": storage.now_iso(),
+                                 "verdict": verdict, "confidence": "",
+                                 "note": note or ""})
+
+
+def cmd_batch(path: str):
+    """Label many calls from ONE scan.
+
+    cmd_label re-scans the universe per label -- 45 coins across two
+    timeframes, so about 90 venue requests EACH. Sixteen verdicts in one
+    sitting cost ~1,440 requests against an endpoint that has been returning
+    rate limits. This does one scan and applies every line against it.
+
+    The file is one verdict per line:
+
+        COIN LEVEL VERDICT  optional note to end of line
+        AAVE 142.84 take    operator's blue zone from the chart
+        HYPE 86.747 skip    entry would be at 85
+
+    Matched on (coin, level) rather than episode_id deliberately: an id
+    carries its bar timestamp, so the ones printed by a board go stale as soon
+    as the next bar opens, which is exactly when somebody is sitting down to
+    label them. A level price does not move.
+    """
+    lines = []
+    for n, raw in enumerate(Path(path).read_text().splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 3)
+        if len(parts) < 3:
+            print(f"  line {n}: expected 'COIN LEVEL VERDICT [note]', got {line!r}")
+            return 1
+        coin, level_s, verdict = parts[0].upper(), parts[1], parts[2].lower()
+        note = parts[3] if len(parts) > 3 else ""
+        if verdict not in ("take", "skip", "maybe"):
+            print(f"  line {n}: verdict must be take/skip/maybe, got {verdict!r}")
+            return 1
+        try:
+            level = float(level_s)
+        except ValueError:
+            print(f"  line {n}: {level_s!r} is not a level price")
+            return 1
+        lines.append((n, coin, level, verdict, note))
+    if not lines:
+        print("nothing to label")
+        return 1
+
+    client = HyperliquidReadOnlyClient()
+    by: Dict[str, List[Dict[str, Any]]] = {}
+    for c in find_candidates(client, select_universe(client)):
+        by.setdefault(str(c["coin"]).upper(), []).append(c)
+
+    done = missed = 0
+    for n, coin, level, verdict, note in lines:
+        rows = by.get(coin, [])
+        match = min(rows, key=lambda e: abs(float(e["level_price"]) - level),
+                    default=None)
+        # 2% rather than exact: an operator reads a level off a chart, and
+        # refusing 142.8 for 142.84 would make the tool useless for the one
+        # job it has. Wider than that is a different level, so it is refused
+        # rather than silently labelled.
+        if match is None or abs(float(match["level_price"]) / level - 1) > 0.02:
+            near = (f"nearest {float(match['level_price']):.6g}"
+                    if match is not None else "no levels detected")
+            print(f"  line {n}: no {coin} level within 2% of {level:g} ({near})")
+            missed += 1
+            continue
+        got = float(match["level_price"])
+        off = (got / level - 1) * 100
+        if _record(match, match["episode_id"], verdict, note):
+            done += 1
+            print(f"  recorded {coin:<9}{level:<11g}-> {verdict:<6}"
+                  + (f"  [matched {got:.6g}, {off:+.1f}%]" if abs(off) > 0.05 else ""))
+        else:
+            print(f"  already labelled {coin} {got:.6g}")
+    print()
+    print(f"{done} recorded, {missed} unmatched")
+    print(f"labels: {len(_labelled())} / {TARGET_LABELS}")
+    return 1 if missed else 0
+
+
 def cmd_label(eid: str, verdict: str, note: str):
     """Record the verdict, writing the episode snapshot first so the label has
     something to join to."""
@@ -416,10 +511,7 @@ def cmd_label(eid: str, verdict: str, note: str):
         if eid not in existing:
             print(f"no candidate or episode with id {eid}")
             return 1
-    else:
-        storage.append_episode({k: v for k, v in match.items() if not k.startswith("_")})
-    ok = storage.append_label({"episode_id": eid, "labelled_at_utc": storage.now_iso(),
-                               "verdict": verdict, "confidence": "", "note": note or ""})
+    ok = _record(match, eid, verdict, note)
     n = len(_labelled())
     print(f"{'recorded' if ok else 'already labelled'}: {eid} -> {verdict}")
     print(f"labels: {n} / {TARGET_LABELS}")
@@ -453,9 +545,14 @@ def main():
                          "sitting on it and the user wants to see it hold first")
     ap.add_argument("--note", default="")
     ap.add_argument("--progress", action="store_true")
+    ap.add_argument("--batch", metavar="FILE",
+                    help="label many calls from one scan; one "
+                         "'COIN LEVEL VERDICT [note]' per line")
     a = ap.parse_args()
     if a.progress:
         return cmd_progress()
+    if a.batch:
+        return cmd_batch(a.batch)
     if a.take:
         return cmd_label(a.take, "take", a.note)
     if a.skip:
