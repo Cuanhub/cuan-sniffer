@@ -49,10 +49,16 @@ from research.levels.venue_client import HyperliquidReadOnlyClient
 UNIVERSE_TOP_N = int(os.getenv("LEVELS_UNIVERSE_TOP_N",
                                os.getenv("FUNDING_UNIVERSE_TOP_N", "45")))
 
+# KBONK joins KPEPE on 2026-10-01: the venue returns a 500 from
+# candleSnapshot for it, consistently and on every retry, so it entered the
+# universe at rank 43 and then burned five retries per timeframe per pass --
+# ten failed requests a pass in both the trader and the scanner, for a coin
+# that can never produce a bar. Excluded rather than tolerated.
 UNIVERSE_EXCLUDE = {
     s.strip().upper()
     for s in os.getenv("LEVELS_UNIVERSE_EXCLUDE",
-                       os.getenv("FUNDING_UNIVERSE_EXCLUDE", "KPEPE")).split(",")
+                       os.getenv("FUNDING_UNIVERSE_EXCLUDE",
+                                 "KPEPE,KBONK")).split(",")
     if s.strip()
 }
 
