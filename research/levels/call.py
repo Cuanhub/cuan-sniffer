@@ -25,7 +25,7 @@ rejects nothing the user would reject.
 
 import argparse
 import math
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from research.levels import config as C
 from research.levels import storage
@@ -86,7 +86,23 @@ def _fetch_tf(client, coin: str, tf: str):
     return sorted(out, key=lambda x: x["t"])
 
 
-def find_candidates(client, universe, timeframes=TIMEFRAMES) -> List[Dict[str, Any]]:
+def find_candidates(client, universe, timeframes=TIMEFRAMES,
+                    bars_out: Optional[Dict[str, List[Dict[str, Any]]]] = None
+                    ) -> List[Dict[str, Any]]:
+    """Candidates across the universe. `bars_out`, when given, receives the 1h
+    series per coin so the caller need not fetch it a second time.
+
+    These bars were being discarded. The live trader then asked the venue for
+    the same 1h series again, per coin, to run the trigger -- 30 duplicate
+    calls a pass out of about 93, against an endpoint that had already been
+    returning rate limits. Handing them over costs nothing and removes the
+    duplicate outright.
+
+    Deliberately the RAW series, not a trimmed one: the trigger's window is a
+    trading concern and this module stays ignorant of it. The caller trims with
+    trigger.trigger_window, which exists because that window is load-bearing
+    rather than cosmetic.
+    """
     out = []
     for u in universe:
         coin = u["symbol"]
@@ -95,6 +111,8 @@ def find_candidates(client, universe, timeframes=TIMEFRAMES) -> List[Dict[str, A
                 bars = _fetch_tf(client, coin, tf)
             except VenueFetchError:
                 continue
+            if bars_out is not None and tf == "1h":
+                bars_out[coin] = bars
             out.extend(_candidates_for(coin, bars, tf))
     # Round-robin across coins rather than sorting by any quality measure.
     # Sorting by hold rate is what buried the user's own levels behind

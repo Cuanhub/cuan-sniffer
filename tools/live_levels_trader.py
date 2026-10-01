@@ -56,7 +56,9 @@ import notify                                                        # noqa: E40
 from research.levels.call import find_candidates as _find_candidates  # noqa: E402
 from research.levels.venue_client import HyperliquidReadOnlyClient    # noqa: E402
 from research.levels.universe import select_universe                 # noqa: E402
-from research.levels.trigger import fetch_1h, level_has_held          # noqa: E402
+from research.levels.trigger import (                                 # noqa: E402
+    fetch_1h, level_has_held, trigger_window,
+)
 from research.levels.levels import log_sigma, sigma_distance          # noqa: E402
 
 # Rails come from research/levels/config.py -- one definition each, tagged with
@@ -428,7 +430,8 @@ def seed_watchlist_from_log(watching: Dict[str, Any]) -> int:
     return added
 
 
-def build_intents(client, universe, watching: Optional[Dict[str, Any]] = None
+def build_intents(client, universe, watching: Optional[Dict[str, Any]] = None,
+                  bars_out: Optional[Dict[str, Any]] = None
                   ) -> Tuple[List[Dict[str, Any]], List[Any]]:
     """Scan for setups and keep the ones clearing the quality bar. No side
     effects, no venue writes -- this half only reads and computes.
@@ -451,7 +454,13 @@ def build_intents(client, universe, watching: Optional[Dict[str, Any]] = None
     """
     watching = {} if watching is None else watching
     intents, rejected = [], []
-    for ep in _find_candidates(client, universe):
+    # The scan already pulls a 1h series per coin. Collecting it here and
+    # trimming it to the trigger's window is what lets execute_one skip
+    # re-fetching the identical bars -- 30 of the pass's ~93 venue calls.
+    # Trimmed rather than passed whole because level_has_held derives sigma
+    # from the series LENGTH; see trigger.TRIGGER_1H_HOURS.
+    raw_1h: Dict[str, Any] = {}
+    for ep in _find_candidates(client, universe, bars_out=raw_1h):
         key = watch_key(ep)
         strict = passes_quality(ep, watched=False)
         if strict is None:
@@ -476,6 +485,13 @@ def build_intents(client, universe, watching: Optional[Dict[str, Any]] = None
                              f"watched, but {relaxed}"))
             continue
         rejected.append((ep.get("coin"), ep.get("level_price"), strict))
+    if bars_out is not None:
+        # Only coins with a live intent: trimming the rest would be work for
+        # bars nothing is going to read this pass.
+        wanted = {str(e.get("coin", "")) for e in intents}
+        for coin, bars in raw_1h.items():
+            if coin in wanted:
+                bars_out[coin] = trigger_window(bars)
     return intents, rejected
 
 
@@ -666,7 +682,13 @@ def main():
         watching = state.setdefault("watching", {})
         expired = prune_watchlist(watching)
         on_cooldown = prune_cooldowns(state)
-        intents, rejected = build_intents(ro, universe, watching)
+        # Created here, not after the scan, so build_intents can hand the 1h
+        # bars it already fetched straight into it. Still one dict per pass:
+        # the trigger asks what price did in the last two hours, so bars must
+        # never carry across passes.
+        bars_cache: Dict[str, Any] = {}
+        intents, rejected = build_intents(ro, universe, watching,
+                                          bars_out=bars_cache)
         save_state(state)
         if on_cooldown:
             print("[LEVELS_LIVE] cooling off: "
@@ -684,7 +706,6 @@ def main():
         if intents:
             print(f"\n{'coin':10} {'entry':>12} {'stop':>12} {'tp':>12} {'stop%':>7} "
                   f"{'size$':>9} {'risk$':>7} {'rr':>5}  flags")
-        bars_cache: Dict[str, Any] = {}      # one pass, one fetch per coin
         watchboard: List[Dict[str, Any]] = []   # how close each near-miss came
         for ep in intents:
             d = describe(ep, equity, available)
@@ -844,13 +865,19 @@ def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float, t
 
 
 def cached_1h(coin: str, cache: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """1h bars for `coin`, fetched once per pass.
+    """1h bars for `coin`, fetched at most once per pass.
 
     The trigger needs these per CANDIDATE, but one coin carries several
     levels: 141 candidates came from about 30 coins, so this was fetching the
     same series roughly five times over. That is ~110 wasted calls a pass
     against a venue that returned 52 rate limits in nine hours, and a rate
     limit here is not free -- it truncated the pass.
+
+    As of 2026-10-01 the cache arrives already populated by build_intents,
+    which trims the 1h series the scan had in hand anyway, so the common path
+    makes NO call at all. The fetch below is the fallback for a coin whose 1h
+    leg failed during the scan -- that coin still gets its own chance rather
+    than being dropped for an error that belonged to a different request.
 
     Per pass, deliberately. Bars must not carry between passes: what the
     trigger asks is what price did in the last two hours.

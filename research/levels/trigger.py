@@ -27,17 +27,53 @@ from research.levels.config import (
 from research.levels.levels import log_sigma, sigma_distance
 
 
-def fetch_1h(client, coin: str, hours: int = 72) -> List[Dict[str, Any]]:
-    now_ms = int(time.time() * 1000)
-    raw = client.get_candles(coin, "1h", now_ms - hours * 3600_000, now_ms)
+# How much 1h history the trigger reads. A NAMED constant because the window
+# is not a free parameter: level_has_held derives sigma with
+# log_sigma(closed, len(closed) - 1), which slices backwards by VOL_LOOKBACK
+# (120), so a series longer than that produces a DIFFERENT sigma -- and sigma
+# gates both the touch test and the max-above ceiling. Anything that supplies
+# these bars from elsewhere has to supply this same window, so the number lives
+# in one place rather than being repeated at each source.
+TRIGGER_1H_HOURS = 72
+
+
+def _normalise_1h(raw, keep_from_ms: int = 0) -> List[Dict[str, Any]]:
+    """Venue rows -> the bar dicts this module reads, oldest first.
+
+    `keep_from_ms` drops anything older, so a caller holding a longer 1h series
+    can hand over exactly the window fetch_1h would have returned.
+    """
     out = []
     for b in raw:
         try:
-            out.append({"t": int(b["t"]), "o": float(b["o"]), "h": float(b["h"]),
+            t = int(b["t"])
+            if t < keep_from_ms:
+                continue
+            out.append({"t": t, "o": float(b["o"]), "h": float(b["h"]),
                         "l": float(b["l"]), "c": float(b["c"])})
         except (KeyError, TypeError, ValueError):
             continue
     return sorted(out, key=lambda x: x["t"])
+
+
+def trigger_window(bars_1h: List[Dict[str, Any]],
+                   hours: int = TRIGGER_1H_HOURS,
+                   now_ms: int = 0) -> List[Dict[str, Any]]:
+    """Trim a longer 1h series to what fetch_1h would have returned.
+
+    call.find_candidates already pulls 1h bars for every coin and used to throw
+    them away, while this module fetched the same series again seconds later --
+    60 duplicate venue calls a pass. The trim is what makes reuse safe rather
+    than merely cheap: see TRIGGER_1H_HOURS for why the length matters.
+    """
+    now_ms = now_ms or int(time.time() * 1000)
+    return _normalise_1h(bars_1h, now_ms - hours * 3600_000)
+
+
+def fetch_1h(client, coin: str, hours: int = TRIGGER_1H_HOURS) -> List[Dict[str, Any]]:
+    now_ms = int(time.time() * 1000)
+    raw = client.get_candles(coin, "1h", now_ms - hours * 3600_000, now_ms)
+    return _normalise_1h(raw)
 
 
 def level_has_held(bars_1h: List[Dict[str, Any]], level: float,

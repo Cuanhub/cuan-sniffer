@@ -813,14 +813,14 @@ class WatchlistTest(unittest.TestCase):
         watching = {}
         try:
             # pass 1: price far above -- clears the full bar, gets admitted
-            T._find_candidates = lambda c, u: [gated(near=7.0, rest=20)]
+            T._find_candidates = lambda c, u, **kw: [gated(near=7.0, rest=20)]
             intents, _ = T.build_intents(None, None, watching)
             self.assertEqual(len(intents), 1)
             self.assertIn("AAA|100.0", watching)
 
             # pass 2: price has come back to the level -- depth and rest now
             # fail, which is exactly what being ready to enter looks like
-            T._find_candidates = lambda c, u: [gated(near=0.4, rest=1)]
+            T._find_candidates = lambda c, u, **kw: [gated(near=0.4, rest=1)]
             intents, rejected = T.build_intents(None, None, watching)
             self.assertEqual(len(intents), 1, "a watched level must survive the pullback")
             self.assertTrue(intents[0]["_watched"])
@@ -839,7 +839,7 @@ class WatchlistTest(unittest.TestCase):
                                   "admitted_at": stale}}
         orig = T._find_candidates
         try:
-            T._find_candidates = lambda c, u: [gated(near=7.0, rest=20)]
+            T._find_candidates = lambda c, u, **kw: [gated(near=7.0, rest=20)]
             T.build_intents(None, None, watching)
         finally:
             T._find_candidates = orig
@@ -850,7 +850,7 @@ class WatchlistTest(unittest.TestCase):
     def test_an_unadmitted_shallow_level_is_still_rejected(self):
         orig = T._find_candidates
         try:
-            T._find_candidates = lambda c, u: [gated(near=0.4, rest=1)]
+            T._find_candidates = lambda c, u, **kw: [gated(near=0.4, rest=1)]
             intents, rejected = T.build_intents(None, None, {})
             self.assertEqual(intents, [])
             self.assertIn("depth", rejected[0][2])
