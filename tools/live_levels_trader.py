@@ -431,7 +431,8 @@ def seed_watchlist_from_log(watching: Dict[str, Any]) -> int:
 
 
 def build_intents(client, universe, watching: Optional[Dict[str, Any]] = None,
-                  bars_out: Optional[Dict[str, Any]] = None
+                  bars_out: Optional[Dict[str, Any]] = None,
+                  tf_cache: Optional[Dict[Any, Any]] = None
                   ) -> Tuple[List[Dict[str, Any]], List[Any]]:
     """Scan for setups and keep the ones clearing the quality bar. No side
     effects, no venue writes -- this half only reads and computes.
@@ -460,7 +461,22 @@ def build_intents(client, universe, watching: Optional[Dict[str, Any]] = None,
     # Trimmed rather than passed whole because level_has_held derives sigma
     # from the series LENGTH; see trigger.TRIGGER_1H_HOURS.
     raw_1h: Dict[str, Any] = {}
-    for ep in _find_candidates(client, universe, bars_out=raw_1h):
+    # One mids request refreshes the forming 4h bar for the whole universe, so
+    # the 4h series can be reused between passes without the price everything
+    # is measured against going stale with it. Thirty candle calls become one.
+    mids: Dict[str, float] = {}
+    if tf_cache is not None:
+        try:
+            mids = client.get_all_mids()
+        except Exception as e:
+            # No mids means no safe reuse: fall through with an empty cache
+            # reference so every series is refetched, which is the old
+            # behaviour rather than a stale one.
+            print(f"[LEVELS_LIVE] mids fetch failed ({str(e)[:80]}) -- "
+                  f"refetching candle series this pass")
+            tf_cache = None
+    for ep in _find_candidates(client, universe, bars_out=raw_1h,
+                               tf_cache=tf_cache, mids=mids):
         key = watch_key(ep)
         strict = passes_quality(ep, watched=False)
         if strict is None:
@@ -584,6 +600,14 @@ def main():
     ro = HyperliquidReadOnlyClient()
     universe = select_universe(ro)
 
+    # Lives across passes on purpose, unlike bars_cache. A 4h series is keyed
+    # to the bar it belongs to and cannot change until that bar closes, so
+    # refetching it every 450s was ~32 requests per bar per coin for identical
+    # data. Entries expire by bar boundary rather than by age, and the forming
+    # bar is refreshed from live mids each pass, so nothing decision-relevant
+    # is ever read stale. Bounded by the universe size: one entry per coin.
+    tf_cache: Dict[Any, Any] = {}
+
     equity = args.equity
     available = None
     if equity is None:
@@ -688,7 +712,8 @@ def main():
         # never carry across passes.
         bars_cache: Dict[str, Any] = {}
         intents, rejected = build_intents(ro, universe, watching,
-                                          bars_out=bars_cache)
+                                          bars_out=bars_cache,
+                                          tf_cache=tf_cache)
         save_state(state)
         if on_cooldown:
             print("[LEVELS_LIVE] cooling off: "

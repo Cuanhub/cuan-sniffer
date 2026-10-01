@@ -71,9 +71,60 @@ def _f(d, k, dv=0.0):
         return dv
 
 
-def _fetch_tf(client, coin: str, tf: str):
+# Seconds in each timeframe's bar, for boundary-aligned cache expiry.
+_TF_SECONDS = {"4h": 4 * 3600, "1h": 3600}
+# Only this timeframe is cached across passes. 1h is NOT: the trigger reads the
+# last couple of hours of it to decide whether a level has held, so a 1h series
+# carried between passes would be exactly the data that must not be stale.
+_CACHEABLE_TF = ("4h",)
+
+
+def _bar_open_ms(now_ms: int, tf: str) -> int:
+    """Start of the bar `now_ms` falls in. Venue bars are UTC-aligned, so this
+    is plain truncation -- and it is what makes the cache correct rather than
+    merely time-boxed: the CLOSED history of a timeframe cannot change until
+    the next bar opens."""
+    step = _TF_SECONDS.get(tf, 0) * 1000
+    return (now_ms // step) * step if step else now_ms
+
+
+def _apply_live_price(bars, mid: float):
+    """Refresh the forming bar from a live mid.
+
+    The closed history behind a cached series is immutable, but the last bar is
+    still being built, and its close is the price everything downstream treats
+    as "now" -- including the depth the admission gate measures. High and low
+    only ever widen within a bar, so ratcheting them against each observed mid
+    moves toward the true extremes and can never overstate them. The whole
+    series is refetched at the next boundary, so nothing accumulates past one
+    bar.
+    """
+    if not bars or mid <= 0:
+        return bars
+    last = bars[-1]
+    last["c"] = mid
+    if mid > last["h"]:
+        last["h"] = mid
+    if mid < last["l"]:
+        last["l"] = mid
+    return bars
+
+
+def _fetch_tf(client, coin: str, tf: str, cache=None, mids=None):
+    """Bars for one coin and timeframe, reusing a cached series where it is
+    still valid for the current bar.
+
+    A 4h series was being refetched every 450s pass -- about 32 times per bar,
+    30 coins deep, for data that by definition cannot change until the bar
+    closes. That was 30 of the pass's ~63 remaining venue calls.
+    """
     import time
     now = int(time.time() * 1000)
+    if cache is not None and tf in _CACHEABLE_TF:
+        key = (coin, tf)
+        hit = cache.get(key)
+        if hit and hit[0] == _bar_open_ms(now, tf):
+            return _apply_live_price(hit[1], float((mids or {}).get(coin, 0.0) or 0.0))
     days = C.HISTORY_DAYS if tf == "4h" else 60
     raw = client.get_candles(coin, tf, now - days * 86400000, now)
     out = []
@@ -83,11 +134,16 @@ def _fetch_tf(client, coin: str, tf: str):
                         "l": float(b["l"]), "c": float(b["c"]), "v": float(b.get("v", 0.0))})
         except (KeyError, TypeError, ValueError):
             continue
-    return sorted(out, key=lambda x: x["t"])
+    out = sorted(out, key=lambda x: x["t"])
+    if cache is not None and tf in _CACHEABLE_TF and out:
+        cache[(coin, tf)] = (_bar_open_ms(now, tf), out)
+    return out
 
 
 def find_candidates(client, universe, timeframes=TIMEFRAMES,
-                    bars_out: Optional[Dict[str, List[Dict[str, Any]]]] = None
+                    bars_out: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+                    tf_cache: Optional[Dict[Any, Any]] = None,
+                    mids: Optional[Dict[str, float]] = None
                     ) -> List[Dict[str, Any]]:
     """Candidates across the universe. `bars_out`, when given, receives the 1h
     series per coin so the caller need not fetch it a second time.
@@ -102,13 +158,19 @@ def find_candidates(client, universe, timeframes=TIMEFRAMES,
     trading concern and this module stays ignorant of it. The caller trims with
     trigger.trigger_window, which exists because that window is load-bearing
     rather than cosmetic.
+
+    `tf_cache` is a caller-owned dict that survives between calls, holding the
+    4h series per coin until its bar closes; `mids` supplies the live price
+    that keeps the forming bar honest while the rest of the series is reused.
+    Both optional, and the module stays stateless without them -- lifetime
+    belongs to whoever is polling, not to this function.
     """
     out = []
     for u in universe:
         coin = u["symbol"]
         for tf in timeframes:
             try:
-                bars = _fetch_tf(client, coin, tf)
+                bars = _fetch_tf(client, coin, tf, cache=tf_cache, mids=mids)
             except VenueFetchError:
                 continue
             if bars_out is not None and tf == "1h":

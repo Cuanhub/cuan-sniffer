@@ -67,3 +67,31 @@ class HyperliquidReadOnlyClient:
 
     def get_meta_and_asset_ctxs(self) -> Any:
         return self._post({"type": "metaAndAssetCtxs"}, "metaAndAssetCtxs")
+
+    def get_all_mids(self) -> Dict[str, float]:
+        """Every perp's mid in ONE request.
+
+        Exists so the 4h candle series can be cached without the current price
+        going stale with it. A 4h bar's closed history does not change between
+        boundaries, but its FORMING bar does, and that bar's close is the price
+        the admission gate measures depth against -- so caching the series
+        wholesale would quietly shift which levels qualify. This refreshes that
+        one number for the whole universe at the cost of a single call, instead
+        of thirty candle requests.
+
+        allMids rather than metaAndAssetCtxs: the payload is a flat
+        coin -> price map rather than full per-asset context, and the universe
+        only needs re-selecting once a day.
+        """
+        data = self._post({"type": "allMids"}, "allMids")
+        if not isinstance(data, dict):
+            return {}
+        out: Dict[str, float] = {}
+        for coin, px in data.items():
+            try:
+                val = float(px)
+            except (TypeError, ValueError):
+                continue
+            if val > 0:
+                out[str(coin).upper()] = val
+        return out
