@@ -241,8 +241,11 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
             # Which rung, not just the first one. choose_target is shared with
             # the scanner so the research set and the traded path cannot drift
             # apart the way the stop rule did.
-            opp, above, _qualified = choose_target(resistances, px, entry, stop, sigma)
-            tp = opp.price if opp else px * math.exp(8 * sigma)
+            opp, above, _qualified = choose_target(resistances, entry, stop, sigma)
+            # Fallback measured from the entry too, for the same reason the
+            # ladder is: px is where price happens to be, not where the trade
+            # starts.
+            tp = opp.price if opp else entry * math.exp(8 * sigma)
             rr = ((tp - entry) / (entry - stop)) if entry > stop else 0.0
             ladder = []
             for Lr in above:

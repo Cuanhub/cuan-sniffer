@@ -39,8 +39,8 @@ class TargetChoice(unittest.TestCase):
     def rr(self, price):
         return (price - self.ENTRY) / (self.ENTRY - self.STOP)
 
-    def choose(self, *prices, px=99.0):
-        return choose_target(self.rungs(*prices), px, self.ENTRY, self.STOP, self.SIGMA)
+    def choose(self, *prices):
+        return choose_target(self.rungs(*prices), self.ENTRY, self.STOP, self.SIGMA)
 
     # -- the fix --------------------------------------------------------------
 
@@ -84,13 +84,13 @@ class TargetChoice(unittest.TestCase):
         self.assertEqual(len(ladder), 3)
 
     def test_nothing_mapped_above_stays_nothing(self):
-        rung, ladder, qualified = choose_target([], 99.0, self.ENTRY, self.STOP, self.SIGMA)
+        rung, ladder, qualified = choose_target([], self.ENTRY, self.STOP, self.SIGMA)
         self.assertIsNone(rung)
         self.assertEqual(ladder, [])
         self.assertFalse(qualified)
 
-    def test_rungs_at_or_below_price_are_not_targets(self):
-        rung, ladder, _ = choose_target(self.rungs(95.0, 99.0, 106.0), 99.0,
+    def test_rungs_at_or_below_the_entry_are_not_targets(self):
+        rung, ladder, _ = choose_target(self.rungs(95.0, 100.0, 106.0),
                                         self.ENTRY, self.STOP, self.SIGMA)
         self.assertEqual([L.price for L in ladder], [106.0])
         self.assertEqual(rung.price, 106.0)
@@ -100,14 +100,63 @@ class TargetChoice(unittest.TestCase):
                                    (100.0, 101.0, 0.01),     # stop above entry
                                    (100.0, 98.0, 0.0)):      # no sigma
             rung, ladder, qualified = choose_target(
-                self.rungs(100.5, 106.0), 99.0, entry, stop, sigma)
+                self.rungs(100.5, 106.0), entry, stop, sigma)
             self.assertFalse(qualified)
             self.assertEqual(rung.price, 100.5)
 
     def test_the_ladder_is_capped_and_ordered(self):
-        got = resistance_ladder(self.rungs(110.0, 101.0, 130.0, 105.0, 120.0), 99.0)
+        got = resistance_ladder(self.rungs(110.0, 101.0, 130.0, 105.0, 120.0), 100.0)
         self.assertEqual(len(got), C.TARGET_MAX_RUNGS)
         self.assertEqual([L.price for L in got][:3], [101.0, 105.0, 110.0])
+
+
+class MeasuredFromTheEntryNotThePrice(unittest.TestCase):
+    """The AAVE case, 2026-10-01.
+
+    The ladder used to filter on the CURRENT price while headroom and
+    reward/risk were already measured from the entry -- one function asking two
+    different questions. A level far below an extended price could then find no
+    target at all: AAVE at 166.74 had five mapped resistances above a 142.84
+    entry (147, 150, 156, 163, 167) and exactly one above the current price, so
+    six of its eleven levels were refused for "no resistance mapped above".
+    Two of those six were the operator's own stated buy zones.
+
+    The rule was never "this level has nowhere to go". It was "price is
+    currently too far above this level for us to measure where it could go",
+    which is a different statement and the wrong one to gate on.
+    """
+
+    AAVE_RESISTANCES = [118.19, 120.93, 124.0, 129.57, 133.78, 138.03, 140.71,
+                        147.15, 150.13, 156.19, 163.28, 166.97]
+    ENTRY, STOP, SIGMA = 142.84, 139.0, 0.012
+
+    def rungs(self):
+        return [Level(price=p, kind="resistance", touches=5, holds=4)
+                for p in self.AAVE_RESISTANCES]
+
+    def test_a_deep_level_under_an_extended_price_still_finds_a_target(self):
+        rung, ladder, qualified = choose_target(
+            self.rungs(), self.ENTRY, self.STOP, self.SIGMA)
+        self.assertIsNotNone(rung, "a level with five rungs above it found none")
+        self.assertTrue(qualified)
+        self.assertEqual([L.price for L in ladder], [147.15, 150.13, 156.19])
+
+    def test_the_old_price_relative_rule_would_have_found_almost_nothing(self):
+        """Pinned as the counter-example. If this stops being true the fix is
+        harmless, but the reasoning above has gone stale."""
+        px = 166.74
+        old_ladder = [p for p in self.AAVE_RESISTANCES if p > px]
+        new_ladder = [p for p in self.AAVE_RESISTANCES if p > self.ENTRY]
+        self.assertEqual(len(old_ladder), 1)
+        self.assertEqual(len(new_ladder), 5)
+
+    def test_when_price_sits_at_the_entry_nothing_changes(self):
+        """The drift guard keeps price within 1.5% of the entry when a trade
+        actually fires, so at entry time the two rules coincide -- this only
+        ever affected whether a level was VISIBLE while price was away."""
+        at_entry = [p for p in self.AAVE_RESISTANCES if p > self.ENTRY * 1.005]
+        rung, ladder, _ = choose_target(self.rungs(), self.ENTRY, self.STOP, self.SIGMA)
+        self.assertEqual([L.price for L in ladder], at_entry[:C.TARGET_MAX_RUNGS])
 
 
 class BothCallersAgree(unittest.TestCase):
@@ -122,6 +171,15 @@ class BothCallersAgree(unittest.TestCase):
             self.assertIsNotNone(fn, f"{mod.__name__} does not import choose_target")
             self.assertEqual(fn.__module__, "research.levels.levels")
             self.assertEqual(fn.__qualname__, "choose_target")
+
+    def test_neither_module_measures_the_ladder_from_the_current_price(self):
+        import inspect
+        import research.levels.scanner as sc
+        import research.levels.call as cl
+        for fn in (sc.scan_coin, cl._candidates_for):
+            src = inspect.getsource(fn)
+            self.assertNotIn("choose_target(resistances, px", src,
+                             f"{fn.__qualname__} still passes px to choose_target")
 
     def test_neither_module_picks_a_rung_by_hand(self):
         import inspect

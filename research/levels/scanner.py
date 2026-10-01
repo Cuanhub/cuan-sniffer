@@ -209,8 +209,8 @@ def scan_coin(coin: str, bars: List[Dict[str, Any]], i: int = None,
         # resistance unconditionally; the two modules are one idea implemented
         # twice and the stop rule already diverged that way once, so the choice
         # lives in levels.py and both callers ask it the same question.
-        opp, _ladder, _qualified = choose_target(resistances, px, entry, stop, sigma)
-        tp = opp.price if opp else px * math.exp(8 * sigma)
+        opp, _ladder, _qualified = choose_target(resistances, entry, stop, sigma)
+        tp = opp.price if opp else entry * math.exp(8 * sigma)
         rr = ((tp - entry) / (entry - stop)) if entry > stop else 0.0
         # overhead_sigma is in the episode schema and was never written here,
         # so every scanner row read as "no resistance mapped above" to the very

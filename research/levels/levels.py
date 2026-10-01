@@ -229,14 +229,21 @@ def nearest_level(levels: List[Level], price: float, sigma: float,
     return min(cands, key=lambda L: abs(sigma_distance(price, L.price, sigma)))
 
 
-def resistance_ladder(resistances: List[Level], px: float,
+def resistance_ladder(resistances: List[Level], above: float,
                       max_rungs: int = TARGET_MAX_RUNGS) -> List[Level]:
-    """The mapped resistances above price, nearest first."""
-    return sorted([L for L in resistances if L.price > px],
+    """The mapped resistances above `above`, nearest first.
+
+    `above` is the ENTRY, not the current price. Those differ by design: this
+    strategy waits for price to come back to a level, so a support worth buying
+    is usually well below where price is now. Filtering the ladder on the
+    current price asked a different question -- "where could price go from
+    here" -- and answered it for a trade nobody is taking.
+    """
+    return sorted([L for L in resistances if L.price > above],
                   key=lambda L: L.price)[:max_rungs]
 
 
-def choose_target(resistances: List[Level], px: float, entry: float,
+def choose_target(resistances: List[Level], entry: float,
                   stop: float, sigma: float,
                   max_rungs: int = TARGET_MAX_RUNGS):
     """Which resistance to aim at, and the ladder it came from.
@@ -265,8 +272,19 @@ def choose_target(resistances: List[Level], px: float, entry: float,
     deliberately, so the caller's own gate refuses the setup for exactly the
     reason it refuses it today. That makes this strictly additive: it can turn
     a rejection into a trade, never a trade into a rejection.
+
+    Everything here is measured from the ENTRY. It took the current price until
+    2026-10-01, while headroom and reward/risk were already entry-relative --
+    one function asking two different questions. The effect was that a level
+    far below an extended price could find no target at all: AAVE at 166.74 had
+    five mapped resistances above a 142.84 entry (147, 150, 156, 163, 167) and
+    exactly one above the current price, so six of its eleven levels were
+    refused for "no resistance mapped above". The operator's own buy zones were
+    two of them. The rule was never "this level has nowhere to go"; it was
+    "price is currently too far above this level for us to measure where it
+    could go", which is a different statement and the wrong one to gate on.
     """
-    ladder = resistance_ladder(resistances, px, max_rungs)
+    ladder = resistance_ladder(resistances, entry, max_rungs)
     if not ladder:
         return None, [], False
     if not (entry > stop > 0) or sigma <= 0:
