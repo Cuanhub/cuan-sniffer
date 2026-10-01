@@ -43,6 +43,22 @@ EPISODE_FIELDNAMES = [
     "suggested_tp", "suggested_rr", "opposing_level_price",
     "timeframe", "overhead_sigma", "overhead_pct", "level_origin",
     "capped_bars", "capped_frac", "bars_since_capped",
+    # Positioning, flow and liquidity. COLLECTED ONLY -- nothing reads these
+    # for a trading decision, by design: they are here to be screened for edge
+    # before any of them is allowed near the gate.
+    #
+    # Added because every other field above is a transform of OHLCV. Screening
+    # 19 of them against expectancy over 1,060 resolved episodes turned up
+    # exactly one that survives controlling for target distance
+    # (level_pivot_count, rho +0.088). The shortage is not price indicators.
+    #
+    # A point-in-time reading at DETECTION, not aligned to bar_ts_ms: the venue
+    # serves no historical open interest per candle, so these cannot be
+    # backfilled. ctx_captured_at_utc records when the snapshot was taken so a
+    # later screen can tell how far it sits from the bar.
+    "ctx_captured_at_utc", "oi_base", "oi_notional_usd", "funding_rate",
+    "premium", "mark_px", "oracle_px", "impact_bid", "impact_ask",
+    "impact_spread_bps", "day_ntl_vlm", "prev_day_px",
 ]
 
 OUTCOME_FIELDNAMES = [

@@ -68,6 +68,73 @@ class HyperliquidReadOnlyClient:
     def get_meta_and_asset_ctxs(self) -> Any:
         return self._post({"type": "metaAndAssetCtxs"}, "metaAndAssetCtxs")
 
+    def get_perp_contexts(self) -> Dict[str, Dict[str, Any]]:
+        """Per-perp positioning and liquidity context, in ONE request.
+
+        Collected, never traded on. Every one of the 43 features the episode
+        set already carries is a transform of OHLCV -- a screen of 19 of them
+        against expectancy on 1,060 resolved episodes found exactly one that
+        survives controlling for target distance (level_pivot_count, rho
+        +0.088). The gap is not more price indicators; it is that there is no
+        positioning, flow or liquidity data at all.
+
+        Open interest distinguishes a bounce backed by new buying from one that
+        is short covering, which no candle transform can do. Funding is a
+        crowding proxy. impactPxs is the book's real depth, which matters more
+        now the universe reaches down to $4.9M of daily volume.
+
+        A point-in-time reading, NOT aligned to the bar the episode is keyed
+        to -- the venue serves no historical OI per candle, so this cannot be
+        backfilled and the capture time is recorded alongside it.
+        """
+        data = self._post({"type": "metaAndAssetCtxs"}, "metaAndAssetCtxs")
+        if not (isinstance(data, (list, tuple)) and len(data) == 2):
+            return {}
+        universe_obj, ctxs = data
+        names = [str(a.get("name", "")).upper()
+                 for a in (universe_obj or {}).get("universe", [])]
+        out: Dict[str, Dict[str, Any]] = {}
+
+        def num(d, k):
+            try:
+                v = float(d.get(k))
+                return v if v == v and v not in (float("inf"), float("-inf")) else None
+            except (TypeError, ValueError):
+                return None
+
+        for name, ctx in zip(names, ctxs or []):
+            if not name or not isinstance(ctx, dict):
+                continue
+            mark = num(ctx, "markPx")
+            oi = num(ctx, "openInterest")
+            imp = ctx.get("impactPxs") or []
+            bid = ask = None
+            if isinstance(imp, (list, tuple)) and len(imp) == 2:
+                try:
+                    bid, ask = float(imp[0]), float(imp[1])
+                except (TypeError, ValueError):
+                    bid = ask = None
+            spread_bps = None
+            if bid and ask and bid > 0 and ask > 0:
+                mid_imp = (bid + ask) / 2.0
+                if mid_imp > 0:
+                    spread_bps = (ask - bid) / mid_imp * 10_000.0
+            out[name] = {
+                "mid_px": num(ctx, "midPx"),
+                "mark_px": mark,
+                "oracle_px": num(ctx, "oraclePx"),
+                "funding_rate": num(ctx, "funding"),
+                "premium": num(ctx, "premium"),
+                "oi_base": oi,
+                "oi_notional_usd": (oi * mark) if (oi is not None and mark) else None,
+                "impact_bid": bid,
+                "impact_ask": ask,
+                "impact_spread_bps": spread_bps,
+                "day_ntl_vlm": num(ctx, "dayNtlVlm"),
+                "prev_day_px": num(ctx, "prevDayPx"),
+            }
+        return out
+
     def get_all_mids(self) -> Dict[str, float]:
         """Every perp's mid in ONE request.
 

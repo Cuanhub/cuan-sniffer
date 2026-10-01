@@ -150,7 +150,8 @@ def scan_series(coin: str, bars: List[Dict[str, Any]], start: int = 120,
 
 
 def scan_coin(coin: str, bars: List[Dict[str, Any]], i: int = None,
-              onset_only: bool = True) -> List[Dict[str, Any]]:
+              onset_only: bool = True,
+              ctx: Dict[str, Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Evaluate every detected support level as of bar i. Returns episode rows
     for levels whose gate fires, by default only where the gate has just
     OPENED rather than where it merely remains open."""
@@ -163,6 +164,26 @@ def scan_coin(coin: str, bars: List[Dict[str, Any]], i: int = None,
     supports = detect_levels(bars, upto=i + 1, kind="support")
     resistances = detect_levels(bars, upto=i + 1, kind="resistance")
     px = bars[i]["c"]
+    # Positioning/liquidity context, logged beside every episode and read by
+    # nothing. Absent on a backfill or a failed fetch, which the schema takes
+    # as blank rather than zero -- a missing reading must not look like an open
+    # interest of nil when the screen gets to it.
+    cx = (ctx or {}).get(coin.upper()) or {}
+    ctx_cols = {
+        "ctx_captured_at_utc": storage.now_iso() if cx else "",
+        "oi_base": cx.get("oi_base", ""),
+        "oi_notional_usd": cx.get("oi_notional_usd", ""),
+        "funding_rate": cx.get("funding_rate", ""),
+        "premium": cx.get("premium", ""),
+        "mark_px": cx.get("mark_px", ""),
+        "oracle_px": cx.get("oracle_px", ""),
+        "impact_bid": cx.get("impact_bid", ""),
+        "impact_ask": cx.get("impact_ask", ""),
+        "impact_spread_bps": cx.get("impact_spread_bps", ""),
+        "day_ntl_vlm": cx.get("day_ntl_vlm", ""),
+        "prev_day_px": cx.get("prev_day_px", ""),
+    }
+    ctx_cols = {k: ("" if v is None else v) for k, v in ctx_cols.items()}
     rows = []
     for L in supports:
         if L.price >= px:
@@ -217,6 +238,7 @@ def scan_coin(coin: str, bars: List[Dict[str, Any]], i: int = None,
             "opposing_level_price": round(opp.price, 10) if opp else "",
             "overhead_sigma": round(head_sigma, 3) if head_sigma is not None else "",
             "overhead_pct": round(head_pct, 4) if head_pct is not None else "",
+            **ctx_cols,
             **feats,
         })
     return rows
@@ -293,6 +315,14 @@ def resolve_outcomes(client, universe_syms: List[str]) -> int:
 
 def run_pass(client, universe, dry_run=False):
     found = []
+    # One request for the whole universe, before the per-coin loop, so every
+    # episode in a pass carries the same snapshot.
+    try:
+        ctx = client.get_perp_contexts()
+    except Exception as e:
+        print(f"[LEVEL_SCANNER] context fetch failed ({str(e)[:80]}) -- "
+              f"episodes this pass carry no positioning data")
+        ctx = {}
     for entry in universe:
         coin = entry["symbol"]
         try:
@@ -301,7 +331,7 @@ def run_pass(client, universe, dry_run=False):
             continue
         if len(bars) < 120:
             continue
-        for row in scan_coin(coin, bars):
+        for row in scan_coin(coin, bars, ctx=ctx):
             found.append(row)
             if not dry_run:
                 storage.append_episode(row)
