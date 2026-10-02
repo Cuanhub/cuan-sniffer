@@ -437,9 +437,18 @@ DAILY_LOSS_STOP_PCT = _f("LEVELS_DAILY_LOSS_STOP_PCT", 5.0)
 # this is about 3x headroom -- loose enough not to fire on normal variance,
 # tight enough to stop a strategy that has quietly stopped working.
 #
-# Reads realised equity, which excludes unrealised PnL on open positions, so it
-# lags by whatever the open book is down. Bounded by the fact that every
-# position carries a stop: four at once risks about $8.44, around 1% of equity.
+# Mark to market, not realised-only. I wrote the opposite here on 2026-10-01
+# and it was wrong: on a unified account the spot USDC balance this reads
+# ALREADY carries unrealised PnL on open perps. Measured 2026-10-02 with two
+# positions open -- equity 808.95, unrealised +4.16, and the realised-only
+# ledger 804.88, which is 808.95 - 4.16 to within a cent of market drift
+# between the two calls.
+#
+# That makes the rail better than the old note claimed, not worse: an open
+# drawdown trips it at the time it happens rather than when it is booked. The
+# consequence worth knowing is that it can halt while positions are still open.
+# That is correct -- a halt blocks NEW opens only, and reconcile runs before
+# preflight, so the open book keeps its stops and its protection either way.
 ACCOUNT_DD_HALT_PCT = _f("LEVELS_ACCOUNT_DD_HALT_PCT", 10.0)
 # 450s, halved from 900 on 2026-09-19.
 #

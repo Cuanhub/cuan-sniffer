@@ -40,3 +40,19 @@ ETH-4H_1789905600000_2562.9,2026-09-20T12:34:13Z,take,,blue zone off the chart; 
 SOL-1H_1789905600000_107.555,2026-09-20T12:34:13Z,take,,blue zone off the chart; headroom 4.305s is below the 5.0 floor but rr 5.15 under the structural stop
 LIT-1H_1789905600000_4.6,2026-09-20T12:34:13Z,take,,blue zone off the chart; headroom 3.193s is below the 5.0 floor but rr 3.11 under the structural stop
 HYPE-4H_1789905600000_89.597,2026-09-20T12:34:13Z,take,,blue zone off the chart; headroom 4.04s is below the 5.0 floor but rr 4.90 under the structural stop
+HYPE-1H_1790830800000_86.747,2026-10-01T05:15:57Z,skip,,"operator: entry would be at 85, 86.7 is too high"
+VVV-1H_1790830800000_25.678,2026-10-01T05:15:57Z,take,,operator: take
+ZEC-1H_1790830800000_1346.3,2026-10-01T05:15:57Z,skip,,operator: 1346 is a bit too far; their entry is 1379
+HYPE-1H_1790830800000_85.564,2026-10-01T05:15:57Z,take,,operator: take -- this is the 85 area they wanted
+WLD-1H_1790830800000_0.5024,2026-10-01T05:15:57Z,skip,,"operator: their entry is .52, not .5024"
+PUMP-1H_1790830800000_0.00518,2026-10-01T05:15:57Z,skip,,operator: their entries are .0056 and .0044
+LINK-1H_1790830800000_13.621,2026-10-01T05:15:57Z,take,,operator: take
+NEAR-1H_1790830800000_4.979,2026-10-01T05:15:57Z,take,,operator: take
+ETH-1H_1790830800000_2636.5,2026-10-01T05:15:57Z,take,,operator: take
+AAVE-1H_1790830800000_156.19,2026-10-01T05:15:57Z,skip,,"operator: skip -- chart shows their buy zones at 144 and 135.5; 156-157.5 was RESISTANCE that price broke, not a support they would buy"
+ZEC-1H_1790830800000_1392.7,2026-10-01T05:15:57Z,take,,"operator's own entry 1379 (detected 1392.7, +1.0%)"
+WLD-4H_1790827200000_0.52274,2026-10-01T05:15:57Z,take,,"operator's own entry .52 (detected .52274, +0.5%)"
+PUMP-1H_1790830800000_0.005582,2026-10-01T05:15:57Z,take,,"operator's own entry .0056 (detected .005582, -0.3%)"
+PUMP-4H_1790827200000_0.004416,2026-10-01T05:15:57Z,take,,operator's own STRONG entry .0044 (detected .004416)
+AAVE-4H_1790827200000_142.84,2026-10-01T05:15:57Z,take,,operator's blue zone ~144 from chart (detected 142.84)
+AAVE-4H_1790827200000_135.52,2026-10-01T05:15:57Z,take,,operator's lower blue zone ~135.5 from chart
