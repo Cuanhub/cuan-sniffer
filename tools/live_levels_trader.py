@@ -677,6 +677,30 @@ def main():
             # position before venue_sanity can meet it as an unknown one.
             reconcile_pending(backend, state)
             reconcile(backend, state)
+
+            # Bookkeeping runs BEFORE the preflight early-return, not after it.
+            # preflight continues the loop whenever it refuses a pass, so with
+            # these below it they stopped running exactly when the trader was
+            # busiest: four positions held for most of 2026-10-02/03 meant the
+            # cap refused every pass, and in that window 110 of 976 watched
+            # levels aged past the 48h TTL without being dropped -- the oldest
+            # 60.4h. That is not cosmetic. build_intents gives a watched level
+            # passes_quality(watched=True), which skips the depth and rest
+            # admission gates, so a level the TTL had retired stayed eligible.
+            #
+            # Same shape as the day rollover, the asset-meta load and the
+            # universe refresh: something that must happen every cycle, placed
+            # where it only happens on some.
+            watching = state.setdefault("watching", {})
+            expired = prune_watchlist(watching)
+            on_cooldown = prune_cooldowns(state)
+            if expired or on_cooldown:
+                save_state(state)
+            if on_cooldown:
+                print("[LEVELS_LIVE] cooling off: "
+                      + ", ".join(f"{c} {cooldown_remaining(state, c):.1f}h left"
+                                  for c in sorted(state.get("cooled") or {})))
+
             why = preflight(backend, state)
             if why:
                 print(f"[LEVELS_LIVE] not opening this pass: {why}")
@@ -703,9 +727,6 @@ def main():
                         break
                     time.sleep(1)
                 continue
-        watching = state.setdefault("watching", {})
-        expired = prune_watchlist(watching)
-        on_cooldown = prune_cooldowns(state)
         # Created here, not after the scan, so build_intents can hand the 1h
         # bars it already fetched straight into it. Still one dict per pass:
         # the trigger asks what price did in the last two hours, so bars must
@@ -715,10 +736,6 @@ def main():
                                           bars_out=bars_cache,
                                           tf_cache=tf_cache)
         save_state(state)
-        if on_cooldown:
-            print("[LEVELS_LIVE] cooling off: "
-                  + ", ".join(f"{c} {cooldown_remaining(state, c):.1f}h left"
-                              for c in sorted(state.get("cooled") or {})))
         n_watched = sum(1 for e in intents if e.get("_watched"))
         print(f"\n[LEVELS_LIVE] {len(intents)} setup(s) cleared the quality bar "
               f"({n_watched} of them on the watchlist as price came back), "
