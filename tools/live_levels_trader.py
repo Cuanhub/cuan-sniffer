@@ -64,7 +64,7 @@ from research.levels.levels import log_sigma, sigma_distance          # noqa: E4
 # Rails come from research/levels/config.py -- one definition each, tagged with
 # whether they rest on a measurement or on my guess.
 from research.levels.config import (                                  # noqa: E402
-    RISK_PCT_PER_TRADE, MAX_CONCURRENT, MAX_NEW_PER_DAY, MAX_LEVERAGE,
+    MAX_CONCURRENT, MAX_NEW_PER_DAY, MAX_LEVERAGE,
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
@@ -580,7 +580,13 @@ def main():
     if args.arm and not env_armed:
         print("[LEVELS_LIVE] --arm given but LEVELS_LIVE_ARMED is not 'yes' -- staying DRY")
     print(f"[LEVELS_LIVE] mode: {'ARMED -- PLACING REAL ORDERS' if armed else 'DRY RUN'}")
-    print(f"[LEVELS_LIVE] rails: risk {RISK_PCT_PER_TRADE}%/trade, max {MAX_CONCURRENT} "
+    # "margin", not "risk". RISK_PCT_PER_TRADE stopped deciding size when flat
+    # sizing landed, and printing it here said 3% while the margin committed
+    # was 5% and the actual risk at the stop was 0.44%. Three different numbers
+    # under one label is the exact conflation that left the daily loss stop
+    # fifty-four losses from firing.
+    print(f"[LEVELS_LIVE] rails: margin {MARGIN_PCT_PER_TRADE}%/trade at "
+          f"{FLAT_LEVERAGE:g}x, max {MAX_CONCURRENT} "
           f"concurrent, {'unlimited' if not MAX_NEW_PER_DAY else str(MAX_NEW_PER_DAY)+'/day'}, "
           f"lev cap {MAX_LEVERAGE}x, daily stop {DAILY_LOSS_STOP_PCT}%, "
           f"account dd halt {ACCOUNT_DD_HALT_PCT:g}%")
@@ -591,7 +597,8 @@ def main():
         # launchd restarts this on any non-zero exit, so an unannounced
         # restart is indistinguishable from a process that never came back.
         notify.send(
-            f"▶️ *Level trader armed*\nrisk {RISK_PCT_PER_TRADE}%/trade, "
+            f"▶️ *Level trader armed*\nmargin {MARGIN_PCT_PER_TRADE}%/trade "
+            f"at {FLAT_LEVERAGE:g}x, "
             f"max {MAX_CONCURRENT} concurrent, {MAX_NEW_PER_DAY}/day, "
             f"daily stop {DAILY_LOSS_STOP_PCT}%, "
             f"account dd halt {ACCOUNT_DD_HALT_PCT:g}%",
@@ -634,7 +641,11 @@ def main():
             equity = 100.0
             print(f"[LEVELS_LIVE] equity query failed ({e}); dry run, "
                   f"assuming ${equity:.2f} to print sizes")
-    print(f"[LEVELS_LIVE] risk per trade: ${equity * RISK_PCT_PER_TRADE / 100:.2f}")
+    _margin = equity * MARGIN_PCT_PER_TRADE / 100.0
+    print(f"[LEVELS_LIVE] per trade: margin ${_margin:.2f}, "
+          f"notional ${_margin * FLAT_LEVERAGE:.2f}, "
+          f"risk at a median 1.76% stop ${_margin * 0.088:.2f} "
+          f"({_margin * 0.088 / equity * 100:.2f}% of equity)")
 
     backend = None
     if armed:

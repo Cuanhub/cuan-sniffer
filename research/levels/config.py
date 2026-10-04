@@ -196,10 +196,32 @@ FLAT_LEVERAGE = _f("LEVELS_FLAT_LEVERAGE", 5.0)
 # controlling $115 of notional on a $768 account.
 #
 # Note this is margin allocated, NOT risk taken. What the trade actually
-# risks is the notional times the stop distance, which is smaller again -- a
-# 1% stop on $115 risks $1.15. Deliberately small: these are test trades,
-# and at 5x a 2% move is 10% on the margin committed.
-MARGIN_PCT_PER_TRADE = _f("LEVELS_MARGIN_PCT", 3.0)
+# risks is the notional times the stop distance, which is smaller again -- the
+# median structural stop sits 1.76% below the fill, so at 5x it risks 8.8% of
+# the margin committed. That distinction is not pedantry: conflating the two is
+# what left the daily loss stop fifty-four losses away from firing.
+#
+# 5%, raised from 3% on 2026-10-04. EVIDENCED by replaying all 39 closed trades
+# with the rails simulated rather than rescaled, since a bigger loss trips the
+# daily stop and the drawdown halt sooner and a halt removes the trades after
+# it:
+#
+#     size   end equity        net   worst drawdown   drawdown halt
+#       3%       795.47    +26.89             4.1%           never
+#       5%       813.40    +44.82             6.5%           never
+#       8%       840.29    +71.71             9.9%    never, by 0.1pt
+#      10%       830.15    +61.57            10.9%      trips 10-02
+#
+# 5% nearly doubles the net for a drawdown comfortably inside the 10% halt.
+# 8% was the best outcome and is NOT taken: it misses halting by a tenth of a
+# point on a 39-trade sample in a mostly-rising market, which is luck rather
+# than margin. The 10% row is the argument -- it ends up WORSE than 8% because
+# the halt fired and cut off the winners behind it.
+#
+# Execution cost does not bind at this size. Measured across 17 fills since the
+# slippage metric was corrected: median 0.6 bps, mean 2.8. Going 3% -> 5% adds
+# about four cents per round trip against an average win of $7.44.
+MARGIN_PCT_PER_TRADE = _f("LEVELS_MARGIN_PCT", 5.0)
 
 # Kept because the review flags and the trade log still report what a position
 # risks; it no longer decides size.
@@ -354,10 +376,10 @@ LIMIT_ENTRY_TTL_HOURS = _i("LEVELS_LIMIT_ENTRY_TTL_HOURS", 12)
 # days by a PONS position the venue had already closed, which is fixed
 # separately; the rail was still the binding constraint the rest of the time.
 #
-# What this costs, at MARGIN_PCT_PER_TRADE=3 and FLAT_LEVERAGE=5: four
-# positions commit 12% of equity as margin and 60% as notional, and four
-# structural stops firing together is about 8% of equity -- inside the 15%
-# daily loss stop, so that rail still bites first and this one does not
+# What this costs, at MARGIN_PCT_PER_TRADE=5 and FLAT_LEVERAGE=5: four
+# positions commit 20% of equity as margin and 100% as notional, and four
+# structural stops firing together is about 1.8% of equity -- well inside the
+# 5% daily loss stop, so that rail still bites first and this one does not
 # quietly become the risk limit.
 #
 # Watch the interaction with MAX_NEW_PER_DAY below: filling four slots spends
