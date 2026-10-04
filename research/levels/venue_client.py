@@ -80,8 +80,17 @@ class HyperliquidReadOnlyClient:
 
         Open interest distinguishes a bounce backed by new buying from one that
         is short covering, which no candle transform can do. Funding is a
-        crowding proxy. impactPxs is the book's real depth, which matters more
-        now the universe reaches down to $4.9M of daily volume.
+        crowding proxy.
+
+        impact_spread_bps is NOT the inside spread, and must not be read as
+        one. impactPxs is the venue's price to execute a standard notional, so
+        it carries the depth behind the quote rather than the quote itself.
+        Measured 2026-10-04 against the L2 book: BTC 0.12bps impact vs 0.12
+        top-of-book and HYPE 0.17 vs 0.11 -- the same number where the book is
+        deep -- but CASHCAT 23.22 vs 3.74 and USELESS 12.75 vs 2.49, six and
+        five times wider. For thin names the two diverge sharply, and impact is
+        the one that describes what a fill actually costs, which is why it is
+        the one collected.
 
         A point-in-time reading, NOT aligned to the bar the episode is keyed
         to -- the venue serves no historical OI per candle, so this cannot be

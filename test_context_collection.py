@@ -160,6 +160,64 @@ class Capture(unittest.TestCase):
         self.assertTrue(scanner.scan_coin("AAA", bars()))
 
 
+class TheLabelPathCollectsItToo(unittest.TestCase):
+    """Every context-less episode after collection began was a LABELLED one --
+    16 of 16 -- because only scanner.scan_coin collected this. Labelled rows
+    carry a human verdict, which makes them the worst ones in the set to leave
+    blank."""
+
+    def test_candidates_for_takes_and_writes_context(self):
+        import inspect
+        from research.levels import call as C
+        src = inspect.getsource(C._candidates_for)
+        self.assertIn("ctx", inspect.signature(C._candidates_for).parameters)
+        self.assertIn("ctx_cols", src)
+
+    def test_both_label_commands_supply_it(self):
+        import inspect
+        from research.levels import call as C
+        for fn in (C.cmd_batch, C.cmd_label):
+            self.assertIn("_label_ctx", inspect.getsource(fn),
+                          f"{fn.__name__} persists episodes without context")
+
+    def test_the_trader_still_does_not_fetch_it(self):
+        """The trading path stays byte-identical: it writes no episodes and has
+        no use for this."""
+        import inspect
+        import tools.live_levels_trader as T
+        src = inspect.getsource(T)
+        self.assertNotIn("get_perp_contexts", src)
+        self.assertNotIn("_label_ctx", src)
+
+    def test_a_failed_context_fetch_still_lets_you_label(self):
+        from research.levels import call as C
+
+        class Boom:
+            def get_perp_contexts(self):
+                raise RuntimeError("429")
+
+        self.assertEqual(C._label_ctx(Boom()), {})
+
+
+class ImpactIsNotTheInsideSpread(unittest.TestCase):
+    """impact_spread_bps carries the depth behind the quote, not the quote.
+    Measured against the L2 book on 2026-10-04: BTC 0.12 vs 0.12 and HYPE 0.17
+    vs 0.11 where the book is deep, but CASHCAT 23.22 vs 3.74 and USELESS 12.75
+    vs 2.49. Reading it as an inside spread overstates thin books six-fold."""
+
+    def test_the_docstring_says_so(self):
+        import inspect
+        from research.levels.venue_client import HyperliquidReadOnlyClient
+        doc = inspect.getdoc(HyperliquidReadOnlyClient.get_perp_contexts) or ""
+        self.assertIn("NOT the inside spread", doc)
+
+    def test_it_is_derived_from_the_impact_prices(self):
+        from research.levels.venue_client import HyperliquidReadOnlyClient
+        import inspect
+        src = inspect.getsource(HyperliquidReadOnlyClient.get_perp_contexts)
+        self.assertIn("impactPxs", src)
+
+
 class ContextFetchFailureIsSurvivable(unittest.TestCase):
     def test_run_pass_continues_when_the_context_call_raises(self):
         class Client:

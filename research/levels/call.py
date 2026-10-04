@@ -144,7 +144,8 @@ def _fetch_tf(client, coin: str, tf: str, cache=None, mids=None):
 def find_candidates(client, universe, timeframes=TIMEFRAMES,
                     bars_out: Optional[Dict[str, List[Dict[str, Any]]]] = None,
                     tf_cache: Optional[Dict[Any, Any]] = None,
-                    mids: Optional[Dict[str, float]] = None
+                    mids: Optional[Dict[str, float]] = None,
+                    ctx: Optional[Dict[str, Dict[str, Any]]] = None
                     ) -> List[Dict[str, Any]]:
     """Candidates across the universe. `bars_out`, when given, receives the 1h
     series per coin so the caller need not fetch it a second time.
@@ -176,7 +177,7 @@ def find_candidates(client, universe, timeframes=TIMEFRAMES,
                 continue
             if bars_out is not None and tf == "1h":
                 bars_out[coin] = bars
-            out.extend(_candidates_for(coin, bars, tf))
+            out.extend(_candidates_for(coin, bars, tf, ctx=ctx))
     # Round-robin across coins rather than sorting by any quality measure.
     # Sorting by hold rate is what buried the user's own levels behind
     # liquidation wicks, and sorting by coin put six AAVE rows at the top of a
@@ -197,7 +198,9 @@ def find_candidates(client, universe, timeframes=TIMEFRAMES,
     return interleaved
 
 
-def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
+def _candidates_for(coin: str, bars, tf: str,
+                    ctx: Optional[Dict[str, Dict[str, Any]]] = None
+                    ) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         if len(bars) < 120:
             return out
@@ -206,6 +209,19 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
         if sigma <= 0:
             return out
         px = bars[i]["c"]
+        # Same twelve columns the scanner writes, so an episode persisted by
+        # the LABEL path is not the one row in the set missing them. It was:
+        # every context-less episode after collection began was a labelled one,
+        # 16 of 16, because only scanner.scan_coin collected this. Labelled
+        # rows are the most valuable in the dataset -- they carry a human
+        # verdict -- so they are the worst ones to leave blank.
+        cx = (ctx or {}).get(coin.upper()) or {}
+        ctx_cols = {k: ("" if cx.get(k) is None else cx.get(k, ""))
+                    for k in ("oi_base", "oi_notional_usd", "funding_rate",
+                              "premium", "mark_px", "oracle_px", "impact_bid",
+                              "impact_ask", "impact_spread_bps", "day_ntl_vlm",
+                              "prev_day_px")}
+        ctx_cols["ctx_captured_at_utc"] = storage.now_iso() if cx else ""
         supports = detect_levels(bars, upto=i + 1, kind="support")
         resistances = detect_levels(bars, upto=i + 1, kind="resistance")
         # A broken resistance is a support candidate. Merge them in, keeping
@@ -306,6 +322,7 @@ def _candidates_for(coin: str, bars, tf: str) -> List[Dict[str, Any]]:
                 "capped_bars": capped,
                 "capped_frac": round(capped / max(len(look), 1), 3),
                 "bars_since_capped": bars_since_capped,
+                **ctx_cols,
                 "_head_sigma": round(head_sigma, 2) if head_sigma is not None else None,
                 "_head_pct": round(head_pct, 2) if head_pct is not None else None,
                 "_no_target": head_sigma is None,
@@ -418,6 +435,21 @@ def _record(match, eid: str, verdict: str, note: str) -> bool:
                                  "note": note or ""})
 
 
+def _label_ctx(client) -> Dict[str, Dict[str, Any]]:
+    """Positioning context for a labelling scan.
+
+    Opt-in, so the trader's own call to find_candidates is untouched: it does
+    not write episodes and has no use for this. The labelling paths do write
+    them, and a labelled episode without context is the one row in the set that
+    most needs it.
+    """
+    try:
+        return client.get_perp_contexts()
+    except Exception as e:
+        print(f"  (context unavailable: {str(e)[:70]} -- labelling anyway)")
+        return {}
+
+
 def cmd_batch(path: str):
     """Label many calls from ONE scan.
 
@@ -463,7 +495,8 @@ def cmd_batch(path: str):
 
     client = HyperliquidReadOnlyClient()
     by: Dict[str, List[Dict[str, Any]]] = {}
-    for c in find_candidates(client, select_universe(client)):
+    for c in find_candidates(client, select_universe(client),
+                             ctx=_label_ctx(client)):
         by.setdefault(str(c["coin"]).upper(), []).append(c)
 
     done = missed = 0
@@ -505,7 +538,9 @@ def cmd_label(eid: str, verdict: str, note: str):
               + (f" -- {prior['note'][:60]}" if prior.get("note") else ""))
     client = HyperliquidReadOnlyClient()
     universe = select_universe(client)
-    match = next((c for c in find_candidates(client, universe) if c["episode_id"] == eid), None)
+    match = next((c for c in find_candidates(client, universe,
+                                             ctx=_label_ctx(client))
+                  if c["episode_id"] == eid), None)
     if match is None:
         existing = {e["episode_id"] for e in storage.load_episodes()}
         if eid not in existing:
