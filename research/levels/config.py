@@ -233,6 +233,36 @@ MAX_LEVERAGE = _f("LEVELS_MAX_LEVERAGE", 10.0)
 MIN_RR = _f("LEVELS_MIN_RR", 2.0)
 MIN_NOTIONAL_USD = _f("LEVELS_MIN_NOTIONAL", 12.0)
 
+# How far the CURRENT hourly bar may have traded below the level before the
+# setup is refused, as a fraction of the distance from the level to the stop.
+# 1.0 means the bar has already touched the stop. 0 disables the check.
+#
+# entry_is_actionable already refuses when price is at or below the stop -- but
+# it tests the MID, so a dip through the stop that bounced back before the
+# pass looked at it sails through. Extending the same rule to the bar's LOW is
+# a bug fix rather than a new filter: buying a level after the bar has traded
+# past the point where we would admit the trade was wrong is incoherent
+# whatever the data says.
+#
+# And the data is blunt about it. Across 53 live entries, bucketing by how far
+# the live bar's low sat from the level toward the stop:
+#
+#     above the level          15 trades   47% win   +$34.34
+#     0-50% toward the stop    18 trades   28% win   +$ 3.82
+#     50-100%                   9 trades   33% win   -$ 1.63
+#     already past the stop    11 trades    0% win   -$27.37
+#
+# Eleven entries, not one winner. That is the trade the operator described on
+# STRK as "no double bottom had been created yet" -- the level is being
+# violated as we buy it, and level_has_held cannot see it because it judges
+# closed bars only and the forming bar is excluded by design.
+#
+# 1.0 is the unarguable setting and needs no evidence. Tightening toward 0.5
+# would also have caught STRK itself (which sat at 0.505) and vetoed 20 trades
+# of which 3 won, but that IS a fitted threshold on 53 trades -- it keeps
+# fewer trades for the same profit, so it buys nothing except the one case.
+ENTRY_MAX_BREAK_FRAC = _f("LEVELS_ENTRY_MAX_BREAK_FRAC", 1.0)
+
 # How many resistance rungs above price the target may choose between.
 #
 # 3, which is what call.py already displayed as its ladder -- this only makes

@@ -68,6 +68,7 @@ from research.levels.config import (                                  # noqa: E4
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
+    ENTRY_MAX_BREAK_FRAC,
     COIN_REENTRY_COOLDOWN_HOURS, ACCOUNT_DD_HALT_PCT,
     MARGIN_PCT_PER_TRADE,
     NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
@@ -887,7 +888,9 @@ def review_flags(ep: Dict[str, Any], size_usd: float, equity: float) -> List[str
     return out
 
 
-def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float, tp: float):
+def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float,
+                        tp: float, level: float = 0.0,
+                        bars_1h: Optional[List[Dict[str, Any]]] = None):
     """Refuse to fire unless the live price is where the plan assumed.
 
     execute_entry sends a MARKETABLE IOC at the current price -- it ignores the
@@ -909,6 +912,25 @@ def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float, t
                       f"{planned_entry:.6g} (max {MAX_ENTRY_DRIFT_PCT}%)")
     if ref <= stop:
         return None, f"price {ref:.6g} is already at or below the stop {stop:.6g}"
+    # The same rule, asked of the BAR rather than of the mid. The check above
+    # only sees where price is this instant; a dip through the stop that
+    # bounced back before the pass looked at it passes it untouched. That is
+    # how eleven entries were taken after the hour had already traded past the
+    # stop -- not one of them won.
+    #
+    # level_has_held cannot catch this: it judges CLOSED bars and excludes the
+    # forming one by design, so the level can be breaking as we buy it. The
+    # operator read exactly this off the STRK chart as "no double bottom had
+    # been created yet".
+    if ENTRY_MAX_BREAK_FRAC and level > stop > 0 and bars_1h:
+        low = min((b.get("l", 0.0) for b in bars_1h[-1:]), default=0.0)
+        if low > 0:
+            broken = (level - low) / (level - stop)
+            if broken > ENTRY_MAX_BREAK_FRAC:
+                return None, (f"this hour has already traded {broken*100:.0f}% of the "
+                              f"way from the level {level:.6g} to the stop "
+                              f"{stop:.6g} (low {low:.6g}, max "
+                              f"{ENTRY_MAX_BREAK_FRAC*100:.0f}%)")
     if ref >= tp:
         return None, f"price {ref:.6g} is already at or above the target {tp:.6g}"
     live_rr = (tp - ref) / (ref - stop)
@@ -1013,7 +1035,9 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     # filling at market is exactly what made the UNI position carry 3.5x its
     # intended risk.
     if armed:
-        ref, why = entry_is_actionable(backend, coin, entry, stop, tp)
+        ref, why = entry_is_actionable(backend, coin, entry, stop, tp,
+                                       level=g("level_price"),
+                                       bars_1h=bars1h if armed else None)
         if ref is None:
             log_trade({"ts_utc": now_iso(), "action": "skip", "coin": coin,
                        "episode_id": ep.get("episode_id", ""), "entry": entry,
