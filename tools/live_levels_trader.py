@@ -53,6 +53,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 import notify                                                        # noqa: E402
+from research.levels import storage                                   # noqa: E402
 from research.levels.call import find_candidates as _find_candidates  # noqa: E402
 from research.levels.venue_client import HyperliquidReadOnlyClient    # noqa: E402
 from research.levels.universe import select_universe                 # noqa: E402
@@ -888,6 +889,49 @@ def review_flags(ep: Dict[str, Any], size_usd: float, equity: float) -> List[str
     return out
 
 
+def persist_traded_episode(ep: Dict[str, Any]) -> bool:
+    """Write the episode we actually traded, with its positioning context.
+
+    Without this the research loop cannot reach the trades. The trader computes
+    a full episode through find_candidates, acts on it, and discarded it: on
+    2026-10-07, 0 of 39 traded episode ids existed in episodes.csv, so none of
+    the 654 rows of open interest, funding and book depth could be joined to a
+    single real outcome. The two paths also mint incompatible ids -- the
+    scanner uses make_episode_id(coin, ...) and this path coin + "-" + tf --
+    so they could never have matched even if both had been written.
+
+    All eight fields resolve_outcomes needs are already on the row (coin,
+    bar_ts_ms, the three suggested prices and sigma_4h), so a persisted episode
+    is picked up by the scanner's resolver on its own and acquires an outcome
+    about seven days later. Nothing else has to change for the join to work.
+
+    Context is fetched HERE rather than per pass: it costs one request and only
+    on the passes that actually trade, so a quiet pass stays exactly as cheap
+    as it was. Returns whether a row was written; never raises, because losing
+    a research row must not disturb a position that is already open.
+    """
+    try:
+        row = {k: v for k, v in ep.items() if not str(k).startswith("_")}
+        coin = str(row.get("coin", "")).upper()
+        try:
+            cx = (_ro_client().get_perp_contexts() or {}).get(coin) or {}
+        except Exception as e:
+            print(f"[LEVELS_LIVE] context unavailable for the traded episode "
+                  f"({str(e)[:60]}) -- persisting without it")
+            cx = {}
+        if cx:
+            row["ctx_captured_at_utc"] = storage.now_iso()
+            for k in ("oi_base", "oi_notional_usd", "funding_rate", "premium",
+                      "mark_px", "oracle_px", "impact_bid", "impact_ask",
+                      "impact_spread_bps", "day_ntl_vlm", "prev_day_px"):
+                v = cx.get(k)
+                row[k] = "" if v is None else v
+        return bool(storage.append_episode(row))
+    except Exception as e:
+        print(f"[LEVELS_LIVE] could not persist the traded episode: {str(e)[:120]}")
+        return False
+
+
 def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float,
                         tp: float, level: float = 0.0,
                         bars_1h: Optional[List[Dict[str, Any]]] = None):
@@ -1091,6 +1135,9 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         "episode_id": ep.get("episode_id", ""), "entry": entry, "stop": stop,
         "tp": tp, "size_usd": size_usd, "opened_at": now_iso(), "confirmed": False}
     save_state(state)
+    # Persisted on the way IN, not on close: the features describe the setup as
+    # it was when we decided, and by the time it closes the bars have moved.
+    persist_traded_episode(ep)
 
     # Hyperliquid enforces leverage per asset, so a 5x-sized order into a coin
     # the account has set to 3x is refused for margin. Set it to match before
@@ -1466,6 +1513,11 @@ def place_resting_bid(backend, client, universe, coin: str, level: str,
     state.setdefault("pending", {})[coin] = {
         "oid": res["oid"], "price": res["price"], "size_coin": res["size_coin"],
         "stop": stop, "tp": tp, "episode_id": ep.get("episode_id", ""),
+        # Carried so the episode can be persisted when the bid FILLS rather
+        # than when it is placed. A bid that is never hit is not a trade, and
+        # writing it would put setups we did not take into the set we use to
+        # judge the ones we did.
+        "episode": {k: v for k, v in ep.items() if not str(k).startswith("_")},
         "placed_at": now_iso()}
     save_state(state)
     log_trade({"ts_utc": now_iso(), "action": "entry", "coin": coin,
@@ -1516,6 +1568,8 @@ def reconcile_pending(backend, state: Dict[str, Any]) -> None:
                 "tp": tp, "size_usd": size_usd, "size_coin": size_coin,
                 "opened_at": p.get("placed_at") or now_iso(), "confirmed": True}
             state["opened_today"] = state.get("opened_today", 0) + 1
+            if p.get("episode"):
+                persist_traded_episode(p["episode"])
             pending.pop(coin, None)
             save_state(state)
             log_trade({"ts_utc": now_iso(), "action": "entry", "coin": coin,

@@ -57,17 +57,33 @@ class Inertness(unittest.TestCase):
         for f in CTX_FIELDS:
             self.assertNotIn(f, src, f"the gate reads {f}")
 
-    def test_the_trading_module_never_mentions_them(self):
-        import tools.live_levels_trader as T
-        src = inspect.getsource(T)
-        for f in CTX_FIELDS:
-            self.assertNotIn(f, src, f"the trader references {f}")
+    def test_the_trader_touches_them_only_where_it_persists_research(self):
+        """The guarantee changed on 2026-10-08 and is narrower now.
 
-    def test_the_trader_does_not_even_fetch_contexts(self):
-        """The trading path is unchanged: the collector fetches this, not the
-        thing that places orders."""
+        It was "the trader never touches context at all", which held while the
+        data was collect-only. But the trader discarded every episode it
+        traded, so 0 of 39 traded ids existed in episodes.csv and none of the
+        654 context rows could be joined to a real outcome -- data collected
+        with no way to use it.
+
+        So the trader now WRITES context, for research only. What must still
+        hold is that it never READS it: every mention has to sit inside
+        persist_traded_episode, and nowhere else in the module.
+        """
         import tools.live_levels_trader as T
-        self.assertNotIn("get_perp_contexts", inspect.getsource(T))
+        whole = inspect.getsource(T)
+        allowed = inspect.getsource(T.persist_traded_episode)
+        rest = whole.replace(allowed, "")
+        for f in CTX_FIELDS:
+            self.assertNotIn(f, rest,
+                             f"{f} is referenced outside persist_traded_episode")
+        self.assertNotIn("get_perp_contexts", rest)
+
+    def test_persisting_is_the_only_reason_it_fetches(self):
+        import tools.live_levels_trader as T
+        src = inspect.getsource(T.persist_traded_episode)
+        self.assertIn("get_perp_contexts", src)
+        self.assertIn("append_episode", src)
 
 
 class Capture(unittest.TestCase):
@@ -180,14 +196,12 @@ class TheLabelPathCollectsItToo(unittest.TestCase):
             self.assertIn("_label_ctx", inspect.getsource(fn),
                           f"{fn.__name__} persists episodes without context")
 
-    def test_the_trader_still_does_not_fetch_it(self):
-        """The trading path stays byte-identical: it writes no episodes and has
-        no use for this."""
+    def test_the_trader_uses_its_own_persist_path_not_the_label_one(self):
+        """Both write context; they are deliberately separate so the labelling
+        CLI and the live trader cannot break each other."""
         import inspect
         import tools.live_levels_trader as T
-        src = inspect.getsource(T)
-        self.assertNotIn("get_perp_contexts", src)
-        self.assertNotIn("_label_ctx", src)
+        self.assertNotIn("_label_ctx", inspect.getsource(T))
 
     def test_a_failed_context_fetch_still_lets_you_label(self):
         from research.levels import call as C
