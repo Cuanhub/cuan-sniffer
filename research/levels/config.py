@@ -221,7 +221,12 @@ FLAT_LEVERAGE = _f("LEVELS_FLAT_LEVERAGE", 5.0)
 # Execution cost does not bind at this size. Measured across 17 fills since the
 # slippage metric was corrected: median 0.6 bps, mean 2.8. Going 3% -> 5% adds
 # about four cents per round trip against an average win of $7.44.
-MARGIN_PCT_PER_TRADE = _f("LEVELS_MARGIN_PCT", 5.0)
+# Back to 3% on 2026-10-08, from 5%. The 5% figure was chosen on 10-04 by
+# replaying 39 trades in which the worst drawdown was 4.1% -- a sample drawn
+# almost entirely from a rising market. The drawdown halt fired four days
+# later. Scaling a position up on a book made in one regime is exactly the
+# error that analysis warned about for 8%, and 5% turned out to carry it too.
+MARGIN_PCT_PER_TRADE = _f("LEVELS_MARGIN_PCT", 3.0)
 
 # Kept because the review flags and the trade log still report what a position
 # risks; it no longer decides size.
@@ -416,7 +421,16 @@ LIMIT_ENTRY_TTL_HOURS = _i("LEVELS_LIMIT_ENTRY_TTL_HOURS", 12)
 # four of the five daily opens, leaving one replacement. Live fill rate is
 # ~1.1/day so it should not bind, but if the daily cap starts refusing trades
 # while slots are free, that is this change asking for the other one.
-MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 4)
+# Back to 2 on 2026-10-08, from 4. Raised on 09-26 because the rail was
+# refusing setups while the account sat flat and healthy -- 130 blocked passes.
+# It is lowered now for the opposite reason: the market turned and four
+# simultaneous positions in a falling tape is four ways to be wrong at once.
+# The account drawdown halt fired the same day at 735.43 against an 817.51
+# peak, so the risk this was sized against has arrived.
+#
+# Expected to go back up when the tape does. This is a regime dial, not a
+# finding -- nothing in the data says 2 is better than 4 in general.
+MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 2)
 # 5, matching the daily loss stop's own arithmetic: at 3% risk a 15% stop
 # halts after five losing trades, so a cap of five never takes a trade the
 # risk budget would have allowed. What it bounds is the case that budget
