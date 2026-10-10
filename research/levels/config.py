@@ -221,12 +221,17 @@ FLAT_LEVERAGE = _f("LEVELS_FLAT_LEVERAGE", 5.0)
 # Execution cost does not bind at this size. Measured across 17 fills since the
 # slippage metric was corrected: median 0.6 bps, mean 2.8. Going 3% -> 5% adds
 # about four cents per round trip against an average win of $7.44.
-# Back to 3% on 2026-10-08, from 5%. The 5% figure was chosen on 10-04 by
-# replaying 39 trades in which the worst drawdown was 4.1% -- a sample drawn
-# almost entirely from a rising market. The drawdown halt fired four days
-# later. Scaling a position up on a book made in one regime is exactly the
-# error that analysis warned about for 8%, and 5% turned out to carry it too.
-MARGIN_PCT_PER_TRADE = _f("LEVELS_MARGIN_PCT", 3.0)
+# 5% again on 2026-10-10, after 3% -> 5% (10-04), 5% -> 3% (10-08) and back.
+#
+# Worth keeping the correction visible rather than quietly restoring it: the
+# original 5% was chosen by replaying 39 trades whose worst drawdown was 4.1%,
+# a sample drawn almost entirely from a rising market, and the drawdown halt
+# fired four days later. That analysis argued against 8% precisely because
+# sizing up on one regime's book is unsafe -- 5% carried the same error.
+#
+# So this is restored on a judgement about the tape, not on evidence that 5%
+# is right. If the tape is wrong, this is the dial that makes it expensive.
+MARGIN_PCT_PER_TRADE = _f("LEVELS_MARGIN_PCT", 5.0)
 
 # Kept because the review flags and the trade log still report what a position
 # risks; it no longer decides size.
@@ -421,16 +426,15 @@ LIMIT_ENTRY_TTL_HOURS = _i("LEVELS_LIMIT_ENTRY_TTL_HOURS", 12)
 # four of the five daily opens, leaving one replacement. Live fill rate is
 # ~1.1/day so it should not bind, but if the daily cap starts refusing trades
 # while slots are free, that is this change asking for the other one.
-# Back to 2 on 2026-10-08, from 4. Raised on 09-26 because the rail was
-# refusing setups while the account sat flat and healthy -- 130 blocked passes.
-# It is lowered now for the opposite reason: the market turned and four
-# simultaneous positions in a falling tape is four ways to be wrong at once.
-# The account drawdown halt fired the same day at 735.43 against an 817.51
-# peak, so the risk this was sized against has arrived.
+# 4 again on 2026-10-10, having gone 2 -> 4 (09-26), 4 -> 2 (10-08) and back.
+# Cut when the drawdown halt fired at 735.43 against an 817.51 peak; restored
+# on the operator's read that the market has settled.
 #
-# Expected to go back up when the tape does. This is a regime dial, not a
-# finding -- nothing in the data says 2 is better than 4 in general.
-MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 2)
+# A regime dial, not a finding. Nothing in the data says 4 beats 2 -- the one
+# measurement that exists is unflattering, 0-for-12 on 10-07 with four slots
+# open in a falling tape. What the dial buys is participation when levels are
+# being reached; what it costs is four ways to be wrong at once.
+MAX_CONCURRENT = _i("LEVELS_MAX_CONCURRENT", 4)
 # 5, matching the daily loss stop's own arithmetic: at 3% risk a 15% stop
 # halts after five losing trades, so a cap of five never takes a trade the
 # risk budget would have allowed. What it bounds is the case that budget
