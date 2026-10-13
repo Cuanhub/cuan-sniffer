@@ -512,6 +512,35 @@ MAX_NEW_PER_DAY = _i("LEVELS_MAX_NEW_PER_DAY", 20)
 # between 0.8h and 15.9h, so any value from 1h to 15h blocks the same three
 # losers and preserves the same winners. 6h claims no more precision than that.
 COIN_REENTRY_COOLDOWN_HOURS = _f("LEVELS_COIN_REENTRY_COOLDOWN_HOURS", 6.0)
+
+# Minimum gap between two entries, in minutes, regardless of coin. 0 disables.
+#
+# Not a tuned parameter but a correction to a design error. The open loop fills
+# every free slot in a single pass, so four triggers in one scan became four
+# positions in the SAME MINUTE -- APT, AVAX, HYPE and INJ at 00:06 on
+# 2026-10-13, all six of that morning's entries closed inside the hour for
+# -$18.99 and the account drawdown halt fired.
+#
+# In a universe whose median pairwise hourly correlation is 0.47 (0.54 against
+# BTC), four simultaneous longs are not four bets. They are one bet sized four
+# times: four positions behave like 2.4 independent ones.
+#
+# EVIDENCED, and it is the largest effect in the live book by a wide margin.
+# Across 90 closed trades, split by how many other entries landed within an
+# hour:
+#
+#     alone        33 trades   45% win   +$59.90
+#     +1 other     20 trades   15% win   -$32.83
+#     +2 others     9 trades    0% win   -$24.40
+#     +3 or more   28 trades   14% win   -$37.36
+#
+# Isolated entries have made money. Clustered entries have lost $94.59. The
+# account would be up about $60 without them.
+#
+# 60 minutes because that is the window the clustering was measured over, not
+# because 60 optimises anything. What it buys is that each position gets an
+# hour to declare itself before another correlated one is added behind it.
+ENTRY_SPACING_MINUTES = _f("LEVELS_ENTRY_SPACING_MINUTES", 60.0)
 # 5%, lowered from 15% on 2026-10-01. The old value was calibrated against a
 # risk-per-trade that was wrong by about 11x.
 #

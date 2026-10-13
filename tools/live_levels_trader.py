@@ -71,6 +71,7 @@ from research.levels.config import (                                  # noqa: E4
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
     ENTRY_MAX_BREAK_FRAC, ENTRY_MAX_BASIS_BPS,
     COIN_REENTRY_COOLDOWN_HOURS, ACCOUNT_DD_HALT_PCT,
+    ENTRY_SPACING_MINUTES,
     MARGIN_PCT_PER_TRADE,
     NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
     TRIGGER_HOLD_HOURS, TRIGGER_HOLD_HOURS_SWING,
@@ -377,6 +378,31 @@ def cooldown_remaining(state: Dict[str, Any], coin: str) -> float:
         return 0.0
     elapsed_h = (datetime.now(timezone.utc).timestamp() * 1000 - at) / 3_600_000.0
     return max(0.0, COIN_REENTRY_COOLDOWN_HOURS - elapsed_h)
+
+
+def spacing_remaining(state: Dict[str, Any]) -> float:
+    """Minutes left before another position may be opened, 0.0 when free.
+
+    Applies across coins, unlike cooldown_remaining. The open loop fills every
+    free slot in one pass, so without this four triggers in a single scan
+    became four positions in the same minute -- and in a universe correlating
+    0.47 pairwise, that is one bet sized four times. See
+    ENTRY_SPACING_MINUTES for the numbers.
+    """
+    if not ENTRY_SPACING_MINUTES:
+        return 0.0
+    at = iso_to_ms(state.get("last_entry_at", ""))
+    if at is None:
+        return 0.0
+    mins = (datetime.now(timezone.utc).timestamp() * 1000 - at) / 60_000.0
+    return max(0.0, ENTRY_SPACING_MINUTES - mins)
+
+
+def mark_entry(state: Dict[str, Any]) -> None:
+    """Stamp the clock the spacing rule reads. Called on every fill, including
+    a resting bid's -- a bid filling still adds correlated exposure at a moment
+    nobody chose, even though it cannot be refused at that point."""
+    state["last_entry_at"] = now_iso()
 
 
 def start_cooldown(state: Dict[str, Any], coin: str) -> None:
@@ -808,6 +834,15 @@ def main():
                       f"({state['opened_today']}/{MAX_NEW_PER_DAY}), "
                       f"stopping this pass")
                 break
+            # Spacing belongs in this guard above all: the loop filling every
+            # free slot in one pass is exactly what it exists to stop, and
+            # checking only inside execute_one would write a skip row for
+            # every remaining candidate instead of ending the pass.
+            _gap = spacing_remaining(state)
+            if _gap > 0:
+                print(f"[LEVELS_LIVE] entry spacing: {_gap:.0f}m until another "
+                      f"position may open, stopping this pass")
+                break
             outcome = execute_one(backend, ep, equity, available, armed, state,
                                   ctx_cache=ctx_cache,
                                   bars_cache=bars_cache, watchboard=watchboard)
@@ -1147,6 +1182,13 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
                               f"ago; {left:.1f}h of cooldown left"})
         log_trade(row)
         return Outcome()
+    gap = spacing_remaining(state)
+    if gap > 0:
+        row.update({"action": "skip", "result": "entry_spacing",
+                    "detail": f"last entry {ENTRY_SPACING_MINUTES - gap:.0f}m ago; "
+                              f"{gap:.0f}m of spacing left"})
+        log_trade(row)
+        return Outcome()
     if not armed:
         row.update({"action": "dry_run", "result": "not_armed"})
         log_trade(row)
@@ -1164,6 +1206,7 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     state.setdefault("owned", {})[coin] = {
         "episode_id": ep.get("episode_id", ""), "entry": entry, "stop": stop,
         "tp": tp, "size_usd": size_usd, "opened_at": now_iso(), "confirmed": False}
+    mark_entry(state)
     save_state(state)
     # Persisted on the way IN, not on close: the features describe the setup as
     # it was when we decided, and by the time it closes the bars have moved.
@@ -1506,6 +1549,11 @@ def place_resting_bid(backend, client, universe, coin: str, level: str,
         print(f"[LEVELS_LIVE] {coin} is on cooldown for another {left:.1f}h "
               f"after a losing close")
         return 1
+    gap = spacing_remaining(state)
+    if gap > 0:
+        print(f"[LEVELS_LIVE] entry spacing: {gap:.0f}m before another position "
+              f"may be committed (a resting bid commits future exposure)")
+        return 1
     if len(state.get("owned", {})) + len(state.get("pending", {})) >= MAX_CONCURRENT:
         print(f"[LEVELS_LIVE] at the concurrency cap ({MAX_CONCURRENT})")
         return 1
@@ -1598,6 +1646,7 @@ def reconcile_pending(backend, state: Dict[str, Any]) -> None:
                 "tp": tp, "size_usd": size_usd, "size_coin": size_coin,
                 "opened_at": p.get("placed_at") or now_iso(), "confirmed": True}
             state["opened_today"] = state.get("opened_today", 0) + 1
+            mark_entry(state)
             if p.get("episode"):
                 persist_traded_episode(p["episode"])
             pending.pop(coin, None)
