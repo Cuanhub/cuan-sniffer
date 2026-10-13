@@ -583,6 +583,45 @@ DAILY_LOSS_STOP_PCT = _f("LEVELS_DAILY_LOSS_STOP_PCT", 5.0)
 # That is correct -- a halt blocks NEW opens only, and reconcile runs before
 # preflight, so the open book keeps its stops and its protection either way.
 ACCOUNT_DD_HALT_PCT = _f("LEVELS_ACCOUNT_DD_HALT_PCT", 10.0)
+
+# How many days of OPENING balances the drawdown is measured against. The
+# reference is the highest of the last N day-opens, so 1 means "today's
+# opening balance" and a large number approximates the old all-time peak.
+#
+# Changed from an all-time high-water mark on 2026-10-13. That mark was set at
+# 817.51 on 09-27 and never came down, so the rail became a ratchet: the
+# longer the account sat below its best-ever day the less room it had, and it
+# fired twice in six days while the account was flat-to-recovering. A rail
+# that tightens because of something that happened two weeks ago is measuring
+# history, not risk.
+#
+# 3, not 1. Measured against the real equity path since 09-20, the worst
+# drawdown by reference was:
+#
+#     all-time peak            10.25%   -> the 10% limit fires (it did, twice)
+#     that day's opening balance 5.07%  -> a 10% limit NEVER fires
+#     best of the last 3 opens   7.46%  -> a 10% limit never fires, 2.5pt margin
+#
+# A one-day reference at 10% is a dead rail -- it has never come within half
+# the limit, and the worst single day (-5.07%) is already what the 5% realised
+# daily stop catches.
+#
+# What is GIVEN UP, and it is worth being exact because I first wrote the
+# opposite here: a trailing reference cannot catch a slow grind, because the
+# reference falls with the account. A steady -6.66/day -- the rate that cost
+# $19.99 over the three days to 09-30 -- measures as 0.81% on day one and only
+# 3.13% by day thirty against a 3-day window. It never halts. Only an
+# all-time mark catches that shape, and an all-time mark is the ratchet we are
+# removing.
+#
+# So this rail now catches a FAST collapse (10% or worse inside three days,
+# which 10-11..10-13's -7.46% approached) and no longer catches a slow one.
+# The slow case is left to the operator reading the daily report, deliberately,
+# because the alternative is a rail that tightens forever.
+#
+# Set to 1 for a strictly daily reference, but tighten ACCOUNT_DD_HALT_PCT to
+# about 6% at the same time or the rail stops doing anything at all.
+ACCOUNT_DD_LOOKBACK_DAYS = _i("LEVELS_ACCOUNT_DD_LOOKBACK_DAYS", 3)
 # 450s, halved from 900 on 2026-09-19.
 #
 # The bot sends a marketable order when the trigger fires and refuses it if

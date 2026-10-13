@@ -34,68 +34,90 @@ class DrawdownRail(unittest.TestCase):
         st.update(state or {})
         return T.preflight(Backend(equity), st), st
 
-    def test_the_peak_is_recorded_on_a_fresh_state(self):
+    # Reference changed on 2026-10-13: the highest of the last
+    # ACCOUNT_DD_LOOKBACK_DAYS OPENING balances, not an all-time high-water
+    # mark. The old mark was set on 09-27 and never came down, so the rail
+    # ratcheted -- the longer the account sat below its best-ever day the less
+    # room it had, and it fired twice in six days while flat to recovering.
+
+    def test_a_fresh_state_cannot_halt_itself(self):
+        """No history yet, so current equity is the reference."""
         why, st = self.pre(800.0)
-        self.assertIsNone(why)
-        self.assertAlmostEqual(st["equity_peak"], 800.0)
-
-    def test_the_peak_only_ever_rises(self):
-        why, st = self.pre(790.0, {"equity_peak": 817.51})
-        self.assertIsNone(why)
-        self.assertAlmostEqual(st["equity_peak"], 817.51)
-
-    def test_a_new_high_advances_it(self):
-        why, st = self.pre(900.0, {"equity_peak": 817.51})
-        self.assertIsNone(why)
-        self.assertAlmostEqual(st["equity_peak"], 900.0)
-
-    def test_it_halts_at_the_limit(self):
-        peak = 817.51
-        at_limit = peak * (1 - C.ACCOUNT_DD_HALT_PCT / 100.0)
-        why, st = self.pre(at_limit - 0.01, {"equity_peak": peak})
-        self.assertTrue(st["halted"])
-        self.assertIn("account drawdown", why)
-
-    def test_it_does_not_halt_just_inside_the_limit(self):
-        peak = 817.51
-        inside = peak * (1 - (C.ACCOUNT_DD_HALT_PCT - 0.5) / 100.0)
-        why, st = self.pre(inside, {"equity_peak": peak})
         self.assertIsNone(why)
         self.assertFalse(st.get("halted"))
 
-    def test_the_drawdown_we_have_actually_had_would_not_halt(self):
-        """Worst through the first 26 trades was 3.25% of an $817.51 peak."""
-        why, st = self.pre(817.51 * (1 - 0.0325), {"equity_peak": 817.51})
-        self.assertIsNone(why)
+    def test_it_measures_against_the_best_recent_day_open(self):
+        opens = [700.0, 800.0, 750.0]
+        at_limit = 800.0 * (1 - C.ACCOUNT_DD_HALT_PCT / 100.0)
+        why, st = self.pre(at_limit - 0.01, {"day_open_equity": opens})
+        self.assertTrue(st["halted"])
+        self.assertIn("account drawdown", why)
+        self.assertIn("day-opens", why)
 
-    def test_the_slow_bleed_that_no_day_would_catch(self):
-        """17 trades over three days for -$19.99, every day inside the daily
-        stop. Stretch that to the limit and this rail is what stops it."""
-        peak, eq = 817.51, 817.51
-        halted_at = None
+    def test_it_does_not_halt_just_inside_the_limit(self):
+        opens = [800.0]
+        inside = 800.0 * (1 - (C.ACCOUNT_DD_HALT_PCT - 0.5) / 100.0)
+        why, st = self.pre(inside, {"day_open_equity": opens})
+        self.assertIsNone(why)
+        self.assertFalse(st.get("halted"))
+
+    def test_a_stale_high_no_longer_ratchets(self):
+        """The whole point of the change. 817.51 on 09-27 must not still be
+        constraining the account two weeks later."""
+        why, st = self.pre(733.0, {"equity_peak": 817.51,
+                                   "day_open_equity": [752.87, 740.01, 752.87]})
+        self.assertIsNone(why, "a stale all-time high is still constraining us")
+        self.assertFalse(st.get("halted"))
+
+    def test_the_peak_is_still_tracked_but_decides_nothing(self):
+        why, st = self.pre(900.0, {"equity_peak": 817.51,
+                                   "day_open_equity": [800.0]})
+        self.assertIsNone(why)
+        self.assertAlmostEqual(st["equity_peak"], 900.0)
+
+    def test_a_fast_collapse_inside_the_window_halts(self):
+        """What a trailing reference IS for."""
+        opens = [800.0, 795.0, 790.0]
+        why, st = self.pre(700.0, {"day_open_equity": opens})   # -12.5% vs 800
+        self.assertTrue(st["halted"])
+
+    def test_a_slow_grind_does_NOT_halt_and_that_is_the_trade(self):
+        """Pinned as a limitation, not an aspiration. I claimed the opposite
+        when I wrote this change: a trailing reference cannot catch a slow
+        bleed, because the reference falls with the account. A steady
+        -$6.66/day -- the rate that cost $19.99 over the three days to 09-30 --
+        measures 0.81% on day one and 3.13% by day thirty. Only an all-time
+        mark catches that shape, and an all-time mark is the ratchet being
+        removed. The slow case is the operator's to spot in the daily report.
+        """
+        eq = 817.51
+        opens = [eq]
         for day in range(1, 40):
-            eq -= 6.66                      # the observed daily bleed
-            why, st = self.pre(eq, {"equity_peak": peak})
-            if st.get("halted"):
-                halted_at = day
-                break
-        self.assertIsNotNone(halted_at, "a persistent bleed must halt eventually")
-        self.assertLess(halted_at, 30)
-        self.assertGreater(eq, peak * 0.85, "it should fire well before -15%")
+            eq -= 6.66
+            opens = (opens + [eq])[-C.ACCOUNT_DD_LOOKBACK_DAYS:]
+            why, st = self.pre(eq, {"day_open_equity": opens})
+            self.assertFalse(st.get("halted"),
+                             f"halted on day {day} -- if a trailing window now "
+                             f"catches a slow grind, the reasoning above is stale")
 
     def test_the_rail_can_be_switched_off(self):
         saved = T.ACCOUNT_DD_HALT_PCT
         try:
             T.ACCOUNT_DD_HALT_PCT = 0.0
-            why, st = self.pre(100.0, {"equity_peak": 817.51})
+            why, st = self.pre(100.0, {"day_open_equity": [817.51]})
             self.assertIsNone(why)
             self.assertFalse(st.get("halted"))
         finally:
             T.ACCOUNT_DD_HALT_PCT = saved
 
-    def test_a_missing_peak_does_not_divide_by_zero(self):
-        why, st = self.pre(800.0, {"equity_peak": 0.0})
-        self.assertIsNone(why)
+    def test_empty_or_junk_history_does_not_divide_by_zero(self):
+        for hist in ([], [0.0], [None, 0.0]):
+            why, st = self.pre(800.0, {"day_open_equity": hist})
+            self.assertIsNone(why)
+
+    def test_equity_is_recorded_for_the_next_day_roll(self):
+        why, st = self.pre(800.0, {"day_open_equity": [800.0]})
+        self.assertAlmostEqual(st["_equity_for_day_open"], 800.0)
 
 
 class DailyStopIsNowARail(unittest.TestCase):

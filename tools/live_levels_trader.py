@@ -71,6 +71,7 @@ from research.levels.config import (                                  # noqa: E4
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
     ENTRY_MAX_BREAK_FRAC, ENTRY_MAX_BASIS_BPS,
     COIN_REENTRY_COOLDOWN_HOURS, ACCOUNT_DD_HALT_PCT,
+    ACCOUNT_DD_LOOKBACK_DAYS,
     ENTRY_SPACING_MINUTES,
     MARGIN_PCT_PER_TRADE,
     NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
@@ -1442,6 +1443,15 @@ def roll_day(state: Dict[str, Any]) -> bool:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if state.get("day") == today:
         return False
+    # Record what the account opened the new day at, for the drawdown
+    # reference. Kept one longer than the lookback so the window is always
+    # full, and appended BEFORE the counters reset so a crash mid-roll cannot
+    # lose the reading.
+    opened_at = state.get("_equity_for_day_open")
+    if opened_at:
+        hist = list(state.get("day_open_equity") or [])
+        hist.append(float(opened_at))
+        state["day_open_equity"] = hist[-(ACCOUNT_DD_LOOKBACK_DAYS + 1):]
     was = state.get("day")
     state.update({"day": today, "opened_today": 0, "realised_today": 0.0})
     save_state(state)
@@ -1857,17 +1867,33 @@ def preflight(backend, state: Dict[str, Any]):
     # start on a corrupt file rather than silently handing back an empty one,
     # which is what stops a lost state file from quietly resetting the mark
     # and forgiving a drawdown already incurred.
-    peak = float(state.get("equity_peak") or 0.0)
-    if equity > peak:
+    # Measured against the highest of the last ACCOUNT_DD_LOOKBACK_DAYS
+    # OPENING balances, not an all-time high-water mark. The old mark was set
+    # on 09-27 and never came down, so the rail ratcheted: the longer the
+    # account sat below its best-ever day the less room it had, and it fired
+    # twice in six days while the account was flat to recovering.
+    #
+    # The day-opens are recorded by roll_day. Until a few exist the current
+    # equity stands in, so a fresh state cannot halt itself on an empty
+    # history.
+    # The last equity seen before midnight is the next day's opening balance.
+    # Recorded here because preflight is the only place that has read it, and
+    # roll_day runs before preflight on the pass that crosses the date.
+    state["_equity_for_day_open"] = equity
+    opens = [float(x) for x in (state.get("day_open_equity") or []) if x]
+    ref = max(opens + [equity]) if opens else equity
+    # Still tracked, purely so the logs and alerts can say how far the account
+    # is from its best. It no longer decides anything.
+    if equity > float(state.get("equity_peak") or 0.0):
         state["equity_peak"] = equity
         save_state(state)
-        peak = equity
-    if ACCOUNT_DD_HALT_PCT and peak > 0:
-        dd_pct = (peak - equity) / peak * 100.0
+    if ACCOUNT_DD_HALT_PCT and ref > 0:
+        dd_pct = (ref - equity) / ref * 100.0
         if dd_pct >= ACCOUNT_DD_HALT_PCT:
-            return halt(state, f"account drawdown {dd_pct:.1f}% "
-                               f"({equity:.2f} against a {peak:.2f} peak), "
-                               f"limit {ACCOUNT_DD_HALT_PCT:g}%")
+            return halt(state, f"account drawdown {dd_pct:.1f}% ({equity:.2f} "
+                               f"against a {ref:.2f} reference, the best of "
+                               f"the last {len(opens)} day-opens), limit "
+                               f"{ACCOUNT_DD_HALT_PCT:g}%")
     return None
 
 
