@@ -273,6 +273,40 @@ MIN_NOTIONAL_USD = _f("LEVELS_MIN_NOTIONAL", 12.0)
 # fewer trades for the same profit, so it buys nothing except the one case.
 ENTRY_MAX_BREAK_FRAC = _f("LEVELS_ENTRY_MAX_BREAK_FRAC", 1.0)
 
+# Refuse a long when the perp is trading this far ABOVE the oracle, in bps.
+# Negative disables the check; 0.0 means "refuse any premium to spot".
+#
+# EVIDENCED, and the first feature in this project to reach statistical
+# significance. Screened over 248 resolved episodes carrying positioning
+# context, scored on expectancy and stratified by reward/risk the same way the
+# price features were -- all nineteen of which failed:
+#
+#     mark-vs-oracle basis        n    mean R   win rate
+#     Q1   -52.5 .. -2.0 bps      62    -0.052      27%
+#     Q2    -1.9 .. +1.9          62    +0.006      27%
+#     Q3    +2.0 .. +7.7          62    -0.485      16%
+#     Q4    +7.8 .. +29.3         62    -0.694      11%
+#
+#     perp ABOVE oracle  n=153  mean R -0.524  p = 0.0035
+#     perp AT or BELOW   n= 95  mean R +0.044  p = 0.0024
+#
+# Mark above oracle means perp buyers are paying a premium over spot --
+# leveraged longs crowding in. Buying support while longs already pay up is
+# buying a crowded trade, and crowded longs are what get flushed. It is the
+# mechanism funding is supposed to measure and cannot, because Hyperliquid
+# pins funding at its base rate 77% of the time.
+#
+# 0.0 rather than a tuned number: it is the natural boundary (perp at parity
+# with spot) and the only cut in the sweep where the KEPT set has positive
+# expectancy. Wider cuts veto fewer trades but degrade what is kept --
+# +0.044 at 0bps, -0.031 at 2bps, -0.083 at 4bps, -0.127 at 6bps.
+#
+# Held as a veto to be re-measured, not as a sizing input. The cohort is one
+# regime and a losing one, 248 is enough for significance and not for comfort,
+# and it is the first of roughly thirty features screened to pass -- some of
+# that is luck by construction. The sample reaches ~500 by 2026-10-15.
+ENTRY_MAX_BASIS_BPS = _f("LEVELS_ENTRY_MAX_BASIS_BPS", 0.0)
+
 # How many resistance rungs above price the target may choose between.
 #
 # 3, which is what call.py already displayed as its ladder -- this only makes

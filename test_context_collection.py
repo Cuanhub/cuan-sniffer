@@ -57,27 +57,65 @@ class Inertness(unittest.TestCase):
         for f in CTX_FIELDS:
             self.assertNotIn(f, src, f"the gate reads {f}")
 
-    def test_the_trader_touches_them_only_where_it_persists_research(self):
-        """The guarantee changed on 2026-10-08 and is narrower now.
+    # Read for a trading decision, as of 2026-10-13. Only these two, and only
+    # as a veto. Everything else in CTX_FIELDS stays decision-inert.
+    DECISION_FIELDS = ("mark_px", "oracle_px")
 
-        It was "the trader never touches context at all", which held while the
-        data was collect-only. But the trader discarded every episode it
-        traded, so 0 of 39 traded ids existed in episodes.csv and none of the
-        654 context rows could be joined to a real outcome -- data collected
-        with no way to use it.
+    def test_only_the_basis_is_read_for_a_decision(self):
+        """This guarantee has narrowed twice, both times on evidence.
 
-        So the trader now WRITES context, for research only. What must still
-        hold is that it never READS it: every mention has to sit inside
-        persist_traded_episode, and nowhere else in the module.
+        v1, when the data was collect-only: the trader never touched context at
+        all. v2, 10-08: it may WRITE context for research, because it was
+        discarding every episode it traded and none of the collected rows could
+        be joined to a real outcome. v3, today: it may also READ the basis,
+        because that was the first feature in the project to reach significance
+        -- perp above oracle averaged -0.524R against +0.044R at or below over
+        248 resolved episodes, p = 0.0035, where all nineteen price features
+        failed.
+
+        What still holds, and is the point of this test: the other nine fields
+        -- open interest, funding, the impact spread, volume -- are collected
+        and screened but decide nothing. They stay that way until each earns
+        its own evidence.
         """
         import tools.live_levels_trader as T
         whole = inspect.getsource(T)
-        allowed = inspect.getsource(T.persist_traded_episode)
-        rest = whole.replace(allowed, "")
+        for allowed_fn in (T.persist_traded_episode, T.entry_is_actionable,
+                           T.build_intents):
+            whole = whole.replace(inspect.getsource(allowed_fn), "")
         for f in CTX_FIELDS:
-            self.assertNotIn(f, rest,
-                             f"{f} is referenced outside persist_traded_episode")
-        self.assertNotIn("get_perp_contexts", rest)
+            self.assertNotIn(f, whole,
+                             f"{f} is referenced outside the three functions "
+                             f"allowed to see context")
+
+    def test_the_inert_fields_decide_nothing(self):
+        """Checks field ACCESS, not the bare word: an earlier version of this
+        test failed on the prose "longs are paying a premium" in a comment,
+        which is the sort of false positive that teaches people to delete
+        tests."""
+        import tools.live_levels_trader as T
+        gate = inspect.getsource(T.entry_is_actionable)
+        for f in CTX_FIELDS:
+            if f in self.DECISION_FIELDS:
+                continue
+            for access in (f'ctx.get("{f}")', f'ctx["{f}"]',
+                           f"ctx.get('{f}')", f"ctx['{f}']"):
+                self.assertNotIn(access, gate,
+                                 f"{f} is read for a trading decision")
+
+    def test_the_two_decision_fields_really_are_read(self):
+        """If this stops being true the veto has been silently disabled."""
+        import tools.live_levels_trader as T
+        gate = inspect.getsource(T.entry_is_actionable)
+        for f in self.DECISION_FIELDS:
+            self.assertIn(f'"{f}"', gate)
+
+    def test_the_basis_veto_is_a_veto(self):
+        """It may refuse; it may never approve something otherwise rejected."""
+        import tools.live_levels_trader as T
+        gate = inspect.getsource(T.entry_is_actionable)
+        head = gate[gate.index("ENTRY_MAX_BASIS_BPS"):]
+        self.assertIn("return None", head)
 
     def test_persisting_is_the_only_reason_it_fetches(self):
         import tools.live_levels_trader as T

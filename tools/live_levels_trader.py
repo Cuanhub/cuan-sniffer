@@ -69,7 +69,7 @@ from research.levels.config import (                                  # noqa: E4
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
-    ENTRY_MAX_BREAK_FRAC,
+    ENTRY_MAX_BREAK_FRAC, ENTRY_MAX_BASIS_BPS,
     COIN_REENTRY_COOLDOWN_HOURS, ACCOUNT_DD_HALT_PCT,
     MARGIN_PCT_PER_TRADE,
     NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
@@ -434,7 +434,8 @@ def seed_watchlist_from_log(watching: Dict[str, Any]) -> int:
 
 def build_intents(client, universe, watching: Optional[Dict[str, Any]] = None,
                   bars_out: Optional[Dict[str, Any]] = None,
-                  tf_cache: Optional[Dict[Any, Any]] = None
+                  tf_cache: Optional[Dict[Any, Any]] = None,
+                  ctx_out: Optional[Dict[str, Any]] = None
                   ) -> Tuple[List[Dict[str, Any]], List[Any]]:
     """Scan for setups and keep the ones clearing the quality bar. No side
     effects, no venue writes -- this half only reads and computes.
@@ -466,17 +467,23 @@ def build_intents(client, universe, watching: Optional[Dict[str, Any]] = None,
     # One mids request refreshes the forming 4h bar for the whole universe, so
     # the 4h series can be reused between passes without the price everything
     # is measured against going stale with it. Thirty candle calls become one.
+    # get_perp_contexts rather than get_all_mids: it carries mark AND oracle
+    # alongside the mid, so the basis veto costs no extra request. Still one
+    # call per pass.
     mids: Dict[str, float] = {}
-    if tf_cache is not None:
-        try:
-            mids = client.get_all_mids()
-        except Exception as e:
-            # No mids means no safe reuse: fall through with an empty cache
-            # reference so every series is refetched, which is the old
-            # behaviour rather than a stale one.
-            print(f"[LEVELS_LIVE] mids fetch failed ({str(e)[:80]}) -- "
-                  f"refetching candle series this pass")
-            tf_cache = None
+    try:
+        cx = client.get_perp_contexts()
+        if ctx_out is not None:
+            ctx_out.update(cx)
+        mids = {k: v["mid_px"] for k, v in cx.items() if v.get("mid_px")}
+    except Exception as e:
+        # No mids means no safe reuse of the 4h series: fall through with an
+        # empty cache reference so every series is refetched, which is the old
+        # behaviour rather than a stale one. The basis veto then has nothing to
+        # read and abstains, which is the right direction for a veto.
+        print(f"[LEVELS_LIVE] context fetch failed ({str(e)[:80]}) -- "
+              f"refetching candle series this pass, basis veto inactive")
+        tf_cache = None
     for ep in _find_candidates(client, universe, bars_out=raw_1h,
                                tf_cache=tf_cache, mids=mids):
         key = watch_key(ep)
@@ -745,9 +752,13 @@ def main():
         # the trigger asks what price did in the last two hours, so bars must
         # never carry across passes.
         bars_cache: Dict[str, Any] = {}
+        # Filled by build_intents from the one contexts call it already makes,
+        # then read by the basis veto at entry. No extra request.
+        ctx_cache: Dict[str, Any] = {}
         intents, rejected = build_intents(ro, universe, watching,
                                           bars_out=bars_cache,
-                                          tf_cache=tf_cache)
+                                          tf_cache=tf_cache,
+                                          ctx_out=ctx_cache)
         save_state(state)
         n_watched = sum(1 for e in intents if e.get("_watched"))
         print(f"\n[LEVELS_LIVE] {len(intents)} setup(s) cleared the quality bar "
@@ -798,6 +809,7 @@ def main():
                       f"stopping this pass")
                 break
             outcome = execute_one(backend, ep, equity, available, armed, state,
+                                  ctx_cache=ctx_cache,
                                   bars_cache=bars_cache, watchboard=watchboard)
             # Re-checked after every ORDER, not once per pass: the runaway
             # opened twelve positions inside a single pass, so a per-pass check
@@ -934,7 +946,8 @@ def persist_traded_episode(ep: Dict[str, Any]) -> bool:
 
 def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float,
                         tp: float, level: float = 0.0,
-                        bars_1h: Optional[List[Dict[str, Any]]] = None):
+                        bars_1h: Optional[List[Dict[str, Any]]] = None,
+                        ctx: Optional[Dict[str, Any]] = None):
     """Refuse to fire unless the live price is where the plan assumed.
 
     execute_entry sends a MARKETABLE IOC at the current price -- it ignores the
@@ -975,6 +988,21 @@ def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float,
                               f"way from the level {level:.6g} to the stop "
                               f"{stop:.6g} (low {low:.6g}, max "
                               f"{ENTRY_MAX_BREAK_FRAC*100:.0f}%)")
+    # Perp richness to spot. Mark above oracle means leveraged longs are paying
+    # a premium to be here, and buying support into that is buying a crowded
+    # trade. Over 248 resolved episodes, perp-above-oracle averaged -0.524R
+    # against +0.044R at or below (p = 0.0035) -- the first feature in this
+    # project to reach significance, where all nineteen price features failed.
+    # Abstains when the reading is missing: a veto that cannot read its input
+    # must not invent a refusal.
+    if ENTRY_MAX_BASIS_BPS >= 0 and ctx:
+        mark, oracle = ctx.get("mark_px"), ctx.get("oracle_px")
+        if mark and oracle and oracle > 0:
+            basis = (mark / oracle - 1) * 10_000
+            if basis > ENTRY_MAX_BASIS_BPS:
+                return None, (f"perp is {basis:+.1f}bps rich to oracle "
+                              f"(mark {mark:.6g} vs {oracle:.6g}, max "
+                              f"{ENTRY_MAX_BASIS_BPS:+.1f}) -- longs are paying up")
     if ref >= tp:
         return None, f"price {ref:.6g} is already at or above the target {tp:.6g}"
     live_rr = (tp - ref) / (ref - stop)
@@ -1011,7 +1039,8 @@ def cached_1h(coin: str, cache: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
 def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
                 armed: bool, state: Dict[str, Any],
                 bars_cache: Optional[Dict[str, Any]] = None,
-                watchboard: Optional[List[Dict[str, Any]]] = None) -> "Outcome":
+                watchboard: Optional[List[Dict[str, Any]]] = None,
+                ctx_cache: Optional[Dict[str, Any]] = None) -> "Outcome":
     """Fire one entry at market, then protect it. Truthy if a position opened."""
     def g(k, d=0.0):
         try:
@@ -1081,7 +1110,8 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     if armed:
         ref, why = entry_is_actionable(backend, coin, entry, stop, tp,
                                        level=g("level_price"),
-                                       bars_1h=bars1h if armed else None)
+                                       bars_1h=bars1h if armed else None,
+                                       ctx=(ctx_cache or {}).get(coin.upper()))
         if ref is None:
             log_trade({"ts_utc": now_iso(), "action": "skip", "coin": coin,
                        "episode_id": ep.get("episode_id", ""), "entry": entry,
