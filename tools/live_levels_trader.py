@@ -76,6 +76,7 @@ from research.levels.config import (                                  # noqa: E4
     MARGIN_PCT_PER_TRADE,
     NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
     TRIGGER_HOLD_HOURS, TRIGGER_HOLD_HOURS_SWING,
+    FLIP_CAPPED_BARS_MIN, FLIP_CAPPED_RECENT_BARS,
 )
 from research.levels.config import summary as config_summary          # noqa: E402
 
@@ -931,10 +932,35 @@ def review_flags(ep: Dict[str, Any], size_usd: float, equity: float) -> List[str
     # Time spent capping price, which level_origin misses entirely.
     cap = f("capped_bars")
     since = f("bars_since_capped", -1)
-    if cap >= 25 and 0 <= since <= 48:
+    if behaves_like_flip(ep) and str(ep.get("level_origin", "")) != "flipped_resistance":
         out.append(f"was resistance until recently -- capped price {int(cap)}/120 bars, "
-                   f"last {int(since)} bars ago; price is still flipping it")
+                   f"last {int(since)} bars ago; price is still flipping it, so it "
+                   f"must clear the {TRIGGER_HOLD_HOURS}h channel hold")
     return out
+
+
+def behaves_like_flip(ep: Dict[str, Any]) -> bool:
+    """True when a level is still acting as resistance, however it was labelled.
+
+    level_origin marks only what the resistance detector happened to find, so a
+    level can be scored swing_low while plainly still capping price -- and a
+    swing_low is asked for the easy 1h hold rather than the 2h channel hold a
+    flip has to prove. ARB 0.186655 was bought on 2026-10-13 having capped
+    price for 66 of the last 120 bars, most recently 6 bars earlier, on a 1h
+    hold. SOL 101.72 was the same shape at 95 of 120 bars, last 12 bars ago.
+
+    Used by review_flags AND by the hold decision, from one definition, so the
+    advisory line and the rule can never disagree about what a flip is.
+    """
+    def f(k, d=0.0):
+        try:
+            return float(ep.get(k) or d)
+        except (TypeError, ValueError):
+            return d
+    if str(ep.get("level_origin", "")) == "flipped_resistance":
+        return True
+    since = f("bars_since_capped", -1)
+    return f("capped_bars") >= FLIP_CAPPED_BARS_MIN and 0 <= since <= FLIP_CAPPED_RECENT_BARS
 
 
 def persist_traded_episode(ep: Dict[str, Any]) -> bool:
@@ -1109,7 +1135,10 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         # A flipped resistance has to prove the flip by holding a channel;
         # ordinary support taps and sends, and asking it to sit for two hours
         # is asking it to behave like the thing it is not.
-        is_flip = str(ep.get("level_origin", "")) == "flipped_resistance"
+        # Asks how the level BEHAVES, not only how it was labelled. A level
+        # still capping price gets the channel hold even when level_origin
+        # called it a swing low.
+        is_flip = behaves_like_flip(ep)
         hold_h = TRIGGER_HOLD_HOURS if is_flip else TRIGGER_HOLD_HOURS_SWING
         fired, why = level_has_held(bars1h, g("level_price"), hold_hours=hold_h)
         if not fired:

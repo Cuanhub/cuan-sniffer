@@ -364,6 +364,30 @@ TRIGGER_HOLD_HOURS = _i("LEVELS_TRIGGER_HOLD_HOURS", 2)
 # back above it. A tap and a reclaim, which is the event itself rather than a
 # wait for it to become something else.
 TRIGGER_HOLD_HOURS_SWING = _i("LEVELS_TRIGGER_HOLD_HOURS_SWING", 1)
+
+# When a level BEHAVES like a flipped resistance regardless of how it was
+# classified: it capped price for at least FLIP_CAPPED_BARS_MIN of the last 120
+# bars, and did so within the last FLIP_CAPPED_RECENT_BARS.
+#
+# These two numbers already existed, hardcoded inside review_flags, where they
+# only produced an advisory line. They now decide which HOLD a setup must
+# clear, so they belong here under a name.
+#
+# The reason is a classification bug, not a fitted filter. level_origin marks
+# only what the resistance detector happened to find, so a level can be
+# labelled swing_low while plainly still acting as resistance -- and a
+# swing_low gets the easy 1h hold instead of the 2h channel hold a flip must
+# prove. ARB 0.186655 was bought on 2026-10-13 after capping price for 66 of
+# the last 120 bars, most recently 6 bars earlier, on a 1h hold. SOL 101.72 was
+# the same shape: scored swing_low while having capped price 95 of 120 bars,
+# last 12 bars ago.
+#
+# Deliberately NOT justified by outcomes. Hold rate, touch count and the
+# capping flag itself were all screened against the live book and all came out
+# flat -- the capping flag at p = 0.74. This corrects which rule a setup is
+# measured by, which is a question of consistency rather than of edge.
+FLIP_CAPPED_BARS_MIN = _i("LEVELS_FLIP_CAPPED_BARS_MIN", 25)
+FLIP_CAPPED_RECENT_BARS = _i("LEVELS_FLIP_CAPPED_RECENT_BARS", 48)
 TRIGGER_TOUCH_LOOKBACK_HOURS = _i("LEVELS_TRIGGER_TOUCH_LOOKBACK_HOURS", 12)
 
 # How far above the level price may sit and still count as holding AT it.
