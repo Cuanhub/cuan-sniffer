@@ -122,3 +122,76 @@ def send(text: str, key: Optional[str] = None, cooldown_sec: float = 0.0,
 
     print(f"[ALERT undelivered] {text}")
     return False
+
+
+# ---- receiving ------------------------------------------------------------
+# Long-polling getUpdates rather than a webhook, deliberately. A webhook needs
+# an inbound port and a public address; this machine has neither and should
+# not grow them for a trading bot. getUpdates is an ordinary outbound HTTPS
+# request to a host this module already talks to, so the control channel adds
+# no new attack surface and no new listening socket.
+#
+# The bot token is now a credential that can close positions and halt trading,
+# not just a way to send messages. It cannot move money -- nothing here has
+# transfer or withdrawal capability -- which bounds what a leaked token costs
+# to "someone can flatten the book and stop the bot".
+POLL_TIMEOUT_SEC = 25
+
+
+def get_updates(offset: int = 0, timeout: int = POLL_TIMEOUT_SEC):
+    """Fetch pending messages. Returns (updates, next_offset).
+
+    `updates` is a list of dicts with update_id, chat_id, user_id, text.
+    Returns ([], offset) on any failure: an unreachable Telegram must not
+    raise into a control loop, for the same reason send() never raises into
+    the trading loop.
+
+    The caller must advance `offset` past what it has handled, because
+    Telegram re-delivers anything unacknowledged. Not advancing it on a
+    command that failed would retry that command forever.
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return [], offset
+    url = f"https://api.telegram.org/bot{token}/getUpdates"
+    payload = {"timeout": timeout, "allowed_updates": ["message"]}
+    if offset:
+        payload["offset"] = offset
+    try:
+        resp = _transport(url, payload)
+        body = resp.json()
+    except Exception as e:
+        print(f"[CONTROL] poll failed: {str(e)[:160]}")
+        return [], offset
+    if not body.get("ok"):
+        print(f"[CONTROL] poll refused: {str(body)[:160]}")
+        return [], offset
+
+    out = []
+    nxt = offset
+    for item in body.get("result") or []:
+        try:
+            uid = int(item["update_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        nxt = max(nxt, uid + 1)
+        msg = item.get("message") or {}
+        text = (msg.get("text") or "").strip()
+        chat = str(((msg.get("chat") or {}).get("id")) or "")
+        user = str(((msg.get("from") or {}).get("id")) or "")
+        if text:
+            out.append({"update_id": uid, "chat_id": chat,
+                        "user_id": user, "text": text})
+    return out, nxt
+
+
+def authorised(chat_id: str) -> bool:
+    """Whether a message came from the one chat allowed to command this bot.
+
+    Compared against TELEGRAM_CHAT_ID, the same value alerts are sent to. An
+    unconfigured chat id authorises NOTHING -- a missing credential must not
+    read as "allow everyone", which is what `chat_id == os.getenv(...)` does
+    when both sides are empty.
+    """
+    allowed = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    return bool(allowed) and str(chat_id).strip() == allowed

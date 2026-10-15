@@ -708,6 +708,9 @@ def main():
                                  args.limit_entry[1], equity, available, state)
 
     while not _stop:
+        # Before anything else in the pass, so a queued halt takes effect on
+        # this pass rather than the next one.
+        drain_control_queue(state)
         if roll_day(state):
             # The universe is "top N perps by 24h volume, refreshed daily" --
             # and this loop never refreshed it. scanner.py has always rolled
@@ -2060,6 +2063,88 @@ def note_closed_outcome(state: Dict[str, Any], pnl: float) -> bool:
                 f"trades, those opened 6+ losses deep won 7% of the time.",
                 key="streak_standdown", cooldown_sec=3600)
     return True
+
+
+CONTROL_QUEUE = STATE_PATH.parent / "_control_queue.json"
+
+# Commands the operator may force past a rail. Held as a set rather than
+# checked inline so that adding one is a deliberate edit in one place.
+FORCEABLE = {"take"}
+
+
+def drain_control_queue(state: Dict[str, Any]) -> List[str]:
+    """Apply queued Telegram commands. Returns what was done, for the log.
+
+    The control process never writes _live_state.json -- it appends here and
+    this is the only thing that applies it, so the state file keeps exactly
+    one writer. The queue is REPLACED with [] rather than edited, so a
+    command cannot be applied twice even if the controller appends mid-drain:
+    the worst case is a command arriving a pass late.
+
+    Anything unrecognised is dropped with a note rather than retried, because
+    a command this build does not understand will not become understood by
+    being tried again on the next pass.
+    """
+    try:
+        raw = json.loads(CONTROL_QUEUE.read_text())
+    except (OSError, ValueError):
+        return []
+    if not isinstance(raw, list) or not raw:
+        return []
+    try:
+        CONTROL_QUEUE.write_text("[]")
+    except OSError as e:
+        # Could not clear it, so do NOT act: acting without clearing would
+        # replay every command on every pass.
+        print(f"[LEVELS_LIVE] control queue unclearable ({e}) -- ignoring it")
+        return []
+
+    done: List[str] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        cmd = str(item.get("cmd") or "").lower()
+        arg = str(item.get("arg") or "")
+        if cmd == "halt":
+            halt(state, f"halted from Telegram: {arg}" if arg
+                 else "halted from Telegram", kind="manual")
+            done.append("halted by request")
+        elif cmd == "resume":
+            state["halted"] = False
+            state["halt_reason"] = ""
+            state["halt_kind"] = ""
+            keys = state.get("alert_keys")
+            if isinstance(keys, dict):
+                keys.pop("halt", None)
+            done.append("halt cleared by request")
+        elif cmd == "pause":
+            try:
+                hours = float(arg)
+            except ValueError:
+                done.append(f"ignored pause '{arg}': not a number")
+                continue
+            until = datetime.now(timezone.utc) + timedelta(hours=hours)
+            state["streak_cooldown_until"] = (
+                until.isoformat().replace("+00:00", "Z"))
+            done.append(f"paused {hours:g}h by request")
+        elif cmd in FORCEABLE:
+            # Recorded, not acted on here. The entry path is the only thing
+            # that knows whether the scanner has a real level for this coin,
+            # and a forced entry still has to go through sizing and
+            # protection. An override with no candidate behind it is refused
+            # there, where the refusal can say why.
+            forced = state.setdefault("forced", {})
+            forced[arg.upper()] = (datetime.now(timezone.utc)
+                                   + timedelta(hours=1)
+                                   ).isoformat().replace("+00:00", "Z")
+            done.append(f"{arg.upper()} may be forced for 1h")
+        else:
+            done.append(f"ignored unknown command '{cmd}'")
+    if done:
+        save_state(state)
+        for line in done:
+            print(f"[LEVELS_LIVE] control: {line}")
+    return done
 
 
 def preflight(backend, state: Dict[str, Any]):

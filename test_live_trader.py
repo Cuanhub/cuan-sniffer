@@ -1137,7 +1137,11 @@ class DayRolloverTest(unittest.TestCase):
     def test_the_loop_rolls_the_day_not_just_startup(self):
         src = Path("tools/live_levels_trader.py").read_text()
         loop = src.index("while not _stop:")
-        self.assertIn("roll_day(state)", src[loop:loop + 200],
+        # 400 rather than 200: drain_control_queue now runs first, so that a
+        # halt queued from Telegram applies on THIS pass. The point of the
+        # assertion is that roll_day is called by the loop and not only at
+        # startup, which a window this size still pins.
+        self.assertIn("roll_day(state)", src[loop:loop + 400],
                       "a process that runs for days must roll the day itself")
 
 

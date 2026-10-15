@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The Telegram control channel.
+
+  SECURITY, because this is the first thing in the project that lets an
+  outside message move money:
+
+    * It long-polls api.telegram.org outbound. No inbound port, no webhook,
+      no listening socket, and no new host beyond the two this project
+      already talks to.
+    * It obeys exactly one chat id, TELEGRAM_CHAT_ID -- the same one alerts
+      go to. Messages from anywhere else are logged and not even answered,
+      because replying would confirm to a stranger that the bot exists.
+    * The bot token is now a credential that can CLOSE POSITIONS and HALT
+      TRADING, not just send messages. It cannot move money: nothing in this
+      project has transfer or withdrawal capability. That bounds a leaked
+      token to "someone can flatten the book and stop the bot".
+    * Everything that risks money needs a one-shot token confirmed within
+      two minutes.
+
+  It holds a venue backend so that /close acts immediately rather than
+  waiting up to a pass. That means two processes can place orders against one
+  account; see tools/telegram_control.py's header for how the command set is
+  split so they cannot fight over state.
+
+  Run it read-only, with no ability to close anything, by adding --no-venue
+  to ProgramArguments.
+
+  Install:
+    cp deploy/launchd/com.cuansniffer.telegram.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.telegram.plist
+  Stop:
+    launchctl unload ~/Library/LaunchAgents/com.cuansniffer.telegram.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuansniffer.telegram</string>
+
+  <!-- The venv's own python, NOT its resolved homebrew target. CPython only
+       adds the venv's site-packages when invoked through the venv directory,
+       because that is where it looks for pyvenv.cfg. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/myair/CuanSniffer/.venv/bin/python</string>
+    <string>-u</string>
+    <string>-m</string>
+    <string>tools.telegram_control</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/myair/CuanSniffer</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Always restart. Unlike the trader there is no exit code that means
+       "somebody stopped this deliberately" -- the loop is meant to run
+       forever, so any exit is a fault. -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/telegram.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/telegram.err.log</string>
+</dict>
+</plist>
