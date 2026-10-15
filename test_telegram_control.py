@@ -436,3 +436,21 @@ class TheLoopBacksOffRatherThanFightingItself(unittest.TestCase):
         src = open("tools/telegram_control.py").read()
         self.assertIn("fail_backoff = notify.POLL_TIMEOUT_SEC + 5", src)
         self.assertIn("time.sleep(1 if ok else fail_backoff)", src)
+
+
+class SharedTokenIsDetected(unittest.TestCase):
+    """Two pollers on one bot token steal each other's updates, so a command
+    sent to this trader can be consumed by the other process and never
+    arrive. Found on first install: the same token was in use by another
+    project on this machine that had been polling for four days. A sequential
+    loop cannot 409 itself, so repeated failures mean exactly this.
+    """
+
+    def test_the_loop_reports_a_shared_token_rather_than_retrying_forever(self):
+        src = open("tools/telegram_control.py").read()
+        self.assertIn("conflicts += 1", src)
+        self.assertIn("if conflicts == 3:", src)
+        self.assertIn("BotFather", src,
+                      "the alert must say what actually fixes it")
+        self.assertIn("conflicts = 0", src,
+                      "a successful poll must reset the counter")

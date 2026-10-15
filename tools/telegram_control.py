@@ -418,8 +418,34 @@ def main() -> int:
     # long-poll and 409s forever -- which is what it did on first install.
     fail_backoff = notify.POLL_TIMEOUT_SEC + 5
 
+    # A sequential loop cannot conflict with itself, so repeated 409s mean
+    # ANOTHER process is polling this same bot token. That is not a transient
+    # fault and it is not safe to sit quietly through: two pollers steal each
+    # other's updates, so a command sent here can be consumed by the other
+    # process and never arrive. Found on first install -- the same token was
+    # in use by another project on this machine, which had been polling for
+    # four days. The fix is a second bot from BotFather, not a retry.
+    conflicts = 0
+
     while True:
         updates, nxt, ok = notify.get_updates(offset)
+        if ok:
+            conflicts = 0
+        else:
+            conflicts += 1
+            if conflicts == 3:
+                msg = ("⚠️ *Control channel cannot start*\nAnother process is "
+                       "polling this same bot token, so commands sent here "
+                       "may be swallowed by it instead.\n\nGive Cuan Sniffer "
+                       "its own bot from @BotFather and set "
+                       "TELEGRAM_BOT_TOKEN to it.")
+                print("[CONTROL] three consecutive poll failures -- another "
+                      "process is almost certainly polling this same bot "
+                      "token. Commands may be delivered to it instead of "
+                      "here. Use a separate bot for this trader.")
+                # Sent rather than only logged: the whole point of this
+                # module is that nobody reads the log.
+                notify.send(msg, key="control_conflict", cooldown_sec=21600)
         for u in updates:
             if not notify.authorised(u["chat_id"]):
                 # Not answered on purpose. Replying would confirm to a
