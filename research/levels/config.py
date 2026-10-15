@@ -302,9 +302,21 @@ ENTRY_MAX_BREAK_FRAC = _f("LEVELS_ENTRY_MAX_BREAK_FRAC", 1.0)
 # +0.044 at 0bps, -0.031 at 2bps, -0.083 at 4bps, -0.127 at 6bps.
 #
 # Held as a veto to be re-measured, not as a sizing input. The cohort is one
-# regime and a losing one, 248 is enough for significance and not for comfort,
-# and it is the first of roughly thirty features screened to pass -- some of
-# that is luck by construction. The sample reaches ~500 by 2026-10-15.
+# regime and a losing one, and it is the first of roughly thirty features
+# screened to pass -- some of that is luck by construction.
+#
+# RE-MEASURED 2026-10-15 at n=374 via `python -m tools.screen_context`, and it
+# held: p=0.0005, both chronological halves the same sign, quartiles monotone
+# across the zero boundary, and the threshold sweep still optimal at 0.0
+# without refitting. Nothing else passed; funding, OI, OI/volume, spread and
+# prior-day distance all failed, three by flipping sign out of sample.
+#
+# Still a veto and still not a sizing input, because the admitted cohort
+# averages -0.116R: this halves the loss on that sample, it does not show an
+# edge. Re-screen around 2026-10-22, when n reaches ~500. The earlier note
+# here predicted 500 by 10-15 and was wrong about which number gates the
+# screen -- an outcome needs close_after_168h_pct, so resolution runs seven
+# days behind collection, and the screenable set grows about 55/day.
 ENTRY_MAX_BASIS_BPS = _f("LEVELS_ENTRY_MAX_BASIS_BPS", 0.0)
 
 # How many resistance rungs above price the target may choose between.
