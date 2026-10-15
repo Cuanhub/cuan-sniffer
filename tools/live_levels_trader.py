@@ -1908,6 +1908,13 @@ def record_day_open_equity(backend, state: Dict[str, Any]):
         state["_equity_for_day_open"] = equity
         state["_equity_for_day_open_day"] = datetime.now(
             timezone.utc).strftime("%Y-%m-%d")
+        # Persisted here rather than left to the caller. Every early return in
+        # preflight skips the pass loop's own save_state, so on a halted pass
+        # the reading lived only in memory -- fine for a process that stays up
+        # to midnight, lost on any restart before it. Losing it is safe now
+        # that roll_day skips an unstamped reading, but safe is not the same
+        # as recorded, and this is the one write that has to survive a halt.
+        save_state(state)
     return ms
 
 

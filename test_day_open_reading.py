@@ -174,3 +174,30 @@ class ReferenceSurvivesAHalt(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheReadingIsPersisted(unittest.TestCase):
+    """In-memory is not enough: the halt is exactly when a restart happens.
+
+    Every early return in preflight skips the pass loop's own save_state, so
+    the reading taken on a halted pass survived only as long as the process
+    did. roll_day skipping an unstamped reading makes the loss safe rather
+    than corrupting, but the point of taking the reading is to keep the
+    drawdown window advancing across a halt that lasts days.
+    """
+
+    def test_a_halted_pass_writes_the_reading_to_disk(self):
+        st = {"owned": {}, "pending": {}, "realised_today": 0.0,
+              "halted": True, "halt_reason": "daily loss stop"}
+        with at("2026-10-15"), mock.patch.object(T, "save_state") as saved:
+            T.preflight(Backend(704.79), st)
+        self.assertTrue(saved.called)
+        written = saved.call_args[0][0]
+        self.assertEqual(written["_equity_for_day_open"], 704.79)
+        self.assertEqual(written["_equity_for_day_open_day"], "2026-10-15")
+
+    def test_a_failed_query_does_not_write(self):
+        st = {"owned": {}, "pending": {}, "realised_today": 0.0}
+        with at("2026-10-15"), mock.patch.object(T, "save_state") as saved:
+            T.preflight(Backend(None), st)
+        self.assertFalse(saved.called)
