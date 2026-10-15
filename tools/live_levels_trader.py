@@ -71,7 +71,8 @@ from research.levels.config import (                                  # noqa: E4
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
     ENTRY_MAX_BREAK_FRAC, ENTRY_MAX_BASIS_BPS,
     COIN_REENTRY_COOLDOWN_HOURS, ACCOUNT_DD_HALT_PCT,
-    ACCOUNT_DD_LOOKBACK_DAYS,
+    ACCOUNT_DD_WINDOW_HOURS, HALT_AUTO_RELEASE,
+    LOSS_STREAK_TRIGGER, LOSS_STREAK_COOLDOWN_HOURS,
     ENTRY_SPACING_MINUTES,
     MARGIN_PCT_PER_TRADE,
     NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
@@ -1473,30 +1474,10 @@ def roll_day(state: Dict[str, Any]) -> bool:
     if state.get("day") == today:
         return False
     was = state.get("day")
-    # Record what the account opened the new day at, for the drawdown
-    # reference. Kept one longer than the lookback so the window is always
-    # full, and appended BEFORE the counters reset so a crash mid-roll cannot
-    # lose the reading.
-    #
-    # Only a reading taken ON the day being closed out is admitted. An
-    # unstamped or older reading is frozen -- a halted pass, a failed margin
-    # query, or a process that was down -- and appending it writes a figure
-    # the account never had. That is what happened across the 2026-10-13
-    # halt: the same pre-halt value was recorded as both the 10-14 and the
-    # 10-15 open. Skipping leaves the window one entry short, which
-    # `ref = max(opens + [equity])` already tolerates; duplicating pins the
-    # reference to a day that never existed and, if that day was a local
-    # high, the rail never releases it.
-    opened_at = state.get("_equity_for_day_open")
-    stamp = state.get("_equity_for_day_open_day")
-    if opened_at and stamp and stamp == was:
-        hist = list(state.get("day_open_equity") or [])
-        hist.append(float(opened_at))
-        state["day_open_equity"] = hist[-(ACCOUNT_DD_LOOKBACK_DAYS + 1):]
-    elif opened_at:
-        print(f"[LEVELS_LIVE] no equity reading taken on {was} "
-              f"(last was {stamp or 'unstamped'}) -- "
-              f"not recording a day-open for it")
+    # No day-open equity is recorded here any more. The drawdown reference is
+    # a rolling ACCOUNT_DD_WINDOW_HOURS window sampled every pass by
+    # record_equity_sample, so there is nothing for a date boundary to do but
+    # reset the daily counters.
     state.update({"day": today, "opened_today": 0, "realised_today": 0.0})
     save_state(state)
     print(f"[LEVELS_LIVE] new UTC day {today} (was {was}) -- "
@@ -1504,7 +1485,8 @@ def roll_day(state: Dict[str, Any]) -> bool:
     return True
 
 
-def halt(state: Dict[str, Any], reason: str, where: str = "") -> str:
+def halt(state: Dict[str, Any], reason: str, where: str = "",
+         kind: str = "") -> str:
     """Stop trading and tell a human. Returns the reason, for the caller.
 
     Every halt goes through here. A halt is the one condition this module
@@ -1518,12 +1500,19 @@ def halt(state: Dict[str, Any], reason: str, where: str = "") -> str:
     already = bool(state.get("halted"))
     state["halted"] = True
     state["halt_reason"] = reason
+    # Recorded so release_halt_if_clear knows which condition to re-check. A
+    # halt with no kind -- set by hand, or by a path that forgot -- is never
+    # auto-released, because clearing a halt by guessing is the one mistake
+    # this whole mechanism must not make.
+    state["halt_kind"] = kind
     save_state(state)
     print(f"[LEVELS_LIVE] !! HALT{' ' + where if where else ''} -- {reason}")
     if not already:
         notify.send(
             f"🛑 *Level trader halted*\n{reason}\n\n"
-            f"It will not open anything until it is cleared with --resume.",
+            + ("It clears itself once the condition passes."
+               if (HALT_AUTO_RELEASE and kind)
+               else "It will not open anything until cleared with --resume."),
             key="halt", cooldown_sec=3600)
     return reason
 
@@ -1557,6 +1546,11 @@ def accrue_close(backend, state: Dict[str, Any], coin: str,
     else:
         note = f"realised {pnl:.2f}"
     state["realised_today"] = state.get("realised_today", 0.0) + pnl
+    # The losing run is counted here for the same reason realised_today is:
+    # this is the single path every close comes through.
+    if note_closed_outcome(state, pnl):
+        note += (f"; {LOSS_STREAK_TRIGGER} losses in a row -- standing down "
+                 f"for {LOSS_STREAK_COOLDOWN_HOURS:g}h")
     # Stamped here because this is the single path every close comes through,
     # and it is the only place that knows the realised result -- which is what
     # decides whether a cooldown is warranted at all.
@@ -1878,19 +1872,48 @@ def reconcile(backend, state: Dict[str, Any]) -> None:
     save_state(state)
 
 
-def record_day_open_equity(backend, state: Dict[str, Any]):
-    """Read equity and stamp it as today's running day-open candidate.
+def prune_equity_samples(state: Dict[str, Any], now: datetime) -> List[float]:
+    """Drop readings older than the window. Returns the equities that remain.
+
+    The window is what makes this rail unable to strand the account: nothing
+    older than ACCOUNT_DD_WINDOW_HOURS survives in it, so however far the
+    account falls, the reference it is measured against follows within a day.
+    """
+    cutoff = now - timedelta(hours=ACCOUNT_DD_WINDOW_HOURS)
+    kept = []
+    for item in state.get("equity_samples") or []:
+        try:
+            ts, eq = item[0], float(item[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        try:
+            when = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if when >= cutoff and eq > 0:
+            kept.append([str(ts), eq])
+    state["equity_samples"] = kept
+    return [e for _, e in kept]
+
+
+def record_equity_sample(backend, state: Dict[str, Any]):
+    """Read equity, add it to the rolling window, prune, persist.
 
     Runs before every one of preflight's early returns, because the reading
     is bookkeeping and not a trading decision. It used to live further down,
     below the halted check and below the concurrency and day-count caps, so
-    any pass that returned early left the reading untouched -- and a halted
+    any pass that returned early left the window untouched -- and a halted
     trader returns early on EVERY pass. From the 2026-10-13 halt to 10-15 the
-    trader took no equity readings at all, and roll_day re-appended the same
-    frozen pre-halt figure as the 10-14 and 10-15 day-opens. The window ends
-    up holding one real day and copies of it, which is worst precisely when
-    an accurate picture of the account matters most. Holding MAX_CONCURRENT
-    positions across midnight did the same thing for the same reason.
+    trader took no equity readings at all, which is how it spent two days
+    measured against a 10-12 reference it could no longer reach. Holding
+    MAX_CONCURRENT positions across midnight did the same thing.
+
+    Persisted here rather than left to the caller, because every early return
+    in preflight skips the pass loop's own save_state -- so on a halted pass
+    the reading lived only as long as the process did, and a halt is exactly
+    when a restart happens.
 
     Returns (equity, used, avail), or None if the venue could not be read.
     Costs one margin query on passes that previously made none; preflight
@@ -1901,28 +1924,155 @@ def record_day_open_equity(backend, state: Dict[str, Any]):
         return None
     equity, used, avail = ms
     if equity > 0:
-        # The last equity seen before midnight is the next day's opening
-        # balance. Stamped with the date it was taken so roll_day can tell a
-        # fresh reading from one frozen by a halt or a failed query, and skip
-        # rather than duplicate.
-        state["_equity_for_day_open"] = equity
-        state["_equity_for_day_open_day"] = datetime.now(
-            timezone.utc).strftime("%Y-%m-%d")
-        # Persisted here rather than left to the caller. Every early return in
-        # preflight skips the pass loop's own save_state, so on a halted pass
-        # the reading lived only in memory -- fine for a process that stays up
-        # to midnight, lost on any restart before it. Losing it is safe now
-        # that roll_day skips an unstamped reading, but safe is not the same
-        # as recorded, and this is the one write that has to survive a halt.
+        now = datetime.now(timezone.utc)
+        samples = list(state.get("equity_samples") or [])
+        samples.append([now.isoformat().replace("+00:00", "Z"), equity])
+        state["equity_samples"] = samples
+        prune_equity_samples(state, now)
         save_state(state)
     return ms
 
 
+def drawdown_now(state: Dict[str, Any], equity: float) -> Tuple[float, float]:
+    """(drawdown percent, reference) against the rolling window high.
+
+    Current equity is folded into the reference so a fresh state, or one
+    whose window has just been pruned empty, cannot report a drawdown it has
+    no evidence for.
+    """
+    seen = prune_equity_samples(state, datetime.now(timezone.utc))
+    ref = max(seen + [equity])
+    if ref <= 0:
+        return 0.0, 0.0
+    return (ref - equity) / ref * 100.0, ref
+
+
+def release_halt_if_clear(state: Dict[str, Any], equity: float) -> bool:
+    """Clear a halt whose condition has passed. True if it released.
+
+    Only a halt whose condition can be re-checked releases itself. Both that
+    qualify are bounded in time by construction, so release is guaranteed
+    rather than hoped for: the drawdown reference ages out within
+    ACCOUNT_DD_WINDOW_HOURS, and realised_today resets at 00:00 UTC. A halt
+    set by hand, or one whose kind cannot be established, still waits for
+    --resume -- an unrecognised halt must not be cleared by guessing.
+
+    Before this, every halt waited for --resume, which is why the 10-13
+    daily-loss halt was still blocking trading on 10-15: the day had rolled
+    twice, realised_today had reset to zero both times, and the flag stayed.
+    """
+    if not state.get("halted") or not HALT_AUTO_RELEASE:
+        return False
+    kind = state.get("halt_kind")
+    if not kind:
+        # State written before halts carried a kind. Infer it from the reason
+        # the halt was recorded with, and say so -- the inference is on the
+        # text this module writes itself, not on anything a venue supplies.
+        reason = str(state.get("halt_reason") or "")
+        if reason.startswith("daily loss stop"):
+            kind = "daily_loss"
+        elif reason.startswith("account drawdown"):
+            kind = "drawdown"
+        if kind:
+            print(f"[LEVELS_LIVE] halt carries no kind -- read as '{kind}' "
+                  f"from its reason")
+    if kind == "daily_loss":
+        lost = state.get("realised_today", 0.0)
+        limit = -abs(equity) * DAILY_LOSS_STOP_PCT / 100.0
+        if lost > limit:
+            now = f"day realised ${lost:.2f}, stop at ${limit:.2f}"
+        else:
+            return False
+    elif kind == "drawdown":
+        dd, ref = drawdown_now(state, equity)
+        if ACCOUNT_DD_HALT_PCT and dd >= ACCOUNT_DD_HALT_PCT:
+            return False
+        now = (f"drawdown {dd:.2f}% against a {ref:.2f} "
+               f"{ACCOUNT_DD_WINDOW_HOURS:g}h high, limit "
+               f"{ACCOUNT_DD_HALT_PCT:g}%")
+    else:
+        return False
+    was = state.get("halt_reason", "")
+    state["halted"] = False
+    state["halt_reason"] = ""
+    state["halt_kind"] = ""
+    # Clearing the alert key lets the NEXT halt announce itself. Without this
+    # the keyed cooldown would swallow it and a second halt would be silent.
+    keys = state.get("alert_keys")
+    if isinstance(keys, dict):
+        keys.pop("halt", None)
+    save_state(state)
+    print(f"[LEVELS_LIVE] halt released -- {now} (was: {was})")
+    notify.send(f"✅ *Level trader resumed*\nThe halt has cleared on its own.\n"
+                f"{now}\n\nWas halted for: {was}", key="halt_release",
+                cooldown_sec=600)
+    return True
+
+
+def streak_cooldown_remaining(state: Dict[str, Any]) -> float:
+    """Hours left on the post-losing-run stand-down, 0 if none."""
+    until = state.get("streak_cooldown_until")
+    if not until:
+        return 0.0
+    try:
+        when = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    left = (when - datetime.now(timezone.utc)).total_seconds() / 3600.0
+    return max(0.0, left)
+
+
+def note_closed_outcome(state: Dict[str, Any], pnl: float) -> bool:
+    """Track the losing run and open a stand-down when it gets long enough.
+
+    Called from accrue_close, which every path that closes a position must go
+    through -- a close that does not reach it is invisible here for the same
+    reason it would be invisible to the daily loss stop.
+
+    The streak resets to zero on triggering rather than continuing to count,
+    so one losing run buys one stand-down and then re-arms. That is exactly
+    what the replay measured; letting it keep counting would re-trigger on
+    every subsequent loss and extend the stand-down indefinitely.
+
+    Returns True if a stand-down was opened.
+    """
+    if pnl > 0:
+        state["loss_streak"] = 0
+        return False
+    streak = int(state.get("loss_streak") or 0) + 1
+    state["loss_streak"] = streak
+    if not LOSS_STREAK_TRIGGER or streak < LOSS_STREAK_TRIGGER:
+        print(f"[LEVELS_LIVE] losing run at {streak} of "
+              f"{LOSS_STREAK_TRIGGER}")
+        return False
+    until = (datetime.now(timezone.utc)
+             + timedelta(hours=LOSS_STREAK_COOLDOWN_HOURS))
+    state["streak_cooldown_until"] = until.isoformat().replace("+00:00", "Z")
+    state["loss_streak"] = 0
+    print(f"[LEVELS_LIVE] {streak} losses in a row -- standing down for "
+          f"{LOSS_STREAK_COOLDOWN_HOURS:g}h, until {state['streak_cooldown_until']}")
+    notify.send(f"⏸ *Standing down*\n{streak} losing trades in a row.\n"
+                f"No new entries for {LOSS_STREAK_COOLDOWN_HOURS:g}h "
+                f"(until {state['streak_cooldown_until']}).\n\n"
+                f"Losses arrive in day-sized clumps: across the first 98 "
+                f"trades, those opened 6+ losses deep won 7% of the time.",
+                key="streak_standdown", cooldown_sec=3600)
+    return True
+
+
 def preflight(backend, state: Dict[str, Any]):
     """Reasons not to open anything this pass. Returns a string, or None."""
-    ms = record_day_open_equity(backend, state)
+    ms = record_equity_sample(backend, state)
+    if ms is not None and ms[0] > 0:
+        release_halt_if_clear(state, ms[0])
     if state.get("halted"):
         return f"halted: {state.get('halt_reason', '')}"
+    left = streak_cooldown_remaining(state)
+    if left > 0:
+        return (f"standing down after {LOSS_STREAK_TRIGGER} losses in a row, "
+                f"{left:.1f}h left of {LOSS_STREAK_COOLDOWN_HOURS:g}h")
     owned = state.get("owned", {})
     pending = state.get("pending", {})
     # A resting bid is a position the account has already committed to; it
@@ -1941,42 +2091,32 @@ def preflight(backend, state: Dict[str, Any]):
     lost = state.get("realised_today", 0.0)
     if lost <= -abs(equity) * DAILY_LOSS_STOP_PCT / 100.0:
         return halt(state, f"daily loss stop: {lost:.2f} against "
-                           f"{equity:.2f} equity")
-    # Account drawdown from the high-water mark. The daily stop resets at
-    # 00:00 UTC, so a slow bleed never trips it -- the three days to
-    # 2026-09-30 lost $19.99 across 17 trades without any single day coming
-    # close. This is the rail that watches the trajectory instead of the day.
+                           f"{equity:.2f} equity", kind="daily_loss")
+    # Account drawdown, measured against the highest equity seen in the last
+    # ACCOUNT_DD_WINDOW_HOURS. The daily stop above watches REALISED PnL and
+    # resets at 00:00 UTC; this watches total equity, so it is the only rail
+    # that sees four open positions all underwater before any of them close.
     #
-    # The peak is persisted, so it survives restarts; load_state refuses to
-    # start on a corrupt file rather than silently handing back an empty one,
-    # which is what stops a lost state file from quietly resetting the mark
-    # and forgiving a drawdown already incurred.
-    # Measured against the highest of the last ACCOUNT_DD_LOOKBACK_DAYS
-    # OPENING balances, not an all-time high-water mark. The old mark was set
-    # on 09-27 and never came down, so the rail ratcheted: the longer the
-    # account sat below its best-ever day the less room it had, and it fired
-    # twice in six days while the account was flat to recovering.
+    # Rolling rather than per-day on instruction, because a reference that
+    # only moves when a day rolls can strand the account: the 10-13 halt ran
+    # two days against a 10-12 reference. Nothing older than the window
+    # survives in it, so the rail releases itself within a day no matter what.
     #
-    # The day-opens are recorded by roll_day. Until a few exist the current
-    # equity stands in, so a fresh state cannot halt itself on an empty
-    # history.
-    # The day-open reading is taken by record_day_open_equity, above every
-    # early return in this function -- not here, where a halted or
-    # fully-loaded pass would skip it.
-    opens = [float(x) for x in (state.get("day_open_equity") or []) if x]
-    ref = max(opens + [equity]) if opens else equity
+    # 10% is not the dead rail a one-day reference would be. Across the 3,193
+    # equity readings logged over 23 days it fires exactly once -- the
+    # 10-12/13 collapse at 10.85% -- and the next worst day is 4.97%.
+    if ACCOUNT_DD_HALT_PCT:
+        dd_pct, ref = drawdown_now(state, equity)
+        if ref > 0 and dd_pct >= ACCOUNT_DD_HALT_PCT:
+            return halt(state, f"account drawdown {dd_pct:.1f}% ({equity:.2f} "
+                               f"against a {ref:.2f} high over the last "
+                               f"{ACCOUNT_DD_WINDOW_HOURS:g}h), limit "
+                               f"{ACCOUNT_DD_HALT_PCT:g}%", kind="drawdown")
     # Still tracked, purely so the logs and alerts can say how far the account
     # is from its best. It no longer decides anything.
     if equity > float(state.get("equity_peak") or 0.0):
         state["equity_peak"] = equity
         save_state(state)
-    if ACCOUNT_DD_HALT_PCT and ref > 0:
-        dd_pct = (ref - equity) / ref * 100.0
-        if dd_pct >= ACCOUNT_DD_HALT_PCT:
-            return halt(state, f"account drawdown {dd_pct:.1f}% ({equity:.2f} "
-                               f"against a {ref:.2f} reference, the best of "
-                               f"the last {len(opens)} day-opens), limit "
-                               f"{ACCOUNT_DD_HALT_PCT:g}%")
     return None
 
 

@@ -33,6 +33,18 @@ def _i(name, default):
     return int(os.getenv(name, str(default)))
 
 
+def _b(name, default):
+    """Env override for a flag. Anything but an explicit no means yes.
+
+    Spelled out rather than bool(os.getenv(...)) because that reads "false"
+    as True, and a risk flag that silently inverts is worse than no override.
+    """
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v.strip().lower() not in ("0", "no", "false", "off", "")
+
+
 # ---- rule 1: what counts as a level ----------------------------------------
 # STRUCTURAL. Everything is measured in multiples of the asset's own 4h return
 # volatility. Raw percent cannot serve a memecoin and a major at once: the same
@@ -638,26 +650,91 @@ ACCOUNT_DD_HALT_PCT = _f("LEVELS_ACCOUNT_DD_HALT_PCT", 10.0)
 #     that day's opening balance 5.07%  -> a 10% limit NEVER fires
 #     best of the last 3 opens   7.46%  -> a 10% limit never fires, 2.5pt margin
 #
-# A one-day reference at 10% is a dead rail -- it has never come within half
-# the limit, and the worst single day (-5.07%) is already what the 5% realised
-# daily stop catches.
+# CHANGED 2026-10-15, on instruction: a rolling 24-HOUR window, sampled every
+# pass, replacing "the best of the last 3 day-opens".
 #
-# What is GIVEN UP, and it is worth being exact because I first wrote the
-# opposite here: a trailing reference cannot catch a slow grind, because the
-# reference falls with the account. A steady -6.66/day -- the rate that cost
-# $19.99 over the three days to 09-30 -- measures as 0.81% on day one and only
-# 3.13% by day thirty against a 3-day window. It never halts. Only an
-# all-time mark catches that shape, and an all-time mark is the ratchet we are
-# removing.
+# The old basis could strand the account. The reference only moved when a day
+# rolled, and a halted trader took no equity readings at all, so the window
+# stopped advancing exactly when it mattered -- the 2026-10-13 halt ran two
+# days against a 10-12 reference the account could no longer reach.
 #
-# So this rail now catches a FAST collapse (10% or worse inside three days,
-# which 10-11..10-13's -7.46% approached) and no longer catches a slow one.
-# The slow case is left to the operator reading the daily report, deliberately,
-# because the alternative is a rail that tightens forever.
+# A rolling window cannot do that. The reference is the highest equity seen in
+# the last ACCOUNT_DD_WINDOW_HOURS and nothing older survives in it, so the
+# rail releases itself within the window no matter what the account does.
 #
-# Set to 1 for a strictly daily reference, but tighten ACCOUNT_DD_HALT_PCT to
-# about 6% at the same time or the rail stops doing anything at all.
-ACCOUNT_DD_LOOKBACK_DAYS = _i("LEVELS_ACCOUNT_DD_LOOKBACK_DAYS", 3)
+# 10% is KEPT, and it is not the dead rail the old note here claimed. That
+# claim was measured on day-OPENS, which cannot see an intraday collapse.
+# Measured on the 3,193 equity readings actually logged across 23 days, a
+# rolling 24h rail at 10% fires exactly ONCE -- the 10-12/13 collapse, 10.85%
+# -- and never otherwise. The next worst day is 4.97%. Every limit from 5% to
+# 10% fires on that same single day; 4% fires on two. So 10% catches the one
+# genuine fast collapse with no false positive, and tightening toward 6% only
+# buys halting earlier inside that one event.
+#
+# What is still GIVEN UP, and it is worth being exact because the old note
+# first had this backwards: a trailing reference cannot catch a slow grind,
+# because the reference falls with the account. A steady -6.66/day -- the rate
+# that cost $19.99 over the three days to 09-30 -- never trips a 24h window.
+# Only an all-time mark catches that shape, and an all-time mark is the
+# ratchet being removed. The slow case is left to the operator reading the
+# daily report, and to LOSS_STREAK_TRIGGER below, which does see it.
+ACCOUNT_DD_WINDOW_HOURS = _f("LEVELS_ACCOUNT_DD_WINDOW_HOURS", 24.0)
+
+# Whether a halt clears itself once the condition that set it has passed.
+#
+# True, on instruction. Previously every halt waited for --resume, which is
+# why the 10-13 daily-loss halt was still blocking trading on 10-15: the day
+# rolled twice, realised_today reset to zero both times, and the flag stayed.
+#
+# Only a halt whose condition is RE-CHECKABLE releases itself -- the drawdown
+# rail and the daily loss stop. Both are bounded in time by construction, so
+# release is guaranteed: the drawdown reference ages out within
+# ACCOUNT_DD_WINDOW_HOURS, and realised_today resets at 00:00 UTC. Anything
+# else, including a halt set by hand, still needs --resume.
+#
+# What this gives up: no human looks before trading restarts. The protection
+# against that is that releasing does not open anything by itself -- entry
+# spacing, the per-coin cooldown and the loss-streak stand-down all still
+# apply, and every release sends an alert.
+HALT_AUTO_RELEASE = _b("LEVELS_HALT_AUTO_RELEASE", True)
+
+# Stand down for a while after a run of losing trades.
+#
+# The clearest pattern in the first 98 closed trades is that losses arrive in
+# day-sized clumps rather than spread out. Of 21 trading days, 9 were
+# all-loss and 6 were all-win; 10-07 was 0W/13L and 10-13 was 0W/12L. Within
+# that book, the expectancy of the NEXT trade collapses with the streak:
+#
+#     streak 0   n=23   mean +$3.28   52% win
+#     streak 1   n=11   mean -$1.23   27%
+#     streak 2   n= 8   mean +$0.76   38%
+#     streak 3   n= 5   mean -$3.50    0%
+#     streak 6+  n=42   mean -$2.28    7%
+#
+# Forty-two of 98 trades were opened while already six or more losses deep.
+#
+# 3 and 24h because that is the only pair that survived the whole screen.
+# Replaying the book, skipping any trade whose ENTRY fell inside a stand-down:
+#
+#     baseline          -$62.03   PF 0.73   22% win   98 trades
+#     3 losses / 24h    +$58.95   PF 1.76   41% win   41 trades
+#     4 losses / 12h    +$23.15   PF 1.19   31% win   58 trades
+#     4 losses /  6h     +$8.73   PF 1.06   29% win   62 trades
+#
+# Permutation test, holding every timestamp fixed and reassigning which PnL
+# landed where: 3L/24h p=0.0002, 4L/12h p=0.0028. Shuffled data still gains
+# about +$23 on average, because truncating any losing run helps -- so the
+# test matters, and the observed gain clears it. Out of sample, 3L/24h is the
+# ONLY variant that improves in both chronological halves (+16.89 -> +36.81
+# and -78.92 -> +6.29); 4L/12h makes the first half $1.50 worse.
+#
+# Read honestly: n=98 over 21 days in one mostly-falling regime, the replay
+# removes skipped trades without letting other candidates take the freed
+# slots, and 3/24h was chosen as the best of nine combinations tried. The
+# direction is well supported; the exact pair is partly fitted. Re-measure at
+# about 150 closes.
+LOSS_STREAK_TRIGGER = _i("LEVELS_LOSS_STREAK_TRIGGER", 3)
+LOSS_STREAK_COOLDOWN_HOURS = _f("LEVELS_LOSS_STREAK_COOLDOWN_HOURS", 24.0)
 # 450s, halved from 900 on 2026-09-19.
 #
 # The bot sends a marketable order when the trigger fires and refuses it if
