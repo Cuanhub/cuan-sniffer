@@ -1472,16 +1472,31 @@ def roll_day(state: Dict[str, Any]) -> bool:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if state.get("day") == today:
         return False
+    was = state.get("day")
     # Record what the account opened the new day at, for the drawdown
     # reference. Kept one longer than the lookback so the window is always
     # full, and appended BEFORE the counters reset so a crash mid-roll cannot
     # lose the reading.
+    #
+    # Only a reading taken ON the day being closed out is admitted. An
+    # unstamped or older reading is frozen -- a halted pass, a failed margin
+    # query, or a process that was down -- and appending it writes a figure
+    # the account never had. That is what happened across the 2026-10-13
+    # halt: the same pre-halt value was recorded as both the 10-14 and the
+    # 10-15 open. Skipping leaves the window one entry short, which
+    # `ref = max(opens + [equity])` already tolerates; duplicating pins the
+    # reference to a day that never existed and, if that day was a local
+    # high, the rail never releases it.
     opened_at = state.get("_equity_for_day_open")
-    if opened_at:
+    stamp = state.get("_equity_for_day_open_day")
+    if opened_at and stamp and stamp == was:
         hist = list(state.get("day_open_equity") or [])
         hist.append(float(opened_at))
         state["day_open_equity"] = hist[-(ACCOUNT_DD_LOOKBACK_DAYS + 1):]
-    was = state.get("day")
+    elif opened_at:
+        print(f"[LEVELS_LIVE] no equity reading taken on {was} "
+              f"(last was {stamp or 'unstamped'}) -- "
+              f"not recording a day-open for it")
     state.update({"day": today, "opened_today": 0, "realised_today": 0.0})
     save_state(state)
     print(f"[LEVELS_LIVE] new UTC day {today} (was {was}) -- "
@@ -1863,8 +1878,42 @@ def reconcile(backend, state: Dict[str, Any]) -> None:
     save_state(state)
 
 
+def record_day_open_equity(backend, state: Dict[str, Any]):
+    """Read equity and stamp it as today's running day-open candidate.
+
+    Runs before every one of preflight's early returns, because the reading
+    is bookkeeping and not a trading decision. It used to live further down,
+    below the halted check and below the concurrency and day-count caps, so
+    any pass that returned early left the reading untouched -- and a halted
+    trader returns early on EVERY pass. From the 2026-10-13 halt to 10-15 the
+    trader took no equity readings at all, and roll_day re-appended the same
+    frozen pre-halt figure as the 10-14 and 10-15 day-opens. The window ends
+    up holding one real day and copies of it, which is worst precisely when
+    an accurate picture of the account matters most. Holding MAX_CONCURRENT
+    positions across midnight did the same thing for the same reason.
+
+    Returns (equity, used, avail), or None if the venue could not be read.
+    Costs one margin query on passes that previously made none; preflight
+    runs once per pass, against a budget of about 31 calls.
+    """
+    ms = backend.get_margin_summary()
+    if ms is None:
+        return None
+    equity, used, avail = ms
+    if equity > 0:
+        # The last equity seen before midnight is the next day's opening
+        # balance. Stamped with the date it was taken so roll_day can tell a
+        # fresh reading from one frozen by a halt or a failed query, and skip
+        # rather than duplicate.
+        state["_equity_for_day_open"] = equity
+        state["_equity_for_day_open_day"] = datetime.now(
+            timezone.utc).strftime("%Y-%m-%d")
+    return ms
+
+
 def preflight(backend, state: Dict[str, Any]):
     """Reasons not to open anything this pass. Returns a string, or None."""
+    ms = record_day_open_equity(backend, state)
     if state.get("halted"):
         return f"halted: {state.get('halt_reason', '')}"
     owned = state.get("owned", {})
@@ -1877,7 +1926,6 @@ def preflight(backend, state: Dict[str, Any]):
                 f"max {MAX_CONCURRENT}")
     if MAX_NEW_PER_DAY and state.get("opened_today", 0) >= MAX_NEW_PER_DAY:
         return f"opened {state['opened_today']} today, max {MAX_NEW_PER_DAY}"
-    ms = backend.get_margin_summary()
     if ms is None:
         return "margin query failed -- refusing to size blind"
     equity, used, avail = ms
@@ -1905,10 +1953,9 @@ def preflight(backend, state: Dict[str, Any]):
     # The day-opens are recorded by roll_day. Until a few exist the current
     # equity stands in, so a fresh state cannot halt itself on an empty
     # history.
-    # The last equity seen before midnight is the next day's opening balance.
-    # Recorded here because preflight is the only place that has read it, and
-    # roll_day runs before preflight on the pass that crosses the date.
-    state["_equity_for_day_open"] = equity
+    # The day-open reading is taken by record_day_open_equity, above every
+    # early return in this function -- not here, where a halted or
+    # fully-loaded pass would skip it.
     opens = [float(x) for x in (state.get("day_open_equity") or []) if x]
     ref = max(opens + [equity]) if opens else equity
     # Still tracked, purely so the logs and alerts can say how far the account
