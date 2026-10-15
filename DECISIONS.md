@@ -415,3 +415,77 @@ The honest limit: the admitted cohort still averages -0.116R. The veto roughly
 halves the loss on this sample, it does not make the strategy positive on it.
 Treating it as proof of edge rather than as a filter on a negative-expectancy
 sample would be the mistake. It stays a veto; it still does not touch sizing.
+
+## 2026-10-15 -- why trades win and lose: it is the day, not the trade
+
+A deep dive over the 98 closed trades from 09-20 to 10-14, asked for directly.
+The answer is not the one anybody wants, so the arithmetic first.
+
+THE GAP IS SMALL. 22W/76L, net -$62.03. Average win +$7.77 against an average
+loss of -$3.07 is a payoff ratio of 2.54:1, so breakeven is a 28.3% win rate
+and we run at 22.4%. Turning SIX of the 76 losses into wins breaks even. This
+is not a broken strategy; it is a strategy 6 points of win rate short.
+
+NOTHING ABOUT THE TRADE PREDICTS ITS OUTCOME. Six trade-level features
+screened on R, permutation at 20,000 draws, chronological halves required to
+agree in sign:
+
+  stop distance %   p=0.80   no signal
+  planned rr        p=0.76   no signal
+  level hold rate   p=0.75   no signal  (third time this has failed)
+  level touches     p=0.74   no signal
+  entry hour (UTC)  p=0.93   no signal, halves flip +1.10 / -1.30
+  position size     p=0.017  SURVIVED, and is a CONFOUND -- see below
+
+Two leads died under test that looked strong in a bucket view. Stops under 1%
+appeared much worse (n=17, 12% win, -0.72R) and do not survive. The 08:00-11:59
+UTC window is 0W/13L across five distinct days -- so not a single-day artefact
+-- and still does not survive.
+
+The size result is the calendar. Position size steps from a ~$118 median to
+~$195 on 10-05, when margin per trade went 3% -> 5%, and that is exactly when
+the losing stretch starts. Stratified WITHIN each day, big-for-its-day versus
+small-for-its-day is -0.37R at p=0.36. There is no size effect; there is a
+before-and-after. Reporting this as "trade smaller" would have been wrong.
+
+WHAT DOES PREDICT IS THE DAY. Mean R per day is bimodal, with almost nothing
+in between:
+
+  good days  +1.12 to +5.47R   (09-20, 09-22, 09-24, 09-26, 09-30, 10-03,
+                                10-05, 10-06, 10-10, 10-11)
+  bad days   -1.07 to -1.22R   (09-23, 09-28, 09-29, 10-01, 10-04, 10-07,
+                                10-12, 10-13, 10-14)
+
+A -1.1R day is not a day of poor selection. It is every trade stopping out.
+Of 21 trading days, 9 were all-loss and 6 all-win. 10-07 was 0W/13L and 10-13
+was 0W/12L, both with the entry-spacing and concurrency rails working
+correctly. The all-loss days cost -$148.85; the all-win days made +$104.79.
+
+So the lever is PARTICIPATION, not SELECTION, and that is what the
+loss-streak stand-down shipped today is. A perfect day-oracle would make
++$116.21; the 3-loss/24h rule captures +$58.95 of it without foresight.
+
+ALSO TESTED AND DEAD -- market-wide crowding as a regime filter, a genuinely
+new hypothesis against the collected context rather than a re-run:
+
+  median basis across the universe at entry     p=0.65, halves flip
+  percent of the universe trading rich at entry p=0.51, halves flip
+
+Only 67 of 98 trades match an hour with 8+ coins of context, because context
+is written per firing episode rather than per universe sweep, so the
+cross-sectional measure is thin. Worth re-testing if context collection ever
+covers the full sweep.
+
+LOSSES RUN 1.16R, NOT 1.0R. 74 of 76 exceed the planned risk, median 1.10R,
+costing $23.95 beyond 1R. This is fees plus slippage at a median 1.76% stop,
+not a leak and not fixable by better execution -- at $176 notional a taker
+round trip is about $0.16 against a ~$3 risk. It is an argument for fewer and
+wider trades, which is the same argument as everything above.
+
+ON THE STATED GOAL, plainly: "a few percent every day, compounded" is not the
+shape of this strategy and the data should not be read as promising it. The
+system wins on a minority of days and loses on the rest; the edge, if it
+holds, shows up over a month. The 3L/24h replay is +$58.95 over 25 days on a
+~$750 account, about +0.31%/day -- but that is a fitted rule measured on one
+regime, and the honest expectation is positive expectancy with drawdowns, not
+a daily yield.
