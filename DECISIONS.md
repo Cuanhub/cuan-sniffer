@@ -364,3 +364,54 @@ LIT pattern of repeated entries into a falling market. The per-coin cooldown
 
 Rails unchanged and now the binding constraint: 4 concurrent, 20/day, 5% daily
 loss stop, 10% account drawdown halt from the high-water mark.
+
+## 2026-10-15 -- the basis veto re-measured: it holds, and nothing joined it
+
+The veto shipped on 2026-10-13 (c84cf27) against a note in config.py that it
+was "held as a veto to be re-measured, not as a sizing input", with the
+re-measure due once the sample reached about 500. The screen is now
+`tools/screen_context.py`, so it stops being an ad-hoc query.
+
+Sample: 374 resolved episodes carrying a venue context, 10-01 to 10-08, 59
+coins, up from 248. It is NOT 500 and will not be for another week: an outcome
+needs `close_after_168h_pct`, so resolution runs seven days behind collection.
+1,460 episodes have context; 758 of them have no outcome yet. The screenable
+set grows about 55/day. The earlier 500 projection counted raw context rows and
+was wrong about which number gates the screen.
+
+basis_bps -- mark against oracle, in basis points -- SURVIVES, more strongly
+than before:
+
+  low half (at or below the stratified median)   mean r -0.133   n=189
+  high half                                      mean r -0.644   n=185
+  gap -0.511, permutation p = 0.0005 (was 0.0035 at n=248)
+  out of sample: first half -0.630, second -0.263 -- same sign
+  Q1 -7.9bps: -0.243   Q2 -0.8bps: -0.015
+  Q3 +3.5bps: -0.564   Q4 +11.4bps: -0.723
+
+The threshold sweep puts the optimum exactly at ENTRY_MAX_BASIS_BPS = 0.0:
+admitting basis <= 0 keeps 42% of candidates at -0.116R and leaves -0.583R in
+the rejected half. That cut was chosen on the 248-row sample and was not
+refitted here, which is the part worth trusting.
+
+Verified live rather than assumed: the veto has blocked 6 entries, and all 20
+fills since it went live were basis-negative (mean -5.6bps). The two positive
+readings in the ledger, STRK +10.8 and CHIP +2.4, are both 10-12 fills, before
+the veto existed. The context fetch has never failed, so the fail-open branch
+has never been taken.
+
+Nothing else cleared the screen:
+
+  day_ntl_vlm      p=0.098  same sign both halves, but Q2 is the worst bucket
+                            (-0.823) so it is not monotone -- watch, not act
+  vs_prev_day_pct  p=0.266  SIGN FLIPS (-0.400 then +0.422)
+  funding_bps      p=0.272  SIGN FLIPS. Funding is not the crowding signal;
+                            basis is, and they are not the same measurement
+  oi_notional_usd  p=0.451  tracks coin size, not crowding
+  oi_to_volume     p=0.671  SIGN FLIPS
+  impact_spread    p=0.731  Q4 is bad (-0.614) but the gap is noise
+
+The honest limit: the admitted cohort still averages -0.116R. The veto roughly
+halves the loss on this sample, it does not make the strategy positive on it.
+Treating it as proof of edge rather than as a filter on a negative-expectancy
+sample would be the mistake. It stays a veto; it still does not touch sizing.
