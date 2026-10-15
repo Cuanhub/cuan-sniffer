@@ -45,8 +45,16 @@ SEND_BACKOFF_SEC = 1.0
 _last_sent: Dict[str, float] = {}
 
 
-def _post(url: str, payload: dict):
-    return requests.post(url, json=payload, timeout=TIMEOUT_SEC)
+def _post(url: str, payload: dict, timeout: float = TIMEOUT_SEC):
+    """`timeout` is a parameter because the two callers need different ones.
+
+    TIMEOUT_SEC (10s) is right for sendMessage, which answers immediately and
+    is called from inside the trading pass. A getUpdates long-poll deliberately
+    HANGS for up to its own timeout, so a 10s read timeout aborts every quiet
+    poll before Telegram ever answers -- which is exactly what it did once the
+    409s cleared: a log of nothing but "Read timed out".
+    """
+    return requests.post(url, json=payload, timeout=timeout)
 
 
 # Replaced in tests so nothing leaves the machine.
@@ -166,7 +174,9 @@ def get_updates(offset: int = 0, timeout: int = POLL_TIMEOUT_SEC):
     if offset:
         payload["offset"] = offset
     try:
-        resp = _transport(url, payload)
+        # Read timeout must outlast the long-poll it is waiting on, with
+        # enough margin for Telegram to actually reply at the end of it.
+        resp = _transport(url, payload, timeout=timeout + 10)
         body = resp.json()
     except Exception as e:
         print(f"[CONTROL] poll failed: {str(e)[:160]}")

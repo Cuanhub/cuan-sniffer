@@ -74,9 +74,24 @@ class Polling(unittest.TestCase):
         os.environ.update(self._env)
 
     def poll(self, body, offset=0):
-        with mock.patch.object(notify, "_transport",
-                               lambda u, p: FakeResp(body)):
-            return notify.get_updates(offset)
+        seen = {}
+
+        def fake(u, p, timeout=None):
+            seen["timeout"] = timeout
+            return FakeResp(body)
+
+        with mock.patch.object(notify, "_transport", fake):
+            out = notify.get_updates(offset)
+        self.seen = seen
+        return out
+
+    def test_the_read_timeout_outlasts_the_long_poll(self):
+        """A 10s read timeout against a 25s long-poll aborts every quiet poll
+        before Telegram answers. Observed as a log of nothing but "Read timed
+        out" the moment the 409 conflict cleared."""
+        self.poll({"ok": True, "result": []})
+        self.assertGreater(self.seen["timeout"], notify.POLL_TIMEOUT_SEC,
+                           "the HTTP read timeout must outlast the poll")
 
     def test_messages_are_parsed(self):
         ups, nxt, ok = self.poll({"ok": True, "result": [
@@ -114,7 +129,7 @@ class Polling(unittest.TestCase):
             ([], 2, False))
 
     def test_a_transport_failure_is_not_fatal(self):
-        def boom(u, p):
+        def boom(u, p, timeout=None):
             raise OSError("down")
         with mock.patch.object(notify, "_transport", boom):
             self.assertEqual(notify.get_updates(5), ([], 5, False))
