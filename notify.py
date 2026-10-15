@@ -139,12 +139,20 @@ POLL_TIMEOUT_SEC = 25
 
 
 def get_updates(offset: int = 0, timeout: int = POLL_TIMEOUT_SEC):
-    """Fetch pending messages. Returns (updates, next_offset).
+    """Fetch pending messages. Returns (updates, next_offset, ok).
 
     `updates` is a list of dicts with update_id, chat_id, user_id, text.
-    Returns ([], offset) on any failure: an unreachable Telegram must not
-    raise into a control loop, for the same reason send() never raises into
-    the trading loop.
+    Returns ([], offset, False) on any failure: an unreachable Telegram must
+    not raise into a control loop, for the same reason send() never raises
+    into the trading loop.
+
+    `ok` exists because a caller cannot otherwise tell "no messages" from
+    "the poll failed" -- both are an empty list -- and the two need opposite
+    responses. Telegram answers a second concurrent getUpdates with 409 while
+    the first is still hanging, so retrying a failure quickly makes the loop
+    collide with its OWN open long-poll and 409 forever. Observed doing
+    exactly that on first install. The caller must back off longer than
+    `timeout` on a failure.
 
     The caller must advance `offset` past what it has handled, because
     Telegram re-delivers anything unacknowledged. Not advancing it on a
@@ -152,7 +160,7 @@ def get_updates(offset: int = 0, timeout: int = POLL_TIMEOUT_SEC):
     """
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
-        return [], offset
+        return [], offset, False
     url = f"https://api.telegram.org/bot{token}/getUpdates"
     payload = {"timeout": timeout, "allowed_updates": ["message"]}
     if offset:
@@ -162,10 +170,10 @@ def get_updates(offset: int = 0, timeout: int = POLL_TIMEOUT_SEC):
         body = resp.json()
     except Exception as e:
         print(f"[CONTROL] poll failed: {str(e)[:160]}")
-        return [], offset
+        return [], offset, False
     if not body.get("ok"):
         print(f"[CONTROL] poll refused: {str(body)[:160]}")
-        return [], offset
+        return [], offset, False
 
     out = []
     nxt = offset
@@ -182,7 +190,7 @@ def get_updates(offset: int = 0, timeout: int = POLL_TIMEOUT_SEC):
         if text:
             out.append({"update_id": uid, "chat_id": chat,
                         "user_id": user, "text": text})
-    return out, nxt
+    return out, nxt, True
 
 
 def authorised(chat_id: str) -> bool:

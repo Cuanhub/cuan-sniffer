@@ -412,8 +412,14 @@ def main() -> int:
     print(f"[CONTROL] listening, offset {offset}, "
           f"venue={'yes' if backend else 'no'}")
 
+    # Longer than notify.POLL_TIMEOUT_SEC on purpose. Telegram answers a
+    # second concurrent getUpdates with 409 while the first is still hanging,
+    # so a short retry after a failure collides with this process's own open
+    # long-poll and 409s forever -- which is what it did on first install.
+    fail_backoff = notify.POLL_TIMEOUT_SEC + 5
+
     while True:
-        updates, nxt = notify.get_updates(offset)
+        updates, nxt, ok = notify.get_updates(offset)
         for u in updates:
             if not notify.authorised(u["chat_id"]):
                 # Not answered on purpose. Replying would confirm to a
@@ -438,7 +444,7 @@ def main() -> int:
             write_json(OFFSET, {"offset": offset})
         if args.once:
             return 0
-        time.sleep(1)
+        time.sleep(1 if ok else fail_backoff)
 
 
 if __name__ == "__main__":

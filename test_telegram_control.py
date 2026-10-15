@@ -79,7 +79,7 @@ class Polling(unittest.TestCase):
             return notify.get_updates(offset)
 
     def test_messages_are_parsed(self):
-        ups, nxt = self.poll({"ok": True, "result": [
+        ups, nxt, ok = self.poll({"ok": True, "result": [
             {"update_id": 7, "message": {"text": "/status",
                                          "chat": {"id": 99},
                                          "from": {"id": 42}}}]})
@@ -87,30 +87,43 @@ class Polling(unittest.TestCase):
         self.assertEqual(ups[0]["text"], "/status")
         self.assertEqual(ups[0]["chat_id"], "99")
         self.assertEqual(nxt, 8, "offset must advance past what was handled")
+        self.assertTrue(ok)
 
     def test_the_offset_advances_even_past_messages_with_no_text(self):
         """Telegram re-delivers anything unacknowledged, so a photo in the
         chat must not wedge the loop forever."""
-        ups, nxt = self.poll({"ok": True, "result": [
+        ups, nxt, ok = self.poll({"ok": True, "result": [
             {"update_id": 11, "message": {"chat": {"id": 1}}}]})
         self.assertEqual(ups, [])
         self.assertEqual(nxt, 12)
+        self.assertTrue(ok, "an empty result is a successful poll")
 
-    def test_a_refusal_is_not_fatal(self):
-        ups, nxt = self.poll({"ok": False, "description": "nope"}, offset=5)
-        self.assertEqual((ups, nxt), ([], 5))
+    def test_a_refusal_reports_failure_so_the_caller_backs_off(self):
+        """Telegram 409s a second concurrent getUpdates while the first still
+        hangs, so a caller that retries fast collides with its own open poll
+        and 409s forever. It did exactly that on first install, which is why
+        `ok` exists -- an empty list alone cannot tell the two apart."""
+        self.assertEqual(self.poll({"ok": False, "description": "nope"},
+                                   offset=5), ([], 5, False))
+
+    def test_a_409_conflict_reports_failure(self):
+        self.assertEqual(
+            self.poll({"ok": False, "error_code": 409,
+                       "description": "Conflict: terminated by other "
+                                      "getUpdates request"}, offset=2),
+            ([], 2, False))
 
     def test_a_transport_failure_is_not_fatal(self):
         def boom(u, p):
             raise OSError("down")
         with mock.patch.object(notify, "_transport", boom):
-            self.assertEqual(notify.get_updates(5), ([], 5))
+            self.assertEqual(notify.get_updates(5), ([], 5, False))
 
     def test_no_token_means_no_poll(self):
         os.environ.pop("TELEGRAM_BOT_TOKEN", None)
         with mock.patch.object(notify, "_transport",
                                mock.Mock(side_effect=AssertionError("called"))):
-            self.assertEqual(notify.get_updates(3), ([], 3))
+            self.assertEqual(notify.get_updates(3), ([], 3, False))
 
 
 class Parsing(unittest.TestCase):
@@ -414,3 +427,12 @@ class Rendering(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheLoopBacksOffRatherThanFightingItself(unittest.TestCase):
+    def test_the_failure_backoff_exceeds_the_poll_window(self):
+        """Pinned as a number, because getting this wrong is not a crash --
+        it is a log full of 409s and a control channel that never answers."""
+        src = open("tools/telegram_control.py").read()
+        self.assertIn("fail_backoff = notify.POLL_TIMEOUT_SEC + 5", src)
+        self.assertIn("time.sleep(1 if ok else fail_backoff)", src)
