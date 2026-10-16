@@ -69,7 +69,7 @@ from research.levels.config import (                                  # noqa: E4
     DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
-    ENTRY_MAX_BREAK_FRAC, ENTRY_MAX_BASIS_BPS,
+    ENTRY_MAX_BREAK_FRAC, ENTRY_MAX_BASIS_BPS, ENTRY_MAX_PULL_OVER_RUN,
     COIN_REENTRY_COOLDOWN_HOURS, ACCOUNT_DD_HALT_PCT,
     ACCOUNT_DD_WINDOW_HOURS, HALT_AUTO_RELEASE,
     LOSS_STREAK_TRIGGER, LOSS_STREAK_COOLDOWN_HOURS,
@@ -175,12 +175,38 @@ def save_state(s: Dict[str, Any]) -> None:
     tmp.replace(STATE_PATH)
 
 
+# One list, read by log_trade and by the startup migration. New columns go on
+# the END: widen_header_if_needed migrates positionally and refuses a header
+# that is not a prefix of this, rather than guessing.
+TRADE_LOG_COLS = ["ts_utc", "action", "coin", "episode_id", "level_price",
+                  "entry", "stop", "tp", "size_usd", "size_coin", "risk_usd",
+                  "rr", "hold_rate", "touches", "result", "detail",
+                  "pull_over_run"]
+
+
+def migrate_trade_log() -> None:
+    """Bring live_trades.csv up to TRADE_LOG_COLS. Called ONCE, at startup.
+
+    Not from log_trade: widen_header_if_needed reads the whole file before it
+    can tell whether anything needs doing, the trade log is 54MB and 429k rows
+    at 0.43s a read, and log_trade fires hundreds of times a pass for skips.
+    That would have cost minutes per pass to discover there was nothing to do.
+    """
+    try:
+        if storage.widen_header_if_needed(TRADE_LOG, TRADE_LOG_COLS):
+            print(f"[LEVELS_LIVE] trade log widened to "
+                  f"{len(TRADE_LOG_COLS)} columns")
+    except Exception as e:
+        # A failed migration must not stop the trader starting. log_trade
+        # writes the wider row either way; the worst case is a trailing
+        # column the old header does not name, which readers tolerate.
+        print(f"[LEVELS_LIVE] trade log migration skipped: {str(e)[:160]}")
+
+
 def log_trade(row: Dict[str, Any]) -> None:
     import csv
     TRADE_LOG.parent.mkdir(parents=True, exist_ok=True)
-    cols = ["ts_utc", "action", "coin", "episode_id", "level_price", "entry", "stop", "tp",
-            "size_usd", "size_coin", "risk_usd", "rr", "hold_rate", "touches",
-            "result", "detail"]
+    cols = TRADE_LOG_COLS
     is_new = not TRADE_LOG.exists()
     with open(TRADE_LOG, "a", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
@@ -593,6 +619,7 @@ def main():
     signal.signal(signal.SIGINT, _sig)
 
     state = load_state()
+    migrate_trade_log()
     roll_day(state)
     if args.status:
         print(json.dumps(state, indent=2))
@@ -1010,10 +1037,31 @@ def persist_traded_episode(ep: Dict[str, Any]) -> bool:
         return False
 
 
+def pull_over_run(ep: Dict[str, Any]) -> Optional[float]:
+    """How much of the run that created the level has been given back.
+
+    pull_sigma / run_sigma, both already measured by the scanner, so this
+    costs nothing at entry. Returns None when either is missing or the run is
+    non-positive -- a veto that cannot read its input must not invent a
+    refusal.
+    """
+    def f(k):
+        try:
+            v = float(ep.get(k))
+        except (TypeError, ValueError):
+            return None
+        return v
+    run, pull = f("run_sigma"), f("pull_sigma")
+    if run is None or pull is None or run <= 0:
+        return None
+    return pull / run
+
+
 def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float,
                         tp: float, level: float = 0.0,
                         bars_1h: Optional[List[Dict[str, Any]]] = None,
-                        ctx: Optional[Dict[str, Any]] = None):
+                        ctx: Optional[Dict[str, Any]] = None,
+                        ep: Optional[Dict[str, Any]] = None):
     """Refuse to fire unless the live price is where the plan assumed.
 
     execute_entry sends a MARKETABLE IOC at the current price -- it ignores the
@@ -1069,6 +1117,21 @@ def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float,
                 return None, (f"perp is {basis:+.1f}bps rich to oracle "
                               f"(mark {mark:.6g} vs {oracle:.6g}, max "
                               f"{ENTRY_MAX_BASIS_BPS:+.1f}) -- longs are paying up")
+    # How much of the run that created this level has already been given back.
+    # PULL_SIGMA_MIN demands a minimum pullback and never capped it against
+    # the run, so a level tested after surrendering most of its run passed
+    # every gate. Across 492 episodes the probability of reaching target falls
+    # from 42.9% to 9.1% as this ratio rises, and the stop rate climbs from
+    # 76.5% to 94.9% -- holding the day and the reward/risk fixed.
+    #
+    # Abstains when either leg is missing, for the same reason the basis veto
+    # does: an unreadable input is not evidence of a bad trade.
+    if ENTRY_MAX_PULL_OVER_RUN > 0 and ep is not None:
+        por = pull_over_run(ep)
+        if por is not None and por > ENTRY_MAX_PULL_OVER_RUN:
+            return None, (f"pullback is {por:.2f} of the run that made the "
+                          f"level (max {ENTRY_MAX_PULL_OVER_RUN:.2f}) -- the "
+                          f"run is gone, this is distribution not a dip")
     if ref >= tp:
         return None, f"price {ref:.6g} is already at or above the target {tp:.6g}"
     live_rr = (tp - ref) / (ref - stop)
@@ -1180,12 +1243,13 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         ref, why = entry_is_actionable(backend, coin, entry, stop, tp,
                                        level=g("level_price"),
                                        bars_1h=bars1h if armed else None,
-                                       ctx=(ctx_cache or {}).get(coin.upper()))
+                                       ctx=(ctx_cache or {}).get(coin.upper()),
+                                       ep=ep)
         if ref is None:
             log_trade({"ts_utc": now_iso(), "action": "skip", "coin": coin,
                        "episode_id": ep.get("episode_id", ""), "entry": entry,
                        "stop": stop, "tp": tp, "result": "not_actionable",
-                       "detail": why})
+                       "detail": why, "pull_over_run": pull_over_run(ep)})
             print(f"[LEVELS_LIVE] skip {coin}: {why}")
             return Outcome()
         entry = ref
@@ -1198,6 +1262,7 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     szi = size_from_stop(equity, entry, stop, available, venue_max_leverage=vmax)
     size_usd = szi["size_usd"]
     row = {"ts_utc": now_iso(), "coin": coin, "episode_id": ep.get("episode_id", ""),
+           "pull_over_run": pull_over_run(ep),
            "level_price": g("level_price"), "entry": entry, "stop": stop, "tp": tp,
            "size_usd": round(size_usd, 2), "risk_usd": round(szi["risk_usd"], 2),
            "rr": g("suggested_rr"), "hold_rate": g("level_hold_rate"),

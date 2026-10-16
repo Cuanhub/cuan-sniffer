@@ -34,11 +34,23 @@ def isolated_runtime_files(tmp_path, monkeypatch):
     -10.00 on the live account, where the daily loss stop would have counted
     it. Redirecting per-test was the arrangement that allowed that; this is
     autouse so the next test cannot opt out by not knowing.
+
+    This covered the trader's two paths and MISSED storage.DATA_DIR, which is
+    how episodes.csv acquired four rows for the coins AAA, BBB, CCC and DDD --
+    test fixture names, not perps; the venue has 234 and none of them is in
+    it. They carried no detected_at_utc and never resolved, so the scanner's
+    outcome resolver retried them on every pass forever: 3,630 failed
+    candleSnapshot fetches per coin, about 14,500 wasted venue requests,
+    found in the 2026-10-16 audit. Any module that writes into the data
+    directory has to be redirected here, not just the ones that were doing it
+    at the time.
     """
     import tools.live_levels_trader as trader
+    from research.levels import storage
 
     monkeypatch.setattr(trader, "STATE_PATH", tmp_path / "_live_state.json")
     monkeypatch.setattr(trader, "TRADE_LOG", tmp_path / "live_trades.csv")
+    monkeypatch.setattr(storage, "DATA_DIR", tmp_path / "data")
 
 
 @pytest.fixture(autouse=True)

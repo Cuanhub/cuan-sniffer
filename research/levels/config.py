@@ -331,6 +331,54 @@ ENTRY_MAX_BREAK_FRAC = _f("LEVELS_ENTRY_MAX_BREAK_FRAC", 1.0)
 # days behind collection, and the screenable set grows about 55/day.
 ENTRY_MAX_BASIS_BPS = _f("LEVELS_ENTRY_MAX_BASIS_BPS", 0.0)
 
+# How much of the run that CREATED the level may have been given back by the
+# time the level is tested. pull_sigma / run_sigma.
+#
+# PULL_SIGMA_MIN above requires a MINIMUM pullback -- the setup needs price to
+# come back to the level at all -- and nothing ever capped it relative to the
+# run. A level tested after giving back 10% of its run is a dip. One tested
+# after giving back 80% is being tested by distribution, and the run that made
+# the level is gone. This is the falling knife, measured.
+#
+# On 492 episodes from 2026-09-29 to 10-08, the only window where
+# suggested_rr means what it means today (the resistance ladder, f83783e,
+# redefined it on 09-28 and median rr jumped 0.75 -> 2.98):
+#
+#     pull/run   P(hit TP)   P(stop)   mean R
+#       0.10       42.9%      76.5%    -0.041
+#       0.24       37.8%      87.8%    -0.433
+#       0.38       31.3%      89.9%    -0.096
+#       0.55       20.4%      93.9%    -0.383
+#       0.81        9.1%      94.9%    -0.793
+#
+# Shuffled within (day x rr-quintile) cells -- so it cannot win by being a
+# good day or by having a distant target -- the gap is -18.9pp on P(hit TP)
+# at p = 0.0000, and -0.387R at p = 0.0185. Measuring on P(hit TP) rather
+# than on R is the point: near_sigma, pivots_per_touch and bars_since_touch
+# all move R hard and move P(hit TP) not at all (p = 0.95, 0.71, 0.69). They
+# correlate with rr, and a bigger target is a bigger number of R per win
+# without being any more likely. That is units, not edge.
+#
+# 0.60 rather than the 0.40 where separation is sharpest. On the episode
+# sample 0.60 keeps 74% at -0.226R against a -0.349R baseline, where 0.40
+# keeps 53% at -0.180R. But live candidates since 10-13 have a MEDIAN
+# pull/run of 0.70 against 0.38 across the sample, so 0.40 would reject about
+# 89% of them and 0.60 rejects about 68%. 0.60 cuts the extreme tail without
+# becoming a stand-down by another name.
+#
+# What is NOT established: this is 492 SIMULATED episodes -- suggested
+# entry/stop/tp applied to forward bars, no fees and no slippage -- over ten
+# days of one falling regime. Only 33 of the 98 real trades could be matched
+# to a pull/run, and their terciles are non-monotone (-0.287R, +0.453R,
+# -0.662R) at n=11 each: too thin to confirm or to refute. Those 33 cluster
+# at 0.47-0.93, which says the live system has been selecting the worst part
+# of this distribution, and is also why the real book cannot test the rest of
+# it. Re-measure against real fills once the ledger has 100+ closes carrying
+# this field.
+#
+# Set to 0 to switch the veto off entirely.
+ENTRY_MAX_PULL_OVER_RUN = _f("LEVELS_ENTRY_MAX_PULL_OVER_RUN", 0.60)
+
 # How many resistance rungs above price the target may choose between.
 #
 # 3, which is what call.py already displayed as its ladder -- this only makes
