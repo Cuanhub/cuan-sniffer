@@ -70,7 +70,12 @@ MIN_TOUCHES_DETECT = _i("LEVELS_MIN_TOUCHES_DETECT", 2)  # GUESSED
 # against 0.92 for skips, and fewer tests (10.7 vs 12.2). Both point the wrong
 # way, so filtering on them costs takes and buys nothing. Kept for display and
 # for the record, not for gating.
-MIN_HOLD_RATE = _f("LEVELS_MIN_HOLD_RATE", 0.90)     # display only
+# NOT a constant any more: nothing read it, so a dial that looked live was
+# not. The reasoning above is kept because it is the record of why hold rate
+# does not gate anything, and it has since survived three more attempts --
+# 2026-10-13 on live trades (identical average PnL, p=0.99), and twice on
+# 2026-10-15, where its apparent 100%-positive top quintile turned out to be
+# a tie-ordering artefact in the screening harness, not a signal.
 MIN_TOUCHES = _i("LEVELS_MIN_TOUCHES", 8)            # display only
 
 # ---- when is the level live -------------------------------------------------

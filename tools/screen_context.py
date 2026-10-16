@@ -155,8 +155,22 @@ def permutation_p(rows: Sequence[Dict[str, Any]], feat: str, perms: int,
 
 def quartile_table(rows: Sequence[Dict[str, Any]], feat: str
                    ) -> List[Tuple[int, float, float, float]]:
-    usable = sorted((r for r in rows if r.get(feat) is not None),
-                    key=lambda r: r[feat])
+    """Mean outcome by quartile of `feat`, for reading the SHAPE of an effect.
+
+    Ties are broken at random, not left to the stable sort. load() returns
+    rows in time order, so a stable sort puts tied feature values in
+    chronological order -- and the regime drifts hard enough across this
+    sample that the buckets then separate by DATE rather than by the feature.
+    funding_bps is 75% tied at 0.1250, because Hyperliquid pins funding at its
+    base rate, so three quarters of that table was reading the calendar.
+    Caught on 2026-10-16 by test_ties_are_not_ordered_by_outcome.
+
+    The p-values are not affected: split_mean_gap compares against a median
+    rather than ranking, so tied values all land on the same side of it.
+    """
+    usable = [r for r in rows if r.get(feat) is not None]
+    random.Random(0xC0FFEE).shuffle(usable)
+    usable.sort(key=lambda r: r[feat])
     if len(usable) < 8:
         return []
     n = len(usable)

@@ -59,6 +59,14 @@ TIMEFRAMES = ("4h", "1h")
 # matters is the user's call to make, not mine to pre-empt.
 STALE_TOUCH_BARS = 120
 
+# How far back the flip classifier looks when asking how long price was capped
+# under a level. Deliberately its OWN constant and not VOL_LOOKBACK, which it
+# happens to equal: one is "how many bars does a volatility estimate need",
+# the other is "how much history describes this level's behaviour". Wiring the
+# second to the first would make a change to the volatility lookback silently
+# reclassify every flipped resistance.
+CAPPED_LOOKBACK_BARS = 120
+
 # Two levels within this distance are the same level
 CLUSTER_MERGE_SIGMA = 0.5
 
@@ -202,7 +210,7 @@ def _candidates_for(coin: str, bars, tf: str,
                     ctx: Optional[Dict[str, Dict[str, Any]]] = None
                     ) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
-        if len(bars) < 120:
+        if len(bars) < C.VOL_LOOKBACK:
             return out
         i = len(bars) - 1
         sigma = log_sigma(bars, i)
@@ -294,7 +302,7 @@ def _candidates_for(coin: str, bars, tf: str,
             # swing_low while having capped price for 95 of the last 120 bars,
             # last only 12 bars ago. Time spent under the level is the measure
             # that actually separates the two.
-            look = bars[max(0, i - 120):i + 1]
+            look = bars[max(0, i - CAPPED_LOOKBACK_BARS):i + 1]
             capped = sum(1 for x in look if x["c"] < L.price)
             last_capped = max((k for k, x in enumerate(look) if x["c"] < L.price), default=None)
             bars_since_capped = (len(look) - 1 - last_capped) if last_capped is not None else -1

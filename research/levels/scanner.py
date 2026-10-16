@@ -43,7 +43,7 @@ from research.levels.universe import select_universe
 from research.levels.config import (               # noqa: E402
     SCANNER_POLL_SEC as POLL_INTERVAL_SEC, INTERVAL, HISTORY_DAYS, RESOLVE_MIN_BARS,
     RUN_SIGMA_MIN, PULL_SIGMA_MIN, MIN_RETESTS,
-    ENTRY_BUFFER_SIGMA, STOP_SIGMA_BELOW, ONSET_MATCH_SIGMA,
+    ENTRY_BUFFER_SIGMA, STOP_SIGMA_BELOW, ONSET_MATCH_SIGMA, VOL_LOOKBACK,
 )
 FAILURE_LOG = Path(__file__).resolve().parent / "data" / "_fetch_failures.log"
 
@@ -124,7 +124,7 @@ def _fired_previous_bar(bars: List[Dict[str, Any]], i: int, level_price: float,
     return False
 
 
-def scan_series(coin: str, bars: List[Dict[str, Any]], start: int = 120,
+def scan_series(coin: str, bars: List[Dict[str, Any]], start: int = VOL_LOOKBACK,
                 until_ts: int = None) -> List[Dict[str, Any]]:
     """Walk the whole series once, emitting an episode only where a level's
     gate OPENS. Carries the previous bar's gated levels forward instead of
@@ -329,7 +329,7 @@ def run_pass(client, universe, dry_run=False):
             bars = fetch(client, coin)
         except VenueFetchError:
             continue
-        if len(bars) < 120:
+        if len(bars) < VOL_LOOKBACK:
             continue
         for row in scan_coin(coin, bars, ctx=ctx):
             found.append(row)
@@ -369,7 +369,7 @@ def main():
                 bars = fetch(client, coin)
             except VenueFetchError:
                 continue
-            if len(bars) < 120:
+            if len(bars) < VOL_LOOKBACK:
                 continue
             cutoff = int(time.time() * 1000) - args.backfill * 86400000
             n_coin = 0

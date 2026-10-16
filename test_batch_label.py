@@ -10,7 +10,6 @@ bar timestamp, so the ones a board prints go stale as soon as the next bar
 opens -- which is exactly when somebody sits down to label them.
 """
 
-import csv
 import io
 import unittest
 from contextlib import redirect_stdout

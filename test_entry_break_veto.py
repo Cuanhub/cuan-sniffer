@@ -25,7 +25,6 @@ can only remove trades.
 import unittest
 
 import tools.live_levels_trader as T
-from research.levels import config as C
 
 
 class Backend:

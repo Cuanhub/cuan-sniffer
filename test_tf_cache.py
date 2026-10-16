@@ -127,7 +127,7 @@ class CacheBehaviour(unittest.TestCase):
     def test_a_stale_bar_key_forces_a_refetch(self):
         c, cache = Client(), {}
         _fetch_tf(c, "AAA", "4h", cache=cache, mids={})
-        (coin, tf), (_, bars) = next(iter(cache.items())), next(iter(cache.values()))
+        _, bars = next(iter(cache.values()))
         cache[("AAA", "4h")] = (0, bars)        # pretend it came from an old bar
         n = len(c.calls)
         _fetch_tf(c, "AAA", "4h", cache=cache, mids={})

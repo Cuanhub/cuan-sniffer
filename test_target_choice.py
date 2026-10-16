@@ -14,7 +14,6 @@ refuses the setup for exactly the reason it refuses it today. The change can
 turn a rejection into a trade; it can never turn a trade into a rejection.
 """
 
-import math
 import unittest
 
 from research.levels import config as C

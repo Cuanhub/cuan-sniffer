@@ -19,7 +19,6 @@ import math
 import unittest
 
 from research.levels import scanner
-from research.levels.call import find_candidates
 from research.levels.levels import log_sigma, structural_stop
 from research.levels import config as C
 
