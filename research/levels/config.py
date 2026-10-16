@@ -829,3 +829,45 @@ def summary() -> str:
             f"headroom>={TRADE_MIN_OVERHEAD_SIGMA}s rr>={MIN_RR} | "
             f"entry +{ENTRY_BUFFER_SIGMA}s stop -{STOP_SIGMA_BELOW}s "
             f"risk {RISK_PCT_PER_TRADE}%")
+
+
+# ---- rule 9: how long each kind of record is kept --------------------------
+# Measured 2026-10-16: live_trades.csv was 55MB across 429,311 rows, of which
+# 426,292 were skips with result=not_triggered -- 99.3% of the file saying
+# "this level has not been reached yet", restated for every watched level on
+# every pass. trader.log was 80MB, because launchd redirects stdout and never
+# rotates it. Together 135MB of mostly repetition, growing at roughly 30-40k
+# rows a day whenever the bot is actually trading.
+#
+# Nothing is deleted. Everything pruned is appended to a monthly gzip under
+# data/archive/, so the policy changes where a row lives rather than whether
+# it exists. "Robust data and logs" means recoverable, not voluminous.
+#
+# The tiers are keyed on the `result` enum this code writes, NOT on the prose
+# in `detail`. Matching prose is how two earlier tests in this project passed
+# against comments instead of behaviour, and detail strings get reworded.
+
+# Never pruned, at any age: the real-money audit trail. 367 rows to date, so
+# the cost of keeping them forever is nothing and the cost of losing one is
+# an unexplainable fill.
+RETAIN_FOREVER_ACTIONS = {"entry", "closed", "emergency_exit", "protection"}
+
+# The research substrate: every row that records a DECISION. Reviews, the
+# dry-run register of what qualified, and any skip that is a refusal rather
+# than a wait -- not_actionable (the basis, break and pull/run vetoes),
+# coin_cooldown, fetch_failed. About 1,600 rows, and it is what every feature
+# screen is built from, so the window is long.
+RETAIN_DECISION_DAYS = _i("LEVELS_RETAIN_DECISION_DAYS", 365)
+
+# Skips with result=not_triggered: "price has not come back to the level".
+# Pure repetition -- the same level restated every pass until it triggers or
+# the watch expires. 14 days is comfortably more than WATCH_TTL_HOURS, so a
+# full watch lifecycle is always still inspectable in the live file.
+RETAIN_WAITING_DAYS = _i("LEVELS_RETAIN_WAITING_DAYS", 14)
+
+# Size at which a launchd-redirected log is copy-truncated into a gzip.
+# Copy-truncate rather than rename: launchd holds the fd open in append mode,
+# so renaming the file would leave the process writing to an inode nothing
+# can read any more.
+LOG_ROTATE_MB = _f("LEVELS_LOG_ROTATE_MB", 25.0)
+LOG_KEEP_GENERATIONS = _i("LEVELS_LOG_KEEP_GENERATIONS", 6)

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Daily retention for the trade log and the redirected log files.
+
+  Deliberately NOT part of the trading loop. Hooking it to roll_day would make
+  the trader rewrite a 50MB file inside a pass, which is latency and risk on
+  the one process that places orders. This runs on its own at 04:20 UTC,
+  between the UTC day roll and any plausible session open.
+
+  It never deletes. Pruned rows are appended to a monthly gzip under
+  research/levels/data/archive/, and rotated logs land in
+  ~/Library/Logs/cuan-sniffer/rotated/. The windows are in config.py under
+  "rule 9"; --apply is required, so running it by hand without the flag is
+  always a safe dry run.
+
+  Install:
+    cp deploy/launchd/com.cuansniffer.retention.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.retention.plist
+  Check what it would do, any time:
+    .venv/bin/python -m tools.retention
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuansniffer.retention</string>
+
+  <!-- The venv's own python, NOT its resolved homebrew target. CPython only
+       adds the venv's site-packages when invoked through the venv directory,
+       because that is where it looks for pyvenv.cfg. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/myair/CuanSniffer/.venv/bin/python</string>
+    <string>-u</string>
+    <string>-m</string>
+    <string>tools.retention</string>
+    <string>--apply</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/myair/CuanSniffer</string>
+
+  <!-- 04:20 UTC. launchd uses LOCAL time, and this machine runs UTC+8, so
+       12:20 local. If the machine's timezone changes, change this. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>12</integer>
+    <key>Minute</key><integer>20</integer>
+  </dict>
+
+  <!-- A one-shot job. KeepAlive would restart it in a tight loop. -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/retention.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/retention.err.log</string>
+</dict>
+</plist>
