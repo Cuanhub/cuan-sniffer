@@ -231,3 +231,81 @@ class ReplayMatchesTheMeasurement(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiftingAStandDown(unittest.TestCase):
+    """There was no way to lift one until 2026-10-16.
+
+    /pause set a stand-down and nothing unset it. On 10-15 the rail fired at
+    13:07, an hour before the market turned, and then locked the account out
+    for the remaining eight hours of a recovery that was visible in the
+    equity curve. The rail is still right on the measured sample; being
+    unable to override it was not.
+    """
+
+    def test_clearing_removes_the_cooldown_and_reports_the_time_left(self):
+        st = {"streak_cooldown_until": at(6), "loss_streak": 2}
+        with frozen(), mock.patch.object(T, "save_state"):
+            left = T.clear_standdown(st)
+        self.assertAlmostEqual(left, 6.0, places=2)
+        self.assertNotIn("streak_cooldown_until", st)
+
+    def test_clearing_also_resets_the_losing_run(self):
+        """Leaving it at 2 would re-trigger on the next single loss, which is
+        not what lifting a stand-down means."""
+        st = {"streak_cooldown_until": at(6), "loss_streak": 2}
+        with frozen(), mock.patch.object(T, "save_state"):
+            T.clear_standdown(st)
+        self.assertEqual(st["loss_streak"], 0)
+
+    def test_clearing_when_none_is_active_is_harmless(self):
+        st = {}
+        with frozen(), mock.patch.object(T, "save_state"):
+            self.assertEqual(T.clear_standdown(st), 0.0)
+        self.assertEqual(st["loss_streak"], 0)
+
+    def test_a_cleared_standdown_no_longer_blocks_opening(self):
+        class Backend:
+            def get_margin_summary(self):
+                return (704.79, 0.0, 704.79)
+        st = {"owned": {}, "pending": {}, "realised_today": 0.0,
+              "streak_cooldown_until": at(6)}
+        with frozen(), mock.patch.object(T, "save_state"):
+            self.assertIn("losses in a row", T.preflight(Backend(), st))
+            T.clear_standdown(st)
+            self.assertIsNone(T.preflight(Backend(), st))
+
+    def test_a_queued_pause_zero_lifts_it(self):
+        import json, os, pathlib as _p
+        tmp = _p.Path(os.environ.get("TMPDIR", "/tmp")) / f"sd{os.getpid()}.json"
+        saved = T.CONTROL_QUEUE
+        T.CONTROL_QUEUE = tmp
+        try:
+            tmp.write_text(json.dumps([{"cmd": "pause", "arg": "0"}]))
+            st = {"streak_cooldown_until": at(6), "loss_streak": 2}
+            with frozen(), mock.patch.object(T, "save_state"):
+                done = T.drain_control_queue(st)
+            self.assertNotIn("streak_cooldown_until", st)
+            self.assertTrue(any("cleared" in d for d in done), done)
+        finally:
+            T.CONTROL_QUEUE = saved
+            tmp.unlink(missing_ok=True)
+
+    def test_a_queued_positive_pause_still_sets_one(self):
+        import json, os, pathlib as _p
+        tmp = _p.Path(os.environ.get("TMPDIR", "/tmp")) / f"sp{os.getpid()}.json"
+        saved = T.CONTROL_QUEUE
+        T.CONTROL_QUEUE = tmp
+        try:
+            tmp.write_text(json.dumps([{"cmd": "pause", "arg": "4"}]))
+            st = {}
+            with frozen(), mock.patch.object(T, "save_state"):
+                T.drain_control_queue(st)
+            self.assertIn("streak_cooldown_until", st)
+        finally:
+            T.CONTROL_QUEUE = saved
+            tmp.unlink(missing_ok=True)
+
+    def test_the_clearing_logic_exists_in_exactly_one_place(self):
+        src = open("tools/live_levels_trader.py").read()
+        self.assertEqual(src.count('state.pop("streak_cooldown_until", None)'), 1)

@@ -234,15 +234,35 @@ class Queueing(unittest.TestCase):
         self.tmp.unlink(missing_ok=True)
         self.assertEqual(T.drain_control_queue({}), [])
 
-    def test_pause_rejects_nonsense_and_out_of_range(self):
+    def confirm_pause(self, arg):
         ctl = self.ctl()
-        for bad in ("abc", "-1", "0", "9999"):
-            ctl.pending = {"cmd": "pause", "arg": bad, "token": "x",
-                           "expires": time.time() + 60}
-            reply = ctl.handle("/confirm x", {"owned": {}})
+        ctl.pending = {"cmd": "pause", "arg": arg, "token": "x",
+                       "expires": time.time() + 60}
+        return ctl.handle("/confirm x", {"owned": {}})
+
+    def test_pause_rejects_nonsense_and_absurd_lengths(self):
+        for bad in ("abc", "", "9999"):
+            self.tmp.unlink(missing_ok=True)
+            reply = self.confirm_pause(bad)
             self.assertFalse(self.tmp.exists() and
                              json.loads(self.tmp.read_text()),
-                             f"queued a bad pause: {bad} -> {reply}")
+                             f"queued a bad pause: {bad!r} -> {reply}")
+
+    def test_pause_zero_lifts_a_stand_down(self):
+        """0 means "stop pausing" -- one verb for the dial, and zero is the
+        obvious way to turn it off. Until 2026-10-16 nothing could lift one."""
+        for arg in ("0", "-1"):
+            self.tmp.unlink(missing_ok=True)
+            reply = self.confirm_pause(arg)
+            self.assertIn("lifting", reply.lower())
+            q = json.loads(self.tmp.read_text())
+            self.assertEqual((q[0]["cmd"], q[0]["arg"]), ("pause", "0"))
+
+    def test_pause_with_hours_still_sets_one(self):
+        self.tmp.unlink(missing_ok=True)
+        reply = self.confirm_pause("6")
+        self.assertIn("6h", reply)
+        self.assertEqual(json.loads(self.tmp.read_text())[0]["arg"], "6.0")
 
 
 class Confirmation(unittest.TestCase):

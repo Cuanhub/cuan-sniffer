@@ -609,6 +609,8 @@ def main():
                          "exit. Needs --arm. The bid is protected on fill by "
                          "the normal pass, and pulled after "
                          "LEVELS_LIMIT_ENTRY_TTL_HOURS if it never fills.")
+    ap.add_argument("--clear-standdown", action="store_true",
+                    help="lift the loss-streak stand-down and reset the run")
     ap.add_argument("--seed-watchlist", action="store_true",
                     help="admit levels the trade log shows already cleared the "
                          "quality bar, then exit. Run once after the watchlist "
@@ -636,8 +638,17 @@ def main():
     if args.resume:
         state["halted"] = False
         state["halt_reason"] = ""
+        # Cleared too, so a later auto-release cannot read a stale kind off a
+        # halt that no longer exists.
+        state["halt_kind"] = ""
         save_state(state)
         print("[LEVELS_LIVE] halt cleared")
+        return 0
+    if args.clear_standdown:
+        left = clear_standdown(state)
+        print(f"[LEVELS_LIVE] stand-down cleared "
+              f"({left:.1f}h would have remained)" if left > 0
+              else "[LEVELS_LIVE] no stand-down was active")
         return 0
 
     env_armed = os.getenv("LEVELS_LIVE_ARMED", "").strip().lower() == "yes"
@@ -2077,6 +2088,25 @@ def release_halt_if_clear(state: Dict[str, Any], equity: float) -> bool:
     return True
 
 
+def clear_standdown(state: Dict[str, Any]) -> float:
+    """Drop the loss-streak stand-down. Returns the hours it had left.
+
+    One definition, called by --clear-standdown and by a queued `pause 0`, so
+    the two cannot drift. There was no way to lift a stand-down at all until
+    2026-10-16: /pause set one and nothing unset it, and on 10-15 the rail
+    fired an hour before the market turned and then locked the account out
+    for the remaining eight hours of a recovery it could see happening.
+
+    The losing run is reset too. Leaving it at 2 would re-trigger on the
+    next single loss, which is not what lifting a stand-down means.
+    """
+    left = streak_cooldown_remaining(state)
+    state.pop("streak_cooldown_until", None)
+    state["loss_streak"] = 0
+    save_state(state)
+    return left
+
+
 def streak_cooldown_remaining(state: Dict[str, Any]) -> float:
     """Hours left on the post-losing-run stand-down, 0 if none."""
     until = state.get("streak_cooldown_until")
@@ -2187,6 +2217,14 @@ def drain_control_queue(state: Dict[str, Any]) -> List[str]:
                 hours = float(arg)
             except ValueError:
                 done.append(f"ignored pause '{arg}': not a number")
+                continue
+            if hours <= 0:
+                # `pause 0` means "stop pausing". Spelled this way rather than
+                # as a separate command so there is one verb for the dial and
+                # zero is the obvious way to turn it off.
+                left = clear_standdown(state)
+                done.append(f"stand-down cleared ({left:.1f}h remained)"
+                            if left > 0 else "no stand-down was active")
                 continue
             until = datetime.now(timezone.utc) + timedelta(hours=hours)
             state["streak_cooldown_until"] = (

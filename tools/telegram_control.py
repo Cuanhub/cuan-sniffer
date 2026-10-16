@@ -210,7 +210,7 @@ _immediate_
 
 _needs confirming_
 `/resume` — clear a halt
-`/pause H` — no new entries for H hours
+`/pause H` — no new entries for H hours (`/pause 0` lifts it)
 `/take COIN` — force a coin the scanner already likes past the rails
 
 Anything that risks money replies with a token; send it back within \
@@ -314,7 +314,7 @@ class Controller:
             if cmd in ("close", "take") and not arg:
                 return f"Which coin? `/{cmd} HYPE`"
             if cmd == "pause" and not arg:
-                return "How many hours? `/pause 6`"
+                return "How many hours? `/pause 6`, or `/pause 0` to lift one"
             token = secrets.token_hex(3)
             self.pending = {"cmd": cmd, "arg": arg.upper() if cmd != "pause"
                             else arg, "token": token,
@@ -353,6 +353,12 @@ class Controller:
                     f"scanner already has a live level for {arg} -- it will "
                     f"not invent a stop. Normal sizing and protection apply.")
         if cmd == "pause":
+            try:
+                if float(arg) <= 0:
+                    return ("Lift the stand-down and let it open positions "
+                            "again on the next pass?")
+            except ValueError:
+                pass
             return f"No new entries for *{arg}h*?"
         return f"Confirm `{cmd} {arg}`?"
 
@@ -365,8 +371,12 @@ class Controller:
                 hours = float(arg)
             except ValueError:
                 return f"`{arg}` is not a number of hours."
-            if not 0 < hours <= 168:
-                return "Pick between 0 and 168 hours."
+            if hours <= 0:
+                enqueue("pause", "0")
+                return ("▶️ Queued: lifting the stand-down. Applies on the "
+                        "next pass.")
+            if hours > 168:
+                return "168 hours is the most. Use `/halt` for longer."
             enqueue("pause", str(hours))
             return f"⏸ Queued: no new entries for {hours:g}h."
         if cmd == "close":
