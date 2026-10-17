@@ -93,6 +93,8 @@ class FakeHL:
         # default so a freshly placed bid reads as fresh; a test that wants a
         # stale one moves this back.
         self.now_ms = int(time.time() * 1000)
+        # None means "serve the real 385-fill recording".
+        self.fills_override: Optional[List[Dict[str, Any]]] = None
         self.fill_fraction = 1.0
         self.raise_after_fill = False
 
@@ -156,7 +158,10 @@ class FakeHL:
     def user_fills_by_time(self, address: str, start: int,
                            end: Optional[int] = None) -> List[Dict[str, Any]]:
         self._maybe_fail_info()
-        return copy.deepcopy(load("user_fills_30d.json"))
+        rows = (self.fills_override if self.fills_override is not None
+                else load("user_fills_30d.json"))
+        return copy.deepcopy([r for r in rows
+                              if int(float(r.get("time", 0))) >= int(start)])
 
     # ---- Exchange surface ------------------------------------------------
     def order(self, name: str, is_buy: bool, sz: float, limit_px: float,

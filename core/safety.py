@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import notify
-from core import execute
+from core import execute, streak
 from core.meta import DATA, now_iso, read_json, write_json
 from core.venue import Venue
 
@@ -297,6 +297,47 @@ def enforce_limits(venue: Venue, state: HaltState, log: EquityLog) -> List[Verdi
             halt(venue, state, f"{v.name}: {v.detail}", kind=v.halt_kind)
             break
     return verdicts
+
+
+class StandDownOverride:
+    """The operator's "I disagree, resume now" for the loss-streak stand-down.
+
+    Stores one timestamp, not a flag: trades closed at or before it stop
+    counting, so clearing a stand-down cannot be undone by the same trades
+    while a fresh loss afterwards starts a new run. The old stand-down needed
+    --clear-standdown because its counter got stuck; this one expires on its
+    own, and the override exists only for the case where the operator wants it
+    gone sooner.
+    """
+
+    def __init__(self, path: Optional[pathlib.Path] = None) -> None:
+        self.path = path or (DATA / "_standdown.json")
+
+    def ignore_before_ms(self) -> int:
+        row = read_json(self.path, {})
+        try:
+            return int((row or {}).get("ignore_before_ms") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def clear_now(self) -> None:
+        write_json(self.path, {"ignore_before_ms": int(time.time() * 1000),
+                               "at": now_iso()})
+
+
+def standing_down(venue: Venue,
+                  override: Optional[StandDownOverride] = None
+                  ) -> Optional[streak.StandDown]:
+    """The loss-streak stand-down in force, or None. Blocks entries only."""
+    ov = override or StandDownOverride()
+    sd = streak.current(venue, ignore_before_ms=ov.ignore_before_ms())
+    if sd is not None:
+        print(f"[SAFETY] standing down {sd.hours_left:.1f}h more -- {sd.reason}")
+        notify.send(
+            f"⏸ *Standing down*\n{sd.reason}.\n\nNo new entries for "
+            f"{sd.hours_left:.1f}h. Open positions keep their stops.",
+            key="standdown", cooldown_sec=3600)
+    return sd
 
 
 # ── error rate ─────────────────────────────────────────────────────────────

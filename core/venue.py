@@ -294,6 +294,20 @@ class Venue:
         unreal = sum(p.unrealized_pnl for p in pos.values()) if pos else 0.0
         return Equity(usdc_total=total, unrealized_pnl=unreal)
 
+    def fills(self, since_ms: int, urgent: bool = False
+              ) -> Optional[List[Dict[str, Any]]]:
+        """Raw fills at or after `since_ms`, oldest first. None if unreadable.
+
+        Returned as the venue sends them. `core.streak` groups them into
+        trades; this does no interpretation, like everything else here.
+        """
+        raw = self._get("user_fills_by_time",
+                        lambda: self.info.user_fills_by_time(
+                            self.address, int(since_ms)), urgent)
+        if not isinstance(raw, list):
+            return None
+        return [f for f in raw if isinstance(f, dict)]
+
     def mid(self, coin: str) -> Optional[float]:
         """Mid price. Entry sizing only; the kill switch uses Position.mark_px,
         so a throttled or failing price feed can never block a flatten.
