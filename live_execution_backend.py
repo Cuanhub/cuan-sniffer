@@ -181,7 +181,7 @@ class LiveExecutionBackend(ExecutionBackend):
 
     # ── Entry ──────────────────────────────────────────────────────────────
 
-    def _new_cloid(self):
+    def _new_cloid(self) -> Cloid:
         """A fresh client order id, unique per order this process sends.
 
         AUDIT C-1. Every order went out with no identity, so an ambiguous
@@ -202,7 +202,8 @@ class LiveExecutionBackend(ExecutionBackend):
         return Cloid.from_int(raw & ((1 << 128) - 1))
 
     @staticmethod
-    def _fill_response_from_order(found, sz, limit_px):
+    def _fill_response_from_order(found: Any, sz: float,
+                                  limit_px: float) -> Dict[str, Any]:
         """Shape a cloid lookup like an order response, for _parse_fill.
 
         Sizes and prices come from the VENUE's record where it gives them,
@@ -211,7 +212,7 @@ class LiveExecutionBackend(ExecutionBackend):
         """
         o = (found.get("order") or {})
         inner = o.get("order") or o
-        def num(key, default):
+        def num(key: str, default: float) -> float:
             try:
                 return float(inner.get(key))
             except (TypeError, ValueError):
@@ -223,7 +224,8 @@ class LiveExecutionBackend(ExecutionBackend):
                                      "avgPx": str(px),
                                      "oid": inner.get("oid", 0)}}]}}}
 
-    def _resolve_ambiguous_order(self, coin, cloid, err):
+    def _resolve_ambiguous_order(self, coin: str, cloid: Optional[Cloid],
+                                 err: object) -> Optional[Dict[str, Any]]:
         """After an exception, ask the venue what actually happened.
 
         Returns the venue's order record if it knows this cloid, else None.
@@ -1817,7 +1819,7 @@ class LiveExecutionBackend(ExecutionBackend):
         return None, "; ".join(errors) if errors else "trigger_order_failed"
 
     @staticmethod
-    def _parse_trigger_order_response(resp: Dict[str, Any]) -> tuple:
+    def _parse_trigger_order_response(resp: Any) -> tuple:
         if not isinstance(resp, dict):
             return None, "invalid_response_type"
 
@@ -1984,7 +1986,7 @@ class LiveExecutionBackend(ExecutionBackend):
 
     def _parse_fill(
         self,
-        resp: Dict[str, Any],
+        resp: Any,                      # untrusted: straight off the venue
         coin: str,
         requested_notional: float,
         ref_price: float,

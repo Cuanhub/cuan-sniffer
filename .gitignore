@@ -58,3 +58,8 @@ research/levels/data/_live_state.json
 archive/legacy_bot_data_*/
 archive/cascade_data_*/
 archive/funding_data_*/
+
+# Retention archive: appended to by the daily job, so a tracked copy makes a
+# live process dirty the working tree. That noise is how four uncommitted
+# files sat in a deployed tree unnoticed (audit A-1). Back this up out of band.
+research/levels/data/archive/
