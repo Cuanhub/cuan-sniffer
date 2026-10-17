@@ -70,7 +70,7 @@ from research.levels.config import (                                  # noqa: E4
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
     ENTRY_MAX_BREAK_FRAC, ENTRY_MAX_BASIS_BPS, ENTRY_MAX_PULL_OVER_RUN,
-    HALT_ACTION, ORPHAN_ACTION,
+    HALT_ACTION, ORPHAN_ACTION, ERROR_RATE_ALERT,
     COIN_REENTRY_COOLDOWN_HOURS, ACCOUNT_DD_HALT_PCT,
     ACCOUNT_DD_WINDOW_HOURS, HALT_AUTO_RELEASE,
     LOSS_STREAK_TRIGGER, LOSS_STREAK_COOLDOWN_HOURS,
@@ -1068,7 +1068,7 @@ def persist_traded_episode(ep: Dict[str, Any]) -> bool:
                 row[k] = "" if v is None else v
         return bool(storage.append_episode(row))
     except Exception as e:
-        print(f"[LEVELS_LIVE] could not persist the traded episode: {str(e)[:120]}")
+        record_error("persist_episode", e)
         return False
 
 
@@ -1637,6 +1637,70 @@ def roll_day(state: Dict[str, Any]) -> bool:
     return True
 
 
+# ---- error-rate rail (AUDIT section D) ------------------------------------
+# A sliding one-hour window of recorded errors. Over ERROR_RATE_ALERT it
+# alerts once, and keeps quiet until the window drains below the threshold
+# again -- a standing fault must not fire every pass and train the reader to
+# ignore it.
+ERROR_WINDOW_SEC = 3600
+_error_window: List[Tuple[float, str]] = []
+_error_alerted = False
+
+
+def reset_error_window() -> None:
+    """For tests, and for a deliberate clear after a known outage."""
+    global _error_alerted
+    _error_window.clear()
+    _error_alerted = False
+
+
+def errors_in_window() -> int:
+    """How many errors were recorded in the last hour."""
+    cutoff = time.time() - ERROR_WINDOW_SEC
+    while _error_window and _error_window[0][0] < cutoff:
+        _error_window.pop(0)
+    return len(_error_window)
+
+
+def record_error(source: str, detail: object = "") -> int:
+    """Note that something failed. Returns the count in the window.
+
+    Called from error paths, so it must never raise into its caller: an
+    error-reporting function that becomes the error is worse than no
+    reporting. Everything here is wrapped.
+
+    It does NOT halt. Errors are usually the venue having a bad minute, and a
+    rail that stops trading on transient noise is a worse failure than the
+    noise.
+    """
+    global _error_alerted
+    try:
+        _error_window.append((time.time(), str(source)[:40]))
+        n = errors_in_window()
+        print(f"[LEVELS_LIVE] error #{n}/{ERROR_RATE_ALERT} in the last hour "
+              f"[{str(source)[:40]}] {str(detail)[:120]}")
+        if n < ERROR_RATE_ALERT:
+            _error_alerted = False
+            return n
+        if _error_alerted:
+            return n
+        _error_alerted = True
+        counts: Dict[str, int] = {}
+        for _, src in _error_window:
+            counts[src] = counts.get(src, 0) + 1
+        worst = sorted(counts.items(), key=lambda kv: -kv[1])
+        notify.send(
+            f"⚠️ *Error rate is high*\n{n} errors in the last hour "
+            f"(threshold {ERROR_RATE_ALERT}).\n\nBy source:\n"
+            + "\n".join(f"• `{k}` x{v}" for k, v in worst[:5])
+            + "\n\nTrading is NOT halted -- this is a degradation warning.",
+            key="error_rate", cooldown_sec=3600)
+        return n
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[LEVELS_LIVE] record_error itself failed: {str(e)[:80]}")
+        return 0
+
+
 def has_protection(backend, coin: str) -> Optional[bool]:
     """Does the venue hold a reduce-only order for `coin`?
 
@@ -1649,8 +1713,7 @@ def has_protection(backend, coin: str) -> Optional[bool]:
     try:
         orders = backend.get_open_orders(coin)
     except Exception as e:
-        print(f"[LEVELS_LIVE] could not read open orders for {coin}: "
-              f"{str(e)[:90]}")
+        record_error("open_orders", f"{coin}: {e}")
         return None
     if orders is None:
         return None
@@ -1709,8 +1772,7 @@ def adopt_or_flatten_orphans(backend, state: Dict[str, Any]) -> List[str]:
             if coin and abs(szi) > 0:
                 live[coin] = szi
     except Exception as e:
-        print(f"[LEVELS_LIVE] orphan sweep could not read the venue: "
-              f"{str(e)[:90]}")
+        record_error("orphan_sweep", e)
         return []
 
     done = []
@@ -2513,6 +2575,7 @@ def preflight(backend, state: Dict[str, Any]):
     if MAX_NEW_PER_DAY and state.get("opened_today", 0) >= MAX_NEW_PER_DAY:
         return f"opened {state['opened_today']} today, max {MAX_NEW_PER_DAY}"
     if ms is None:
+        record_error("margin_query", "returned None")
         return "margin query failed -- refusing to size blind"
     equity, used, avail = ms
     if equity <= 0:

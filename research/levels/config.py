@@ -920,3 +920,22 @@ ORPHAN_ACTION = os.getenv("LEVELS_ORPHAN_ACTION", "auto").strip().lower()
 # 45s: three user_state reads a minute is nothing against the venue's limits,
 # and it brings worst-case detection from 450s down to under a minute.
 RECONCILE_POLL_SEC = _i("LEVELS_RECONCILE_POLL_SEC", 45)
+
+
+# ---- rule 12: error-rate alerting -----------------------------------------
+# AUDIT section D, the second MISSING rail. Every halt already alerts;
+# nothing watched the rate of ORDINARY errors, so a slow degradation was
+# silent until it showed in PnL. The scanner logged 3,630 failed candle
+# fetches for each of four non-existent tickers across several days and
+# nobody was told.
+#
+# 20 errors in a rolling hour. The trader makes about 31 venue calls a pass
+# and runs 8 passes an hour, so ~250 calls: 20 is an 8% failure rate, well
+# above the background of occasional 429s and comfortably below a genuine
+# outage.
+#
+# It ALERTS and does not halt, deliberately. Errors are usually the venue
+# having a bad minute, and a rail that stops trading on transient noise is a
+# worse failure than the noise. Halting stays with the conditions that mean
+# the account is wrong about itself.
+ERROR_RATE_ALERT = _i("LEVELS_ERROR_RATE_ALERT", 20)
