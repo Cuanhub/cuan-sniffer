@@ -60,3 +60,41 @@ the code.
   double-reduces).
 - **A `TP` is best-effort and never flattens.** A missing take-profit costs
   upside, not safety. Only the stop is a safety invariant.
+
+## Integration status (deliberate stopping point)
+
+The five `core/` modules and `tools/protect_loop.py` are built, tested and
+mypy-clean. **The old code is still in place and still running.** Nothing has
+been deleted yet, and no caller has been switched over.
+
+That is on purpose. Switching one caller and not the other would leave two live
+order-placing paths at once — two sources of truth for what the account holds,
+which is the exact problem class this rebuild removes. The deletion phase is
+all-or-nothing and is the next piece of work:
+
+1. `core/venue.py` needs three methods the trader still calls and the plan did
+   not list, all replacing existing behaviour rather than adding any:
+   `set_leverage` / `max_leverage_for` (Hyperliquid enforces leverage per
+   asset, so sizing is meaningless without them) and an `available` figure on
+   `Equity` from `tokenToAvailableAfterMaintenance`, which sizing caps against.
+2. Rewire `tools/live_levels_trader.py`: 29 call sites across 16 backend
+   methods. `place_limit_entry` and `get_realised_pnl` have no replacement by
+   design (rules 3 and 6).
+3. Rewire `tools/telegram_control.py`: `/close`, `/closeall`, `/halt` become
+   one call each into `core.safety`. Drop `/take`.
+4. Delete `live_execution_backend.py`, `execution_backend.py`,
+   `live_data_guard.py`, `tools/reconcile_loop.py`, and the ~1,160 lines of
+   execution/safety functions inside `live_levels_trader.py`.
+5. Retire the old tests that cover deleted code: `test_flatten.py`,
+   `test_protection_verification.py`, `test_reconcile_loop.py`,
+   `test_e2e_fake_venue.py`, `test_margin_summary.py`,
+   `test_slippage_reporting.py`, and the execution/safety parts of
+   `test_live_trader.py`, `test_rolling_drawdown.py` and `test_loss_streak.py`.
+
+Until step 4 lands, the measured "after" line count is a projection, not an
+achieved number.
+
+**The live processes matter here.** `com.cuansniffer.telegram` is running
+(pid 41917) and imports `live_execution_backend`; `com.cuansniffer.trader` last
+exited with status 1. Both pick up working-tree changes on their next restart,
+so the deletion phase should be done with those jobs unloaded.
