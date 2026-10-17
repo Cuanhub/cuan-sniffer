@@ -303,3 +303,55 @@ class AutoRelease(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RetiredKeysAreDroppedOnLoad(unittest.TestCase):
+    """Editing the state FILE while the trader is up does nothing.
+
+    The dict is loaded once and re-saved whole, so a running process holds
+    the old keys in memory and writes them back on its next save. On
+    2026-10-17 the three day-open keys were deleted from the file in the
+    morning and were back within a pass. Pruning on load is the only place
+    that actually takes effect.
+    """
+
+    def write(self, payload):
+        """conftest's autouse fixture already points STATE_PATH at a tmp
+        file, so write the real thing rather than patching Path methods."""
+        import json
+        T.STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        T.STATE_PATH.write_text(json.dumps(payload))
+
+    def test_the_day_open_keys_are_dropped(self):
+        self.write({"owned": {}, "halted": True, "halt_reason": "keep me",
+                    "day_open_equity": [793.05, 752.87],
+                    "_equity_for_day_open": 720.73,
+                    "_equity_for_day_open_day": "2026-10-15"})
+        out = T.load_state()
+        for k in T.RETIRED_STATE_KEYS:
+            self.assertNotIn(k, out)
+
+    def test_live_keys_are_untouched(self):
+        self.write({"owned": {"HYPE": {}}, "halted": True,
+                    "halt_reason": "keep me", "halt_kind": "manual",
+                    "equity_samples": [["2026-10-17T00:00:00Z", 700.0]],
+                    "day_open_equity": [1.0]})
+        out = T.load_state()
+        self.assertTrue(out["halted"])
+        self.assertEqual(out["halt_reason"], "keep me")
+        self.assertEqual(out["halt_kind"], "manual")
+        self.assertEqual(len(out["equity_samples"]), 1)
+        self.assertIn("HYPE", out["owned"])
+        self.assertNotIn("day_open_equity", out)
+
+    def test_a_clean_state_file_is_unchanged(self):
+        payload = {"owned": {}, "halted": False, "halt_reason": ""}
+        self.write(payload)
+        self.assertEqual(T.load_state(), payload)
+
+    def test_nothing_still_writes_a_retired_key(self):
+        src = open("tools/live_levels_trader.py").read()
+        body = src[src.index("def record_equity_sample"):]
+        for k in T.RETIRED_STATE_KEYS:
+            self.assertNotIn(f'state["{k}"] =', body,
+                             f"something still writes {k}")

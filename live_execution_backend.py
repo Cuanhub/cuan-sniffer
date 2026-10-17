@@ -114,6 +114,11 @@ MID_CACHE_TTL_SEC = float(os.getenv("MID_CACHE_TTL_SEC", "0.50"))
 LIVE_LOG_ORDERS = os.getenv("LIVE_LOG_ORDERS", "true").lower() == "true"
 LIVE_FLAT_EPSILON_SZ = float(os.getenv("LIVE_FLAT_EPSILON_SZ", "1e-9"))
 
+# How long flatten() waits before re-asking the venue for a position size it
+# could not read. Small on purpose: flatten is called from inside a trading
+# pass, so the worst case has to stay a bounded fraction of POLL_SEC.
+RETRY_READ_SLEEP_SEC = float(os.getenv("LIVE_RETRY_READ_SLEEP_SEC", "1.0"))
+
 # Passed to both Info and Exchange to prevent internal spot metadata fetch.
 _EMPTY_SPOT_META: Dict[str, Any] = {"tokens": [], "universe": []}
 
@@ -382,15 +387,37 @@ class LiveExecutionBackend(ExecutionBackend):
                 # Cannot read the venue, so cannot claim flat. Saying "flat"
                 # here is the one answer that would orphan a position.
                 notes.append(f"attempt {attempt}: venue size unreadable")
+                # Pause before re-asking. An unreadable size is a transient
+                # venue failure -- a 429 or a dropped connection -- and three
+                # reads inside a millisecond is one read with extra steps.
+                # Only this branch and the missing-price one wait: after a
+                # real exit attempt the venue has already answered.
+                time.sleep(RETRY_READ_SLEEP_SEC)
                 continue
-            remaining = self._signed_size_for_side(side, szi)
-            if remaining is None or abs(float(remaining)) <= LIVE_FLAT_EPSILON_SZ:
+            # Flat is judged on the RAW signed size, not on the side this
+            # call expects. _signed_size_for_side("LONG", -5) returns 0, so
+            # judging by side would report a live SHORT as flat -- the exact
+            # thing this method exists to prevent, and nothing here takes
+            # shorts, which is why it would have gone unnoticed until the
+            # account held one from somewhere else.
+            if abs(float(szi)) <= LIVE_FLAT_EPSILON_SZ:
                 return {"flat": True, "attempts_used": attempt - 1,
                         "closed_usd": closed_usd,
                         "detail": "; ".join(notes) or "already flat"}
+            remaining = self._signed_size_for_side(side, szi)
+            if remaining is None or abs(float(remaining)) <= LIVE_FLAT_EPSILON_SZ:
+                # Size exists but on the other side. An exit in this
+                # direction would ADD to it, so refuse and say so rather than
+                # send the order or call it flat.
+                return {"flat": False, "attempts_used": attempt,
+                        "closed_usd": closed_usd,
+                        "detail": f"venue holds {szi} in {coin}, which is not "
+                                  f"a {side} -- refusing to exit the wrong "
+                                  f"way; close it at the venue"}
             mid = self.get_mid_price(coin)
             if not mid or mid <= 0:
                 notes.append(f"attempt {attempt}: no price, not sending blind")
+                time.sleep(RETRY_READ_SLEEP_SEC)
                 continue
             notional = abs(float(remaining)) * float(mid)
             res = self.execute_exit(coin=coin, side=side, price=float(mid),
@@ -403,12 +430,10 @@ class LiveExecutionBackend(ExecutionBackend):
                    else f"not attempted ({getattr(res, 'reject_reason', '') or 'no reason'})"))
 
         szi = self._get_venue_signed_size(coin)
-        remaining = (self._signed_size_for_side(side, szi)
-                     if szi is not None else None)
-        flat = (remaining is not None
-                and abs(float(remaining)) <= LIVE_FLAT_EPSILON_SZ)
+        flat = (szi is not None
+                and abs(float(szi)) <= LIVE_FLAT_EPSILON_SZ)
         if not flat:
-            notes.append(f"STILL OPEN: venue size {remaining}")
+            notes.append(f"STILL OPEN: venue size {szi}")
         return {"flat": flat, "attempts_used": attempts,
                 "closed_usd": closed_usd, "detail": "; ".join(notes)}
 

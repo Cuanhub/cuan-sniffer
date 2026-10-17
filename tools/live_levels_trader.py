@@ -124,6 +124,22 @@ def iso_to_ms(ts: str) -> Optional[int]:
     return int(dt.timestamp() * 1000)
 
 
+# Keys from designs that have been replaced. Dropped on load, because the
+# state dict is loaded once and re-saved whole: editing the FILE while the
+# trader is up is futile, since the running process still holds the old keys
+# in memory and writes them back on its next save. That is exactly what
+# happened on 2026-10-17 -- these three were deleted from the file in the
+# morning and were back within a pass.
+#
+# day_open_equity / _equity_for_day_open*: the per-day drawdown reference,
+# replaced by the rolling equity_samples window.
+RETIRED_STATE_KEYS = {
+    "day_open_equity",
+    "_equity_for_day_open",
+    "_equity_for_day_open_day",
+}
+
+
 def load_state() -> Dict[str, Any]:
     """Read the state file. A file that exists but will not parse is FATAL.
 
@@ -151,6 +167,9 @@ def load_state() -> Dict[str, Any]:
             raise SystemExit(
                 f"[LEVELS_LIVE] !! state file {STATE_PATH} is {type(parsed).__name__}, "
                 f"not an object. Refusing to start.")
+        for dead in sorted(k for k in RETIRED_STATE_KEYS if k in parsed):
+            parsed.pop(dead, None)
+            print(f"[LEVELS_LIVE] dropped retired state key {dead!r}")
         return parsed
     return {"owned": {}, "watching": {}, "pending": {}, "opened_today": 0, "day": "",
             "realised_today": 0.0, "halted": False, "halt_reason": ""}
@@ -1457,6 +1476,48 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     return Outcome(opened=True, order_sent=True)
 
 
+def cancel_protection(backend, coin: str, oids) -> list:
+    """Cancel protection legs and SAY which ones would not go.
+
+    Returns the oids still believed to be live.
+
+    Three call sites did this three ways: one checked the return value and
+    logged a refusal, two wrapped it in `except Exception: pass` and threw
+    the result away. The first site's own comment says why it matters -- "a
+    leg that failed verification may not be reduce-only -- an order like
+    that, left on a flat account, opens a position rather than closing one:
+    unstopped". That is the 2026-09-18 runaway shape, and two of the three
+    paths could not have told anyone it had happened.
+
+    Found in the 2026-10-17 pre-resume review: the fourth instance of one
+    pattern in this file, sibling call sites where one handles a failure and
+    the others do not.
+    """
+    stuck = []
+    for oid in oids:
+        if not oid:
+            continue
+        try:
+            if not backend.cancel_order(coin=coin, oid=oid):
+                print(f"[LEVELS_LIVE] !! cancel refused {coin} oid={oid}")
+                stuck.append(oid)
+        except Exception as e:
+            print(f"[LEVELS_LIVE] !! cancel failed {coin} oid={oid}: "
+                  f"{str(e)[:80]}")
+            stuck.append(oid)
+    if stuck:
+        # An uncancelled leg on a position being retired is the one shape
+        # that can OPEN an unstopped position, so it earns an alert even
+        # though the caller is mid-cleanup.
+        notify.send(f"⚠️ *{coin}: protection may still be resting*\n"
+                    f"Could not cancel: {', '.join(str(o) for o in stuck)}\n"
+                    f"An order that is not reduce-only, left on a flat "
+                    f"account, opens a position instead of closing one. "
+                    f"Check the venue.",
+                    key=f"stuck_cancel_{coin}", cooldown_sec=3600)
+    return stuck
+
+
 def venue_sanity(backend, state: Dict[str, Any], equity: float):
     """Compare the venue against what this module believes.
 
@@ -1811,12 +1872,9 @@ def reconcile_pending(backend, state: Dict[str, Any]) -> None:
                 # has always checked; these two drifted apart from it.
                 res = backend.flatten(coin, side="LONG",
                                       reason="protection_failed")
-                for oid in (prot.get("stop_order_id"), prot.get("tp_order_id")):
-                    if oid:
-                        try:
-                            backend.cancel_order(coin=coin, oid=oid)
-                        except Exception:
-                            pass
+                cancel_protection(
+                    backend, coin,
+                    (prot.get("stop_order_id"), prot.get("tp_order_id")))
                 if not res.get("flat"):
                     # Keep the slot. Releasing it drops the only record of a
                     # position that is open and now unprotected.
@@ -1937,12 +1995,9 @@ def reconcile(backend, state: Dict[str, Any]) -> None:
                                "detail": str(res.get("detail"))[:200]})
                     save_state(state)
                     continue
-                for oid in (owned[coin].get("stop_oid"), owned[coin].get("tp_oid")):
-                    if oid:
-                        try:
-                            backend.cancel_order(coin=coin, oid=oid)
-                        except Exception:
-                            pass
+                cancel_protection(
+                    backend, coin,
+                    (owned[coin].get("stop_oid"), owned[coin].get("tp_oid")))
                 info = owned.pop(coin, {})
                 note = accrue_close(backend, state, coin, info)
                 save_state(state)
@@ -1969,6 +2024,24 @@ def reconcile(backend, state: Dict[str, Any]) -> None:
                        "episode_id": owned[coin].get("episode_id", ""),
                        "result": prot.get("status", ""),
                        "detail": f"re-protected after partial close at {abs(sz):g}"})
+            # This used to log the status and act on nothing, so a failed
+            # re-protection left a tracked position whose stop state was
+            # unknown while the bot carried on opening others. The two other
+            # protection sites have always treated that as fatal -- "an
+            # unprotected position is not the trade" -- and this one had
+            # drifted away from them, the same way the two exit paths had
+            # drifted from execute_one's.
+            #
+            # Halt rather than close: the position is a known size at a known
+            # level and its ORIGINAL reduce-only orders may still be covering
+            # it, so flattening it unasked could realise a loss nothing
+            # required. A human should look.
+            if prot.get("status") != "protected":
+                halt(state, f"{coin}: re-protection after a partial close "
+                            f"returned {prot.get('status')!r} "
+                            f"({str(prot.get('error'))[:80]}) -- its stop "
+                            f"state is unknown")
+                save_state(state)
             continue
 
         if sz is not None and abs(sz) < 1e-12:

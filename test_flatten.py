@@ -17,7 +17,9 @@ exists to resolve.
 """
 
 import unittest
+from unittest import mock
 
+import live_execution_backend as LB
 from live_execution_backend import LiveExecutionBackend
 
 
@@ -52,7 +54,36 @@ class Fake(LiveExecutionBackend):
         return R()
 
 
-class AlreadyFlat(unittest.TestCase):
+class _NoSleep(unittest.TestCase):
+    """flatten waits before re-reading a failed venue query. Tests must not."""
+
+    def setUp(self):
+        self._p = mock.patch.object(LB.time, "sleep")
+        self.slept = self._p.start()
+        self.addCleanup(self._p.stop)
+
+
+class ReadFailureBacksOff(_NoSleep):
+    def test_an_unreadable_size_waits_before_re_asking(self):
+        """Three reads inside a millisecond is one read with extra steps."""
+        b = Fake(sizes=[None])
+        b.flatten("ZRO", attempts=3)
+        self.assertEqual(self.slept.call_count, 3)
+        self.assertTrue(all(c.args[0] > 0 for c in self.slept.call_args_list))
+
+    def test_a_partial_fill_does_NOT_wait(self):
+        """After a real exit attempt the venue has already answered."""
+        b = Fake(sizes=[176.5, 0.2, 0.0])
+        b.flatten("SUI")
+        self.assertEqual(self.slept.call_count, 0)
+
+    def test_the_wait_is_a_bounded_fraction_of_a_pass(self):
+        from research.levels.config import POLL_SEC
+        self.assertLess(LB.RETRY_READ_SLEEP_SEC * 3, POLL_SEC * 0.05,
+                        "flatten could delay a trading pass")
+
+
+class AlreadyFlat(_NoSleep):
     def test_no_order_is_sent(self):
         b = Fake(sizes=[0.0])
         res = b.flatten("ZRO")
@@ -66,7 +97,7 @@ class AlreadyFlat(unittest.TestCase):
         self.assertEqual(b.exits, [])
 
 
-class OneAttemptIsEnough(unittest.TestCase):
+class OneAttemptIsEnough(_NoSleep):
     def test_a_clean_close_sends_one_order(self):
         b = Fake(sizes=[89.5, 0.0])
         res = b.flatten("ZRO")
@@ -81,7 +112,7 @@ class OneAttemptIsEnough(unittest.TestCase):
         self.assertEqual(b.exits[0]["reason"], "telegram")
 
 
-class RetryUntilFlat(unittest.TestCase):
+class RetryUntilFlat(_NoSleep):
     def test_a_partial_fill_is_retried(self):
         """The SUI/WLD/NIL shape: closes to dust, then finishes."""
         b = Fake(sizes=[176.5, 0.2, 0.0])
@@ -105,7 +136,7 @@ class RetryUntilFlat(unittest.TestCase):
         self.assertEqual(len(b.exits), 2)
 
 
-class RefusesToClaimFlat(unittest.TestCase):
+class RefusesToClaimFlat(_NoSleep):
     def test_a_position_that_will_not_close_reports_not_flat(self):
         b = Fake(sizes=[89.5])          # never moves
         res = b.flatten("ZRO")
@@ -158,3 +189,41 @@ class CallersBranchOnFlat(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AShortIsNeverCalledFlat(_NoSleep):
+    """Found in the pre-resume review on 2026-10-17.
+
+    _signed_size_for_side("LONG", -5) returns 0, so judging flatness by SIDE
+    reported a live short as flat. Nothing in this system takes shorts, so it
+    would have sat there until the account held one from somewhere else -- a
+    hand-placed trade on the same wallet -- and then /close would have said
+    the position was gone while it was still on.
+
+    An exit in the wrong direction would also ADD to the position, so the
+    answer is to refuse and say so, not to send it.
+    """
+
+    def test_a_short_is_reported_open_not_flat(self):
+        b = Fake(sizes=[-5.0])
+        res = b.flatten("ZRO", side="LONG")
+        self.assertFalse(res["flat"], "a live short was reported flat")
+        self.assertIn("not a LONG", res["detail"])
+
+    def test_no_wrong_way_order_is_sent(self):
+        b = Fake(sizes=[-5.0])
+        b.flatten("ZRO", side="LONG")
+        self.assertEqual(b.exits, [],
+                         "selling while short would increase the position")
+
+    def test_a_short_can_be_flattened_as_a_short(self):
+        b = Fake(sizes=[-5.0, 0.0])
+        res = b.flatten("ZRO", side="SHORT")
+        self.assertTrue(res["flat"])
+        self.assertEqual(len(b.exits), 1)
+
+    def test_the_final_verdict_also_uses_the_raw_size(self):
+        """A position that flips sign mid-flatten must not read as flat."""
+        b = Fake(sizes=[5.0, -5.0, -5.0, -5.0])
+        res = b.flatten("ZRO", side="LONG")
+        self.assertFalse(res["flat"])

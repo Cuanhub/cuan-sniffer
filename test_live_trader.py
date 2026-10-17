@@ -20,6 +20,7 @@ the real FillResult shape, so the armed path can be exercised without a venue.
 
 import shutil
 import unittest
+from unittest import mock
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -1335,3 +1336,132 @@ class ModuleShapeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReProtectionFailureIsFatal(unittest.TestCase):
+    """A partial close re-protects the size that is really there. That call
+    used to be logged and otherwise ignored, so a failure left a tracked
+    position with an unknown stop state while the bot kept opening others.
+
+    Found in the 2026-10-17 pre-resume review. It is the third instance of one
+    pattern: two sibling call sites handle a failure and a third does not.
+    The other two were the exit paths that popped a position without checking
+    whether it had actually closed.
+    """
+
+    def setUp(self):
+        self._o = (T.STATE_PATH, T.TRADE_LOG)
+        self._tmp = Path("/tmp/_test_reprotect")
+        self._tmp.mkdir(parents=True, exist_ok=True)
+        T.STATE_PATH = self._tmp / "s.json"
+        T.TRADE_LOG = self._tmp / "t.csv"
+
+    def tearDown(self):
+        T.STATE_PATH, T.TRADE_LOG = self._o
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def state(self):
+        return {"owned": {"HYPE": {"entry": 100.0, "stop": 95.0, "tp": 115.0,
+                                   "size_usd": 200.0, "size_coin": 2.0,
+                                   "episode_id": "e1"}},
+                "pending": {}, "realised_today": 0.0, "halted": False}
+
+    def backend(self, protection_ok):
+        b = FakeBackend(protection_ok=protection_ok)
+        b.venue["HYPE"] = 200.0
+        b.signed = 1.0          # venue holds half of the believed 2.0
+        return b
+
+    def test_a_failed_reprotection_halts(self):
+        st = self.state()
+        b = self.backend(protection_ok=False)
+        with mock.patch.object(T.notify, "send"):
+            T.reconcile(b, st)
+        self.assertTrue(st.get("halted"), "an unknown stop state did not halt")
+        self.assertIn("re-protection", st.get("halt_reason", ""))
+
+    def test_a_successful_reprotection_does_not_halt(self):
+        st = self.state()
+        b = self.backend(protection_ok=True)
+        with mock.patch.object(T.notify, "send"):
+            T.reconcile(b, st)
+        self.assertFalse(st.get("halted"))
+        self.assertIn("HYPE", st["owned"], "the position should still be held")
+
+    def test_the_position_is_kept_either_way(self):
+        """Halting is right; dropping the slot is not. The original
+        reduce-only orders may still be covering it."""
+        st = self.state()
+        with mock.patch.object(T.notify, "send"):
+            T.reconcile(self.backend(protection_ok=False), st)
+        self.assertIn("HYPE", st["owned"])
+
+
+class CancelFailuresAreVisible(unittest.TestCase):
+    """A protection leg that would not cancel has to be reported.
+
+    The first site's own comment says why: "a leg that failed verification
+    may not be reduce-only -- an order like that, left on a flat account,
+    opens a position rather than closing one: unstopped". That is the
+    2026-09-18 runaway shape. Two of the three cleanup paths wrapped the
+    cancel in `except Exception: pass` and discarded the result, so they
+    could not have told anyone.
+    """
+
+    class B:
+        def __init__(self, ok=True, raises=False):
+            self.ok, self.raises, self.tried = ok, raises, []
+
+        def cancel_order(self, coin, oid):
+            self.tried.append(oid)
+            if self.raises:
+                raise RuntimeError("venue refused")
+            return self.ok
+
+    def test_a_clean_cancel_reports_nothing_stuck(self):
+        b = self.B(ok=True)
+        with mock.patch.object(T.notify, "send") as sent:
+            stuck = T.cancel_protection(b, "HYPE", ("s1", "t1"))
+        self.assertEqual(stuck, [])
+        self.assertEqual(b.tried, ["s1", "t1"])
+        self.assertFalse(sent.called)
+
+    def test_a_refused_cancel_is_returned_and_alerted(self):
+        b = self.B(ok=False)
+        with mock.patch.object(T.notify, "send") as sent:
+            stuck = T.cancel_protection(b, "HYPE", ("s1", "t1"))
+        self.assertEqual(stuck, ["s1", "t1"])
+        self.assertTrue(sent.called)
+        self.assertIn("still be resting", sent.call_args[0][0])
+
+    def test_a_raising_cancel_is_also_counted_stuck(self):
+        b = self.B(raises=True)
+        with mock.patch.object(T.notify, "send"):
+            self.assertEqual(T.cancel_protection(b, "HYPE", ("s1",)), ["s1"])
+
+    def test_blank_oids_are_skipped_not_sent(self):
+        b = self.B()
+        with mock.patch.object(T.notify, "send"):
+            T.cancel_protection(b, "HYPE", ("", None, "t1"))
+        self.assertEqual(b.tried, ["t1"])
+
+    def test_one_leg_failing_does_not_stop_the_other(self):
+        class Flaky(self.B):
+            def cancel_order(self, coin, oid):
+                self.tried.append(oid)
+                if oid == "s1":
+                    raise RuntimeError("no")
+                return True
+        b = Flaky()
+        with mock.patch.object(T.notify, "send"):
+            stuck = T.cancel_protection(b, "HYPE", ("s1", "t1"))
+        self.assertEqual(b.tried, ["s1", "t1"])
+        self.assertEqual(stuck, ["s1"])
+
+    def test_no_cleanup_path_swallows_a_cancel_any_more(self):
+        src = open("tools/live_levels_trader.py").read()
+        self.assertEqual(src.count("cancel_protection("), 3,
+                         "def + the two cleanup paths")
+        body = src[src.index("def cancel_protection"):]
+        after = body[body.index("return stuck"):]
+        self.assertNotIn("backend.cancel_order(coin=coin, oid=oid)\n", after)

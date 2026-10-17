@@ -66,3 +66,52 @@ class CountCapIsNowABackstop(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfigInvariants(unittest.TestCase):
+    """Relationships between dials that have each been changed many times.
+
+    None of these is obvious from any single constant's own comment, and all
+    of them are the kind of thing that breaks quietly when one number moves.
+    Checked in the 2026-10-17 pre-resume review.
+    """
+
+    def test_the_daily_stop_fires_before_the_drawdown_halt(self):
+        """Otherwise the gentler, self-clearing rail never gets a turn."""
+        self.assertLess(C.DAILY_LOSS_STOP_PCT, C.ACCOUNT_DD_HALT_PCT)
+
+    def test_sizing_cannot_over_commit_the_account(self):
+        committed = C.MARGIN_PCT_PER_TRADE * C.MAX_CONCURRENT
+        self.assertLessEqual(committed, 100.0,
+                             f"{committed:.0f}% of equity would be committed")
+
+    def test_flat_leverage_is_inside_the_cap(self):
+        self.assertLessEqual(C.FLAT_LEVERAGE, C.MAX_LEVERAGE)
+
+    def test_retention_keeps_a_full_watch_lifecycle(self):
+        """seed_watchlist_from_log replays dry_run rows inside
+        WATCH_TTL_HOURS, so pruning inside that window would hide watches
+        the trader still intends to use."""
+        self.assertGreater(C.RETAIN_WAITING_DAYS * 24, C.WATCH_TTL_HOURS)
+
+    def test_the_audit_trail_is_never_on_a_clock(self):
+        for action in ("entry", "closed", "protection", "emergency_exit"):
+            self.assertIn(action, C.RETAIN_FOREVER_ACTIONS)
+
+    def test_entry_spacing_and_the_day_cap_do_not_contradict(self):
+        """Either can bind; what matters is that neither is nonsense."""
+        max_by_spacing = 24 * 60 / C.ENTRY_SPACING_MINUTES
+        self.assertGreater(max_by_spacing, 1,
+                           "spacing allows at most one trade a day")
+        self.assertGreater(C.MAX_NEW_PER_DAY, 1)
+
+    def test_the_vetoes_do_not_admit_nothing(self):
+        """Measured on 781 candidates since 2026-10-10: basis<=0 keeps 73%,
+        then pull/run<=0.60 keeps 32%, then rr>=2 keeps 26% -- about 29
+        admissible a day against a 24-a-day spacing limit. If a threshold
+        moves far enough that this inverts, the rails stop being rails and
+        become an off switch."""
+        self.assertGreaterEqual(C.ENTRY_MAX_PULL_OVER_RUN, 0.3,
+                                "pull/run this tight rejected ~89% of "
+                                "candidates when measured")
+        self.assertLessEqual(C.MIN_RR, 3.0)
