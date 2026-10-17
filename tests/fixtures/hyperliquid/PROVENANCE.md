@@ -32,3 +32,24 @@ in a PUBLIC repository:
 
 Sizes, prices, `closedPnl`, `fee`, `startPosition`, statuses, field names and
 nesting are still verbatim.
+
+## Magnitude normalisation
+
+These fixtures live in a public repository, so the figures that would reveal
+the account's size were scaled by ONE constant factor
+(13.885631995, chosen to put the balance on a round 10,000):
+
+- `spot_user_state.json`: USDC `total`, `hold`, `entryNtl` and
+  `tokenToAvailableAfterMaintenance`
+- `user_fills_30d.json`: `closedPnl` and `fee`
+- `equity_hold_series.txt`: both columns
+
+One factor, applied uniformly, so every RATIO and every SIGN is preserved
+exactly -- which is what the tests actually assert. In particular
+`test_equity_already_includes_unrealised_pnl` checks that
+d(total)/d(hold) equals the flat leverage, and a ratio is scale-invariant.
+
+NOT scaled, because they are not notional: `px`, `sz`, `origSz`,
+`startPosition`, every status, every `orderType`, and the field names and
+nesting. `sz: "0.0"` on a filled order and `sz == origSz` on a reject -- the
+two facts this whole rewrite turned on -- are untouched.
