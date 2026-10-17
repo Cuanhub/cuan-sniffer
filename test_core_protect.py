@@ -326,3 +326,73 @@ def test_metadata_is_not_a_position_record(store):
     assert protect.run_once(build_venue(fake), store) == []
     assert store.get("GHOST") is None
     assert fake.sent == []
+
+
+# ── resting bids ───────────────────────────────────────────────────────────
+
+def test_a_stale_bid_is_pulled(store, monkeypatch):
+    fake = FakeHL(positions={}, mid=100.0)
+    v = build_venue(fake)
+    execute.rest_bid(v, "HYPE", usd=200.0, px=95.0)
+    assert len(fake.resting) == 1
+    monkeypatch.setattr(protect, "BID_TTL_HOURS", 0.0)   # everything is stale
+    protect.run_once(v, store)
+    assert fake.resting == [], "an expired bid must not stay at the venue"
+
+
+def test_a_fresh_bid_is_left_alone(store):
+    fake = FakeHL(positions={}, mid=100.0)
+    v = build_venue(fake)
+    execute.rest_bid(v, "HYPE", usd=200.0, px=95.0)
+    protect.run_once(v, store)
+    assert len(fake.resting) == 1
+
+
+def test_a_stop_is_never_mistaken_for_an_expired_bid(store, monkeypatch):
+    """expire_bids must only touch orders that can OPEN a position."""
+    fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    store.put("HYPE", planned(stop=90.0))
+    v = build_venue(fake)
+    protect.run_once(v, store)
+    monkeypatch.setattr(protect, "BID_TTL_HOURS", 0.0)
+    protect.run_once(v, store)
+    stops = [o for o in fake.resting if o["orderType"].startswith("Stop")]
+    assert len(stops) == 1, "the protective stop was cancelled as a stale bid"
+
+
+def test_a_plan_survives_while_its_bid_is_still_resting(store):
+    """The plan for an unfilled bid is the plan its stop will need the moment
+    it fills, so it must not be tidied away as a closed position."""
+    fake = FakeHL(positions={}, mid=100.0)
+    v = build_venue(fake)
+    store.put("HYPE", planned(stop=90.0, tp=115.0))
+    execute.rest_bid(v, "HYPE", usd=200.0, px=95.0)
+    protect.run_once(v, store)
+    assert store.get("HYPE") is not None, "the plan was dropped under the bid"
+
+
+def test_a_bid_that_fills_gets_its_planned_stop_on_the_next_cycle(store):
+    """The whole resting-bid lifecycle, with no `pending` anywhere."""
+    fake = FakeHL(positions={}, mid=100.0)
+    v = build_venue(fake)
+    store.put("HYPE", planned(stop=90.0))
+    execute.rest_bid(v, "HYPE", usd=200.0, px=95.0)
+    protect.run_once(v, store)                       # nothing to protect yet
+    fake.pos["HYPE"] = 2.1                           # the tap fills it
+    fake.resting = [o for o in fake.resting if o["reduceOnly"]]
+    res = protect.run_once(v, store)
+    assert [r.action for r in res] == ["placed"]
+    stop = next(o for o in fake.resting if o["orderType"].startswith("Stop"))
+    assert float(stop["triggerPx"]) == pytest.approx(90.0)
+    assert float(stop["sz"]) == pytest.approx(2.1), "sized to what filled"
+
+
+def test_a_bid_stale_by_the_venues_own_clock_is_pulled(store):
+    """Age comes from the order's venue timestamp, not from anything stored."""
+    fake = FakeHL(positions={}, mid=100.0)
+    v = build_venue(fake)
+    fake.now_ms -= int((protect.BID_TTL_HOURS + 1) * 3_600_000)
+    execute.rest_bid(v, "HYPE", usd=200.0, px=95.0)
+    assert len(fake.resting) == 1
+    protect.run_once(v, store)
+    assert fake.resting == []

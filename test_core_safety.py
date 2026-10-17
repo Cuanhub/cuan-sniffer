@@ -246,39 +246,85 @@ def test_the_peak_survives_a_new_utc_day(tmp_path, monkeypatch):
     assert day_start == 900.0 and peak == 1000.0
 
 
-def test_limits_are_log_only_until_the_equity_question_is_settled(tmp_path):
-    """SIMPLIFY_PLAN 3C: a limit built on an unverified equity number can
-    flatten a healthy account, so it reports and does not act yet."""
-    assert safety.LIMITS_ENFORCE is False
+def test_the_limits_act(tmp_path):
+    """A breach halts and flattens. Enforcement is on by default."""
+    assert safety.LIMITS_ENFORCE is True
     log, st = EquityLog(tmp_path / "eq.json"), HaltState(tmp_path / "halt.json")
     fake = FakeHL(positions={"HYPE": 2.0}, usdc=1000.0, mid=100.0)
     v = build_venue(fake)
     safety.check_limits(v, log)
     fake.usdc = 500.0                        # a 50% loss
     verdicts = safety.enforce_limits(v, st, log)
-    assert any(x.breached for x in verdicts), "the breach must still be reported"
-    assert st.active() is None, "but it must not halt while log-only"
-    assert fake.pos.get("HYPE") == pytest.approx(2.0)
+    assert any(x.breached for x in verdicts)
+    assert st.active() is not None, "a breach must halt"
+    assert fake.pos == {}, "a breach must flatten"
 
 
-def test_enforcement_halts_and_flattens_when_switched_on(tmp_path, monkeypatch):
-    monkeypatch.setattr(safety, "LIMITS_ENFORCE", True)
+def test_a_breach_halts_with_the_kind_its_limit_carries(tmp_path):
+    """Daily loss clears on the next UTC day; drawdown needs a human."""
     log, st = EquityLog(tmp_path / "eq.json"), HaltState(tmp_path / "halt.json")
-    fake = FakeHL(positions={"HYPE": 2.0}, usdc=1000.0, mid=100.0)
+    fake = FakeHL(positions={}, usdc=1000.0)
     v = build_venue(fake)
     safety.check_limits(v, log)
-    fake.usdc = 500.0
+    fake.usdc = 940.0                        # -6%: daily loss only
     safety.enforce_limits(v, st, log)
-    assert st.active() is not None and fake.pos == {}
+    assert st.active()["kind"] == AUTO
+    st.clear()
+    fake.usdc = 880.0                        # -12%: drawdown too
+    safety.enforce_limits(v, st, log)
+    assert st.active()["kind"] == AUTO, "daily loss is checked first"
 
 
-def test_both_equity_readings_are_logged_while_a_position_is_open(tmp_path, capsys):
+def test_equity_already_includes_unrealised_pnl():
+    """The reading that lets the limits act, asserted against the recording.
+
+    265 equity samples from the live trader's log. Where a position was open
+    and nothing filled between two samples, total moved by exactly the flat
+    leverage times the margin change -- i.e. by the whole change in position
+    notional. So `total` marks to market and must NOT have unrealizedPnl added
+    to it; doing so double-counts the open position.
+    """
+    import pathlib
+    import statistics
+    rows = [tuple(map(float, line.split())) for line in
+            (pathlib.Path("tests/fixtures/hyperliquid/equity_hold_series.txt")
+             .read_text().strip().splitlines())]
+    assert len(rows) > 200, "the recorded series went missing"
+    ratios = []
+    prev = None
+    for total, hold in rows:
+        if prev and prev != (total, hold) and prev[1] > 0 and hold > 0:
+            d_hold = hold - prev[1]
+            if abs(d_hold) > 1e-9:
+                ratios.append((total - prev[0]) / d_hold)
+        prev = (total, hold)
+    assert len(ratios) > 20
+    assert statistics.median(ratios) == pytest.approx(5.0, abs=0.01), (
+        "total no longer tracks position notional; re-derive before trusting "
+        "the loss limits")
+
+
+def test_equity_is_total_alone_and_never_total_plus_unrealised(tmp_path):
+    """The double-count guard. There is deliberately no `with_unrealized`."""
+    from core.venue import Equity
+    assert not hasattr(Equity, "with_unrealized")
+    log = EquityLog(tmp_path / "eq.json")
+    fake = FakeHL(positions={"HYPE": 2.0}, usdc=1000.0, mid=100.0,
+                  unrealized={"HYPE": -37.5})
+    v = build_venue(fake)
+    safety.check_limits(v, log)
+    day_start, _ = log.observe(v.equity().usdc_total)
+    assert day_start == pytest.approx(1000.0), (
+        "the limit must read total alone; 962.5 would double-count")
+
+
+def test_the_unrealised_figure_is_still_logged(tmp_path, capsys):
     log = EquityLog(tmp_path / "eq.json")
     fake = FakeHL(positions={"HYPE": 2.0}, usdc=1000.0, mid=100.0,
                   unrealized={"HYPE": -37.5})
     safety.check_limits(build_venue(fake), log)
     out = capsys.readouterr().out
-    assert "usdc_total=1000.0000" in out and "with_unrealized=962.5000" in out
+    assert "equity 1000.0000" in out and "incl. unrealised -37.5000" in out
 
 
 def test_an_unreadable_equity_is_not_a_breach(tmp_path):

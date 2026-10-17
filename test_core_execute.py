@@ -215,3 +215,51 @@ def test_restart_mid_trade_recovers_from_the_venue(tmp_path):
                                 planned_tp=115.0, opened_at="now"))
     assert store.get("HYPE").planned_stop == 95.0
     assert v.positions()["HYPE"].size == pytest.approx(2.0)
+
+
+# ── resting bids: kept, with no `pending` to orphan ────────────────────────
+
+def test_a_bid_rests_at_the_level_instead_of_chasing_it():
+    fake = FakeHL(positions={}, mid=100.0)
+    order = execute.rest_bid(build_venue(fake), "HYPE", usd=200.0, px=95.0)
+    assert order is not None and order.is_entry
+    assert order.limit_px == pytest.approx(95.0)
+    assert "HYPE" not in fake.pos, "a GTC bid must not fill at the mid"
+    assert fake.sent[-1]["type"] == {"limit": {"tif": "Gtc"}}
+
+
+def test_a_bid_price_rounds_away_from_the_market():
+    """A buy rounds DOWN, so the bid never lands above the level."""
+    fake = FakeHL(positions={}, mid=100.0)
+    order = execute.rest_bid(build_venue(fake), "HYPE", usd=200.0, px=95.6789)
+    assert order is not None and order.limit_px <= 95.6789
+
+
+def test_a_bid_that_does_not_rest_returns_none():
+    fake = FakeHL(positions={}, mid=100.0)
+    fake.fail_order = 1
+    assert execute.rest_bid(build_venue(fake), "HYPE", usd=200.0, px=95.0) is None
+
+
+def test_a_partly_filled_bid_leaves_nothing_to_orphan():
+    """REVIEW.md finding 6 cannot recur: there is no `pending` record to pop
+    and no stored oid, so the remainder is simply a resting order next to a
+    position, and both are found by reading the venue.
+    """
+    fake = FakeHL(positions={}, mid=100.0)
+    v = build_venue(fake)
+    execute.rest_bid(v, "HYPE", usd=200.0, px=95.0)
+    fake.pos["HYPE"] = 1.2                      # 60% of the bid filled
+    orders = v.open_orders("HYPE")
+    assert [o.is_entry for o in orders] == [True], "the remainder is visible"
+    assert v.positions()["HYPE"].size == pytest.approx(1.2)
+
+
+def test_a_bid_carries_its_own_age_so_no_state_is_needed():
+    import time as _t
+    fake = FakeHL(positions={}, mid=100.0)
+    v = build_venue(fake)
+    order = execute.rest_bid(v, "HYPE", usd=200.0, px=95.0)
+    assert order.timestamp_ms > 0, "the venue stamps the order"
+    future = int(_t.time() * 1000) + 13 * 3_600_000
+    assert order.age_hours(now_ms=future) == pytest.approx(13.0, abs=0.1)

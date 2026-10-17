@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import json
 import pathlib
+import time
 from typing import Any, Dict, List, Optional
 
 FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures/hyperliquid"
@@ -87,7 +88,11 @@ class FakeHL:
         # it, repeated partial closes converge to dust no order can express and
         # a flatten loop has nothing to work with.
         self.sz_decimals = 2
-        self.order_fills = True      # does a non-trigger order move the position?
+        self.order_fills = True      # does a marketable IOC move the position?
+        # The venue's clock, which stamps every resting order. Real `now` by
+        # default so a freshly placed bid reads as fresh; a test that wants a
+        # stale one moves this back.
+        self.now_ms = int(time.time() * 1000)
         self.fill_fraction = 1.0
         self.raise_after_fill = False
 
@@ -165,6 +170,14 @@ class FakeHL:
                "cloid": cloid.to_raw() if cloid is not None else None}
         self.sent.append(rec)
 
+        tif = str((order_type.get("limit") or {}).get("tif") or "")
+        if tif == "Gtc":
+            # A GTC limit below the market RESTS; it does not fill at the mid.
+            # Modelling that matters: it is the whole reason a bid at a level
+            # is filled by the tap instead of chasing it.
+            self.rest_plain_order(name, sz, limit_px, is_buy=is_buy)
+            return {"status": "ok"}
+
         if "trigger" in order_type:
             t = order_type["trigger"]
             o = _trigger_template(is_stop=(t.get("tpsl") == "sl"))
@@ -225,15 +238,21 @@ class FakeHL:
                       "limitPx": str(px), "side": "A", "reduceOnly": True})
             self.resting.append(o)
 
-    def rest_plain_order(self, coin: str, size: float, px: float) -> None:
-        """A non-protective resting order: the shape that made the old
-        has_protection() report an unprotected position as protected."""
+    def rest_plain_order(self, coin: str, size: float, px: float,
+                         is_buy: bool = True) -> None:
+        """A non-protective resting order -- a GTC entry bid.
+
+        Built from a real recorded `open` Limit record. This is also the shape
+        that made the old has_protection() report an unprotected position as
+        protected, because any order for the coin counted.
+        """
         o = copy.deepcopy(order_record("open")["order"])
         self._next_oid += 1
         o.update({"coin": coin, "sz": str(size), "origSz": str(size),
-                  "oid": self._next_oid, "limitPx": str(px), "side": "B",
+                  "oid": self._next_oid, "limitPx": str(px),
+                  "side": "B" if is_buy else "A",
                   "reduceOnly": False, "isTrigger": False, "triggerPx": "0.0",
-                  "orderType": "Limit"})
+                  "orderType": "Limit", "timestamp": self.now_ms})
         self.resting.append(o)
 
 

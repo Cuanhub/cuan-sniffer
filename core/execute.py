@@ -11,7 +11,10 @@ the four cases that used to need separate handling into one case.
   - a venue that cannot be read afterwards: `Outcome.unknown`, which is neither
     a fill nor a reject, and the caller must not treat it as either.
 
-Entries are IOC only (rule 3). Nothing here rests an order.
+Entries come two ways: `enter` sends a marketable IOC, and `rest_bid` rests a
+GTC bid at a level. The second is kept because the evidence behind it is
+one-sided (see `rest_bid`); what was dangerous about it was the `pending`
+bookkeeping, not the order, and there is none of that here.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from core.venue import Venue
+from core.venue import Order, Venue
 
 # How long to wait after sending before asking the venue what it holds. An IOC
 # either fills or is cancelled immediately, so this is propagation time, not
@@ -165,3 +168,50 @@ def _observe(venue: Venue, coin: str, before: float, what: str,
     print(f"[EXEC] {what} {coin}: {before:g} -> {after:g} "
           f"(filled {delta:g} @ {px:g})")
     return Outcome(coin, delta, px, note=what)
+
+
+def rest_bid(venue: Venue, coin: str, usd: float, px: float,
+             is_long: bool = True) -> Optional[Order]:
+    """Rest a GTC bid at `px`. Returns the resting order, or None.
+
+    Kept, not removed, because the evidence is one-sided: across 139 tradeable
+    watched levels on 2026-09-19 not one was inside the 1.5% entry drift guard
+    and the nearest was 3.10% away -- every tap resolved between polls. A
+    marketable IOC cannot catch a level that taps and leaves; a bid sitting at
+    the level is filled BY the tap.
+
+    What made this dangerous before was not the order, it was the bookkeeping:
+    a `pending` dict held the oid and the plan, and a partial fill popped the
+    dict while the remainder stayed live at the venue, unprotected and
+    untracked. There is no `pending` here. The bid is visible in open_orders,
+    the position is visible in positions, and the protection loop sizes the
+    stop to whatever the venue currently holds -- so a partial fill is just a
+    smaller position with a correctly sized stop, and the remainder filling
+    later is just a bigger one.
+
+    Confirmed by reading the book back, like every other order here.
+    """
+    coin = coin.upper()
+    if usd <= 0 or px <= 0:
+        return None
+    if not venue.load_meta():
+        return None
+    limit = venue.round_price(coin, px, direction="down" if is_long else "up")
+    if limit <= 0:
+        return None
+    size = venue.round_size(coin, usd / limit)
+    if size <= 0:
+        return None
+
+    before = {o.oid for o in (venue.open_orders(coin) or [])}
+    venue.send_limit(coin, is_buy=is_long, size=size, limit_px=limit)
+    after = venue.open_orders(coin)
+    if after is None:
+        print(f"[EXEC] bid {coin}: sent but the book could not be read")
+        return None
+    fresh = [o for o in after if o.oid not in before and o.is_entry]
+    if not fresh:
+        print(f"[EXEC] bid {coin}: nothing rested at {limit:g}")
+        return None
+    print(f"[EXEC] bid {coin}: resting {size:g} @ {limit:g}")
+    return fresh[0]

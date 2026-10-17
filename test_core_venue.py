@@ -121,7 +121,11 @@ def test_open_orders_filters_by_coin():
     assert len(v.open_orders()) == 2
 
 
-def test_equity_comes_from_spot_usdc_and_carries_unrealised():
+def test_equity_comes_from_spot_usdc_which_already_marks_to_market():
+    """`usdc_total` is the equity figure on its own -- it already contains the
+    open position's unrealised PnL. There is deliberately no property that
+    adds the two, because that double-counts. See core.venue.Equity.
+    """
     fake = FakeHL(positions={"HYPE": 2.0}, usdc=720.17,
                   unrealized={"HYPE": -12.5})
     v = build_venue(fake)
@@ -129,7 +133,7 @@ def test_equity_comes_from_spot_usdc_and_carries_unrealised():
     assert eq is not None
     assert eq.usdc_total == pytest.approx(720.17)
     assert eq.unrealized_pnl == pytest.approx(-12.5)
-    assert eq.with_unrealized == pytest.approx(707.67)
+    assert not hasattr(eq, "with_unrealized")
 
 
 def test_mark_price_needs_no_price_feed():

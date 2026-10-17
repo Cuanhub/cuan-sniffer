@@ -5,15 +5,26 @@ the code.
 
 ## Deferred (not built)
 
-- **Loss-streak stand-down: dropped.** The brief allowed keeping it "unless it's
-  a few lines off `user_fills` `closedPnl`". It isn't. `closedPnl` is per *fill*,
-  not per trade: closing one position in three fills yields three rows, so
-  counting consecutive losing trades needs fills grouped into trades (by coin,
-  contiguous time, and `startPosition` crossing zero). That is ~25 lines of
-  fiddly grouping with its own failure modes. Dropped. If wanted later, the
-  honest input is `startPosition` reaching 0, not a row count.
+- **Loss-streak stand-down: dropped, and this one needs your call.** The brief
+  allowed keeping it "unless it's a few lines off `user_fills` `closedPnl`".
+  It isn't: `closedPnl` is per *fill*, so counting consecutive losing trades
+  needs fills grouped into trades (by coin, contiguous time, `startPosition`
+  crossing zero) — ~25 lines of fiddly grouping.
+
+  Under the "keep anything with clear evidence" rule it is genuinely
+  ambiguous, so I have not reinstated it on my own judgement. The evidence
+  points both ways: it was added deliberately (`2862bc3`), but the trader's
+  own comment records it firing "an hour before the market turned and then
+  locking the account out" on 2026-10-15, which is why `--clear-standdown`
+  had to be added the next day (`f9edfc3`). That is evidence of harm, not of
+  value. Say the word and it comes back.
 - **`/take` (forced entry): dropped**, as instructed. `FORCEABLE` and the
   `state["forced"]` plumbing go with it.
+- **Reason-aware exit slippage ladder: dropped.** The five
+  `LIVE_EXIT_SLIPPAGE_BPS_*` knobs collapse to one `EXEC_EXIT_IOC_BPS`. No
+  measurement sits behind the individual values — they read as estimates —
+  so this is not covered by the "clear evidence" rule. Flagging it because it
+  is a removal, not a refactor.
 - **Websocket (AUDIT B-1).** Still absent. The 60s protection loop narrows the
   blind window from 450s to 60s but does not remove it; the venue-side stop is
   what actually covers a gap.
@@ -98,3 +109,27 @@ achieved number.
 (pid 41917) and imports `live_execution_backend`; `com.cuansniffer.trader` last
 exited with status 1. Both pick up working-tree changes on their next restart,
 so the deletion phase should be done with those jobs unloaded.
+
+## Settled since the plan
+
+- **Equity marks to market — the loss limits now act.** SIMPLIFY_PLAN 3C left
+  rule 6 log-only because it was unknown whether spot USDC `total` moves with
+  unrealised perp PnL. It does, and it was answerable from data already on
+  disk: across 265 equity readings in the trader's own log, every consecutive
+  pair with a position open and no fill between them has
+  d(total)/d(hold) = 5.0000 — the flat leverage this system trades at — so
+  `total` moves by the whole change in position notional. Equity is
+  `usdc_total` alone; adding `unrealizedPnl` would double-count, which is why
+  there is no `with_unrealized` property. The series is kept as
+  `tests/fixtures/hyperliquid/equity_hold_series.txt` and asserted by a test,
+  so if the relationship ever stops holding the suite says so before the
+  limits act on a wrong number. No testnet was needed.
+- **Resting GTC bids are kept.** Rule 3 would have removed them, and the
+  evidence behind them is one-sided: across 139 tradeable watched levels on
+  2026-09-19 not one was inside the 1.5% entry drift guard, the nearest 3.10%
+  away. A marketable IOC cannot catch a level that taps and leaves. What was
+  dangerous was the `pending` dict, not the order — and there is none now. A
+  bid is visible in `open_orders`, carries its own venue timestamp for expiry,
+  and a partial fill is just a smaller position with a correctly sized stop
+  beside a smaller resting order. Findings 6, 9 and 11 were all `pending`,
+  not the bid.

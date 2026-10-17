@@ -31,15 +31,21 @@ DRAWDOWN_PCT = float(os.getenv("SAFETY_DRAWDOWN_PCT", "10.0"))
 ERROR_WINDOW_SEC = 600.0
 ERROR_LIMIT = 5
 
-# Rule 6 is measured and logged, but does not act yet.
+# Rule 6 acts.
 #
 # Equity on this account is spot USDC `total` (the perp clearinghouse reports
-# accountValue "0.0" -- it is a unifiedAccount). Whether `total` already moves
-# with unrealised perp PnL decides whether the limit should read `usdc_total`
-# or `with_unrealized`, and getting it wrong either double-counts open losses
-# or ignores them entirely. Every sync logs both while a position is open; once
-# a few trades show which tracks reality, this flips to True.
-LIMITS_ENFORCE = os.getenv("SAFETY_LIMITS_ENFORCE", "false").lower() == "true"
+# accountValue "0.0" -- it is a unifiedAccount). The open question was whether
+# `total` already moves with unrealised perp PnL, because reading it wrong
+# either double-counts open losses or ignores them entirely.
+#
+# It does. Across 265 equity readings in the live trader's own log, every
+# consecutive pair with a position open and no fill between them has
+# d(total)/d(hold) = 5.0000, the flat leverage this system trades at -- so
+# `total` moves by the whole change in position notional. It marks to market,
+# and `usdc_total` is the equity figure on its own. The evidence is kept as
+# tests/fixtures/hyperliquid/equity_hold_series.txt and asserted by
+# test_core_safety.py::test_equity_already_includes_unrealised_pnl.
+LIMITS_ENFORCE = os.getenv("SAFETY_LIMITS_ENFORCE", "true").lower() == "true"
 
 AUTO = "auto"        # clears itself on the next UTC day
 MANUAL = "manual"    # needs --resume
@@ -246,9 +252,9 @@ class EquityLog:
 def check_limits(venue: Venue, log: EquityLog) -> List[Verdict]:
     """Read equity and report what the two limits see.
 
-    Logs `usdc_total` and `total + unrealised` side by side on every call while
-    a position is open. Which of the two the limits should use is still being
-    established from live readings; see LIMITS_ENFORCE.
+    Equity is `usdc_total` alone: it already marks to market, so it carries
+    the open position's unrealised PnL. `unrealized_pnl` is printed beside it
+    for the log, never added to it.
     """
     eq = venue.equity()
     if eq is None:
@@ -256,14 +262,10 @@ def check_limits(venue: Venue, log: EquityLog) -> List[Verdict]:
         return []
     day_start, peak = log.observe(eq.usdc_total)
 
-    if eq.unrealized_pnl != 0.0:
-        print(f"[SAFETY] equity usdc_total={eq.usdc_total:.4f} "
-              f"with_unrealized={eq.with_unrealized:.4f} "
-              f"(unrealised {eq.unrealized_pnl:+.4f}) "
-              f"day_start={day_start:.4f} peak={peak:.4f}")
-    else:
-        print(f"[SAFETY] equity {eq.usdc_total:.4f} "
-              f"day_start={day_start:.4f} peak={peak:.4f}")
+    print(f"[SAFETY] equity {eq.usdc_total:.4f} "
+          + (f"(incl. unrealised {eq.unrealized_pnl:+.4f}) "
+             if eq.unrealized_pnl != 0.0 else "")
+          + f"day_start={day_start:.4f} peak={peak:.4f}")
 
     out: List[Verdict] = []
     if day_start > 0:

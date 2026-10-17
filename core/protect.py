@@ -40,6 +40,9 @@ PRICE_TOLERANCE = float(os.getenv("PROTECT_PRICE_TOLERANCE", "0.002"))  # 0.2%
 # whose metadata was lost. Distance from the current mark, per rule 1.
 MAX_RISK_PCT = float(os.getenv("PROTECT_MAX_RISK_PCT", "3.0"))
 MAX_PLACE_ATTEMPTS = 2
+# How long a resting entry bid may sit before it is pulled. A level that has
+# not been tapped in this long is no longer the setup that justified the bid.
+BID_TTL_HOURS = float(os.getenv("PROTECT_BID_TTL_HOURS", "12"))
 
 
 @dataclass
@@ -225,9 +228,13 @@ def run_once(venue: Venue, meta: Optional[MetaStore] = None) -> List[Result]:
         safety.record_error("positions", "venue unreadable")
         print("[PROTECT] venue unreadable this cycle")
         return []
+    expire_bids(venue)
+    resting = venue.open_orders()
+    bidding = {o.coin for o in (resting or []) if o.is_entry}
     if not positions:
-        print("[PROTECT] flat")
-        _forget_closed(store, set())
+        print("[PROTECT] flat" + (f", bidding on {sorted(bidding)}"
+                                  if bidding else ""))
+        _forget_closed(store, bidding)
         return []
 
     results: List[Result] = []
@@ -260,8 +267,38 @@ def run_once(venue: Venue, meta: Optional[MetaStore] = None) -> List[Result]:
                 f"The venue holds {pos.size:g}. Retrying next cycle.",
                 key=f"protect_unknown_{coin}", cooldown_sec=1800)
 
-    _forget_closed(store, set(positions))
+    _forget_closed(store, set(positions) | bidding)
     return results
+
+
+def expire_bids(venue: Venue) -> List[str]:
+    """Cancel resting entry bids older than BID_TTL_HOURS.
+
+    Age comes from the order's own venue timestamp, so this needs no record of
+    having placed it -- which is why a resting bid carries no `pending` state
+    here and cannot be orphaned by one. A bid that partially filled is simply
+    a smaller resting order next to a position, and both are handled by
+    reading them.
+    """
+    orders = venue.open_orders()
+    if orders is None:
+        return []
+    pulled = []
+    for o in orders:
+        if not o.is_entry:
+            continue
+        age = o.age_hours()
+        if age < BID_TTL_HOURS:
+            continue
+        resp = venue.cancel(o.coin, o.oid)
+        ok = isinstance(resp, dict) and str(resp.get("status")) == "ok"
+        print(f"[PROTECT] bid {o.coin} @ {o.limit_px:g} expired after "
+              f"{age:.1f}h -- cancel {'ok' if ok else 'FAILED'}")
+        if ok:
+            pulled.append(o.coin)
+        else:
+            safety.record_error("cancel_expired_bid", f"{o.coin} oid={o.oid}")
+    return pulled
 
 
 def _forget_closed(store: MetaStore, live: set[str]) -> None:
@@ -270,6 +307,10 @@ def _forget_closed(store: MetaStore, live: set[str]) -> None:
     Metadata is not a position record, so this is tidying, not reconciliation
     -- nothing decides anything from its presence. It exists so an adopted
     position's stop does not get reused on a later, unrelated trade.
+
+    `live` includes coins with a resting BID as well as a position: the plan
+    for a bid that has not filled yet is the plan the stop will need the
+    moment it does.
     """
     for coin in sorted(store.coins() - live):
         store.drop(coin)

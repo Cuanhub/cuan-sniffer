@@ -73,22 +73,51 @@ class Order:
     is_trigger: bool
     trigger_px: Optional[float]
     is_stop: bool            # "Stop *" order types; False for take-profits
+    limit_px: float = 0.0
+    timestamp_ms: int = 0    # when the venue accepted it
 
     @property
     def is_protective(self) -> bool:
         """A resting order that can only ever reduce this position."""
         return self.reduce_only and self.is_trigger
 
+    @property
+    def is_entry(self) -> bool:
+        """A resting order that can OPEN a position: a bid at a level.
+
+        The venue carries its own age (`timestamp`), so expiring one needs no
+        stored record of having placed it. That is the whole reason resting
+        bids are safe here and were not before: the old code kept the oid and
+        the plan in a `pending` dict, and a partial fill popped the dict while
+        the remainder stayed live at the venue.
+        """
+        return not self.reduce_only and not self.is_trigger
+
+    def age_hours(self, now_ms: Optional[int] = None) -> float:
+        if self.timestamp_ms <= 0:
+            return 0.0
+        ref = now_ms if now_ms is not None else int(time.time() * 1000)
+        return max(0.0, (ref - self.timestamp_ms) / 3_600_000.0)
+
 
 @dataclass(frozen=True)
 class Equity:
-    """Account value, from the spot layer. See the note in `equity()`."""
-    usdc_total: float        # today's definition, and what limits use
-    unrealized_pnl: float    # summed over open positions, logged alongside
+    """Account value, from the spot layer.
 
-    @property
-    def with_unrealized(self) -> float:
-        return self.usdc_total + self.unrealized_pnl
+    `usdc_total` ALREADY INCLUDES unrealised perp PnL. Established from 265
+    equity readings in the live trader's own log (recorded as
+    tests/fixtures/hyperliquid/equity_hold_series.txt): across consecutive
+    readings with a position open, the median of d(total)/d(hold) is exactly
+    5.0000 -- the flat leverage this system trades at -- so `total` moves by
+    the full change in position notional, not by the margin alone. It marks to
+    market.
+
+    So `usdc_total` is the equity figure, on its own. Adding `unrealized_pnl`
+    to it double-counts the open position, which is why there is no
+    `with_unrealized` property to reach for; the field is kept for reporting.
+    """
+    usdc_total: float
+    unrealized_pnl: float    # informational only -- already inside usdc_total
 
 
 class Venue:
@@ -232,7 +261,9 @@ class Venue:
                 reduce_only=bool(o.get("reduceOnly")),
                 is_trigger=bool(o.get("isTrigger")),
                 trigger_px=_f(o.get("triggerPx")),
-                is_stop=kind.startswith("Stop")))
+                is_stop=kind.startswith("Stop"),
+                limit_px=_f(o.get("limitPx")) or 0.0,
+                timestamp_ms=int(_f(o.get("timestamp")) or 0)))
         return out
 
     def equity(self, urgent: bool = False) -> Optional[Equity]:
@@ -280,6 +311,23 @@ class Venue:
                           lambda: self.exchange.order(
                               coin, is_buy, size, limit_px,
                               {"limit": {"tif": "Ioc"}}, reduce_only=reduce_only,
+                              cloid=self.new_cloid()))
+
+    def send_limit(self, coin: str, is_buy: bool, size: float,
+                   limit_px: float) -> Any:
+        """Rest a GTC limit order. Does not wait for a fill.
+
+        A marketable IOC is the right shape for "enter now" and the wrong one
+        for support that taps and leaves. Measured 2026-09-19: across 139
+        tradeable watched levels not one was inside the 1.5% entry drift
+        guard, the nearest 3.10% away -- every tap had resolved before a poll
+        could see it. A bid sitting at the level is filled BY the tap.
+        """
+        return self._send(f"LIMIT {coin} {'BUY' if is_buy else 'SELL'} "
+                          f"{size}@{limit_px}",
+                          lambda: self.exchange.order(
+                              coin, is_buy, size, limit_px,
+                              {"limit": {"tif": "Gtc"}}, reduce_only=False,
                               cloid=self.new_cloid()))
 
     def send_trigger(self, coin: str, is_buy: bool, size: float,
