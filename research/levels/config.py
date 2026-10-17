@@ -903,3 +903,20 @@ HALT_ACTION = os.getenv("LEVELS_HALT_ACTION", "verify_stops").strip().lower()
 #               no stop to fall back on and no level to reconstruct one from.
 #   "flatten"   flatten every orphan regardless.
 ORPHAN_ACTION = os.getenv("LEVELS_ORPHAN_ACTION", "auto").strip().lower()
+
+
+# ---- rule 11: the fast reconciliation loop --------------------------------
+# AUDIT B-1 (interim). There is no websocket in this project -- both SDK
+# clients are built skip_ws=True -- so every piece of market and account data
+# arrives on the trader's POLL_SEC cadence, 450 seconds. A gap through a
+# stop, a partial fill, or a venue-side liquidation is invisible for up to
+# seven and a half minutes.
+#
+# Websockets are the real fix and are a later batch. This is the interim: a
+# separate process that compares positions and protective orders against the
+# venue this often, and raises the alarm on divergence. It places no orders
+# and writes no trader state.
+#
+# 45s: three user_state reads a minute is nothing against the venue's limits,
+# and it brings worst-case detection from 450s down to under a minute.
+RECONCILE_POLL_SEC = _i("LEVELS_RECONCILE_POLL_SEC", 45)

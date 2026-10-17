@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The fast reconciliation loop. Audit finding B-1 (interim).
+
+  Compares positions and protective orders against the venue every
+  RECONCILE_POLL_SEC (45s), independent of the trader's 450s signal loop, and
+  queues a halt plus an alert on any divergence.
+
+  It CANNOT place an order: no LEVELS_LIVE_ARMED, and the module imports
+  nothing that can size or enter a position (a test asserts this). It does not
+  write _live_state.json -- the trader stays that file's only writer, and this
+  process raises the alarm through the same command queue Telegram uses.
+
+  Install:
+    cp deploy/launchd/com.cuansniffer.reconcile.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.reconcile.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuansniffer.reconcile</string>
+
+  <!-- The venv's own python, NOT its resolved homebrew target. CPython only
+       adds the venv's site-packages when invoked through the venv directory. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/myair/CuanSniffer/.venv/bin/python</string>
+    <string>-u</string>
+    <string>-m</string>
+    <string>tools.reconcile_loop</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/myair/CuanSniffer</string>
+
+  <!-- Deliberately NO LEVELS_LIVE_ARMED. This process must never be able to
+       place an order, however it is invoked. -->
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/reconcile.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/reconcile.err.log</string>
+</dict>
+</plist>
