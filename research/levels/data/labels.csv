@@ -56,3 +56,15 @@ PUMP-1H_1790830800000_0.005582,2026-10-01T05:15:57Z,take,,"operator's own entry 
 PUMP-4H_1790827200000_0.004416,2026-10-01T05:15:57Z,take,,operator's own STRONG entry .0044 (detected .004416)
 AAVE-4H_1790827200000_142.84,2026-10-01T05:15:57Z,take,,operator's blue zone ~144 from chart (detected 142.84)
 AAVE-4H_1790827200000_135.52,2026-10-01T05:15:57Z,take,,operator's lower blue zone ~135.5 from chart
+ARB-1H_1792242000000_0.184295,2026-10-17T13:15:12Z,skip,,"in between levels, not definitive; price looks likely to continue down. the double tap at .1711 would be the entry. (first label disagreeing with a live fire -- 2026-10-17)"
+FARTCOIN-1H_1792242000000_0.14895,2026-10-17T13:41:08Z,take,,take but a bit early
+LINK-1H_1792242000000_11.966,2026-10-17T13:42:14Z,take,,take
+WLD-1H_1792242000000_0.49466,2026-10-17T13:43:19Z,take,,take
+SUI-1H_1792242000000_0.97565,2026-10-17T13:45:11Z,take,,take
+HYPE-1H_1792242000000_77.9015,2026-10-17T13:45:11Z,take,,take
+BCH-1H_1792242000000_268.81,2026-10-17T13:45:11Z,skip,,skip
+PONS-1H_1792242000000_0.29635,2026-10-17T13:45:11Z,take,,take
+FARTCOIN-4H_1792238400000_0.14609,2026-10-17T13:45:11Z,take,,better entry than 0.14895 which is a bit early
+ENA-4H_1792238400000_0.189525,2026-10-17T13:45:11Z,skip,,would want entry around 0.1827 not 0.1895
+FARTCOIN-1H_1792242000000_0.146665,2026-10-17T13:49:23Z,take,,"take -- better entry than 0.14895, which is a bit early"
+STBL-4H_1792238400000_0.022448,2026-10-17T13:52:07Z,skip,,skip -- dont like the chart at all
