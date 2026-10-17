@@ -133,3 +133,60 @@ so the deletion phase should be done with those jobs unloaded.
   and a partial fill is just a smaller position with a correctly sized stop
   beside a smaller resting order. Findings 6, 9 and 11 were all `pending`,
   not the bid.
+
+## File audit (reported, nothing deleted)
+
+Asked for after the stand-down rewrite. Nothing here was removed — the
+project's stated retention stance is "delete nothing" (`e384524`), so this is
+a list, not an action.
+
+### No fabricated data reached the live files
+
+Checked `episodes.csv`, `live_trades.csv`, `outcomes.csv` and `po3.csv` for the
+fixture symbols that leaked in before (AAA/BBB/CCC/DDD and similar): **zero
+rows**. The autouse isolation in `conftest.py` is holding.
+
+The only deliberately fake things in the tree are `tests/fake_venue.py` (the
+test double) and the two derived fixtures, both declared in
+`tests/fixtures/hyperliquid/PROVENANCE.md`.
+
+### Dead weight
+
+| what | size | note |
+|---|---|---|
+| `archive/` | **898 MB**, 966 files | 836 MB of it is `legacy_bot_data_2026-09-18` from the retired SMC bot. Never imported; `pytest.ini` already excludes it. Pure disk. |
+| `research/levels/data/live_trades.csv` | **26 MB**, 197,098 rows | **98.4% are `skip` rows.** The actual audit trail is 162 `entry`, 110 `protection`, 109 `closed` and 1 `emergency_exit` — 382 rows buried under 193,858. |
+| `research/levels/data/_fetch_failures.log` | 4.2 MB | append-only, nothing reads it |
+| `research/levels/data/_live_state.json` | 111 KB | 76 KB of it is `watching` with 803 entries. The TTL prune is supposed to bound this; 803 suggests it is not keeping up. |
+| `.env.example` | — | **110 of its 121 variables reference nothing in the code.** It documents the retired SMC/V3 bot (`CHART_PATTERN_*`, `DAILY_ZONE_*`, `CHOP_REVERSAL_EXCEPTION`, …). Anyone configuring from it is configuring a system that no longer exists. |
+
+### Dies with the deletion phase
+
+Seven test files, 1,623 lines, exist only to test code that is being removed:
+
+```
+test_protection_verification.py  488    test_margin_summary.py      129
+test_e2e_fake_venue.py           401    test_slippage_reporting.py  101
+test_flatten.py                  237    test_fake_contracts.py       88
+test_reconcile_loop.py           179
+```
+
+Plus the execution/safety portions of `test_error_rate.py`,
+`test_rolling_drawdown.py`, `test_loss_streak.py` and `test_drawdown_rail.py`,
+which test functions inside `live_levels_trader.py` that go away.
+
+`deploy/launchd/com.cuansniffer.reconcile.plist` points at
+`tools/reconcile_loop.py`, which is being deleted. It is not loaded in
+`launchctl` anyway.
+
+### Not dead, just unscheduled
+
+`tools/near_firing.py` and `tools/screen_context.py` are manual CLI tools with
+no plist, referenced only from docs and config. Working as intended.
+
+### Current runtime state
+
+`_live_state.json` shows the bot **manually halted from Telegram**
+(`halt_kind: "manual"`, reason `"halted from Telegram: DISARMED pending…"`)
+and flat — `owned: {}`, `pending: {}`. So the deletion phase can be done
+without racing a live position.
