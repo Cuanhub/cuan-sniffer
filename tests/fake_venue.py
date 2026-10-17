@@ -95,6 +95,8 @@ class FakeHL:
         self.now_ms = int(time.time() * 1000)
         # None means "serve the real 385-fill recording".
         self.fills_override: Optional[List[Dict[str, Any]]] = None
+        # Symbols the venue does not list but tests name anyway.
+        self.quoted: set = {"AAA", "BBB", "CCC", "TEST"}
         self.fill_fraction = 1.0
         self.raise_after_fill = False
 
@@ -147,8 +149,17 @@ class FakeHL:
         return copy.deepcopy(self.resting)
 
     def all_mids(self, dex: str = "") -> Dict[str, str]:
+        """Every perp the venue lists, as the real endpoint returns.
+
+        Quoting only a handful was unrealistic and made any test using
+        another symbol fail with "no midprice" rather than on its own
+        subject. `quoted` carries the fixture names tests use for coins the
+        venue does not actually list.
+        """
         self._maybe_fail_info()
-        coins = set(self.pos) | {"HYPE", "ZRO", "BTC", "NIL"}
+        universe = {str(a.get("name", "")).upper()
+                    for a in load("meta.json").get("universe", [])}
+        coins = (universe | set(self.pos) | self.quoted) - {""}
         return {c: str(self.mid_px) for c in coins}
 
     def meta(self, dex: str = "") -> Dict[str, Any]:
@@ -270,6 +281,15 @@ def build_venue(fake: FakeHL, debug: bool = False) -> Any:
     v.info = fake
     v.exchange = fake
     v._sz_decimals = {}
+    v._max_leverage = {}
     v._cloid_seq = 0
     v.load_meta()
+    # load_meta catches Exception so a network failure degrades gracefully --
+    # which also means a MISSING ATTRIBUTE here degrades silently, to
+    # szDecimals=3 for every coin. That is wrong sizing on every order, so
+    # assert the load actually worked rather than trusting it.
+    if not (fake.fail_info or fake.fail_info_always):
+        assert v._sz_decimals, (
+            "build_venue did not produce asset metadata; every attribute "
+            "Venue.__init__ sets must be set here too")
     return v

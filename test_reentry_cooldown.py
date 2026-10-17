@@ -19,6 +19,9 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 import tools.live_levels_trader as T
+import time
+from core import streak
+from tests.fake_venue import FakeHL, build_venue
 
 
 def iso(dt):
@@ -88,40 +91,74 @@ class Cooldown(unittest.TestCase):
         self.assertIn("NEW", st["cooled"])
 
 
-class AccrueCloseStamps(unittest.TestCase):
-    class Backend:
-        def __init__(self, pnl):
-            self.pnl = pnl
+class CooldownIsDerivedFromFills(unittest.TestCase):
+    """Replaces AccrueCloseStamps.
 
-        def get_realised_pnl(self, coin, since):
-            return self.pnl
+    The cooldown used to be a timestamp stamped into the state file by
+    accrue_close, whose PnL came from get_realised_pnl OR, when that query
+    failed, from assumed_loss. So a rate limit could stamp a cooldown on a
+    winning trade, and a restart between close and stamp lost it entirely.
+    It is now computed from the venue's own fills, so it cannot be faked or
+    lost -- same change as the losing run in core.streak.
+    """
 
-    def accrue(self, pnl):
-        st = {"realised_today": 0.0}
-        note = T.accrue_close(self.Backend(pnl), st, "LIT",
-                              {"opened_at": ago(3), "size_usd": 100.0,
-                               "entry": 4.0, "stop": 3.9})
-        return st, note
+    def trades(self, pnl, hours_ago=1.0):
+        """One completed round trip on LIT with this net result."""
+        now = int(time.time() * 1000)
+        closed = now - int(hours_ago * 3_600_000)
+        fee = 0.05
+        return [
+            {"coin": "LIT", "time": closed - 1000, "side": "B", "sz": "25.0",
+             "startPosition": "0.0", "closedPnl": "0.0", "fee": str(fee),
+             "tid": 1},
+            {"coin": "LIT", "time": closed, "side": "A", "sz": "25.0",
+             "startPosition": "25.0", "closedPnl": str(pnl + 2 * fee),
+             "fee": str(fee), "tid": 2},
+        ]
+
+    def cooling(self, pnl, hours_ago=1.0, window=None):
+        fake = FakeHL()
+        fake.fills_override = self.trades(pnl, hours_ago)
+        return streak.coins_on_cooldown(
+            build_venue(fake),
+            window if window is not None else T.COIN_REENTRY_COOLDOWN_HOURS)
 
     def test_a_loss_puts_the_coin_on_cooldown(self):
-        st, note = self.accrue(-2.28)
-        self.assertGreater(T.cooldown_remaining(st, "LIT"), 0.0)
-        self.assertIn("cooldown", note)
+        self.assertGreater(self.cooling(-2.28).get("LIT", 0.0), 0.0)
 
     def test_a_win_does_not(self):
-        st, note = self.accrue(+6.28)
-        self.assertEqual(T.cooldown_remaining(st, "LIT"), 0.0)
-        self.assertNotIn("cooldown", note)
+        self.assertNotIn("LIT", self.cooling(+6.28))
 
     def test_a_scratch_counts_as_a_loss(self):
-        """Zero realised is a round trip paid in fees for nothing, which is the
-        churn this is here to stop."""
-        st, _ = self.accrue(0.0)
-        self.assertGreater(T.cooldown_remaining(st, "LIT"), 0.0)
+        """Zero realised is a round trip paid in fees for nothing, which is
+        the churn this is here to stop. Net of fees it is a loss, so it falls
+        out of the same comparison rather than needing a special case."""
+        self.assertGreater(self.cooling(0.0).get("LIT", 0.0), 0.0)
 
-    def test_the_realised_total_is_still_accrued(self):
-        st, _ = self.accrue(-2.28)
-        self.assertAlmostEqual(st["realised_today"], -2.28)
+    def test_the_cooldown_expires(self):
+        self.assertNotIn("LIT", self.cooling(
+            -2.28, hours_ago=T.COIN_REENTRY_COOLDOWN_HOURS + 1))
+
+    def test_a_later_win_clears_an_earlier_loss(self):
+        """Only the most recent trade on a coin counts -- "leave it alone
+        until it behaves"."""
+        fake = FakeHL()
+        rows = self.trades(-2.28, hours_ago=2.0) + self.trades(+5.0, hours_ago=1.0)
+        fake.fills_override = rows
+        self.assertNotIn("LIT", streak.coins_on_cooldown(
+            build_venue(fake), T.COIN_REENTRY_COOLDOWN_HOURS))
+
+    def test_an_unreadable_venue_blocks_nothing(self):
+        fake = FakeHL()
+        fake.fills_override = self.trades(-2.28)
+        v = build_venue(fake)
+        fake.fail_info_always = True
+        self.assertEqual(streak.coins_on_cooldown(v, 24.0), {})
+
+    def test_the_entry_path_consults_it(self):
+        import inspect
+        self.assertIn("coins_on_cooldown", inspect.getsource(T.execute_one))
+
 
 
 class DailyCapInsideAPass(unittest.TestCase):

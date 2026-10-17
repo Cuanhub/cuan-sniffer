@@ -63,6 +63,13 @@ UNIVERSE_EXCLUDE = {
 }
 
 
+def _vlm(row: dict) -> float:
+    try:
+        return float(row["day_ntl_vlm"])
+    except (TypeError, ValueError, KeyError):
+        return 0.0
+
+
 def select_universe(client: HyperliquidReadOnlyClient,
                     top_n: int = UNIVERSE_TOP_N) -> List[Dict[str, Any]]:
     """
@@ -84,7 +91,7 @@ def select_universe(client: HyperliquidReadOnlyClient,
             vlm = 0.0
         if symbol in UNIVERSE_EXCLUDE:
             continue
-        rows.append({"symbol": symbol, "day_ntl_vlm": vlm})
+        rows.append({"symbol": symbol, "day_ntl_vlm": float(vlm)})
 
-    rows.sort(key=lambda r: r["day_ntl_vlm"], reverse=True)
+    rows.sort(key=lambda r: _vlm(r), reverse=True)
     return rows[:top_n]

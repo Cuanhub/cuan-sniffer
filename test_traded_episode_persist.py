@@ -128,11 +128,16 @@ class WiredAtBothFills(unittest.TestCase):
         would put setups we did not take into the set used to judge the ones
         we did."""
         import inspect
-        place = inspect.getsource(T.place_resting_bid)
-        fill = inspect.getsource(T.reconcile_pending)
+        place = inspect.getsource(T.rest_one_bid)
+        fill = inspect.getsource(T.persist_filled_bids)
         self.assertNotIn("persist_traded_episode", place)
         self.assertIn("persist_traded_episode", fill)
-        self.assertIn('"episode"', place)
+        self.assertIn("pending_episode", place,
+                      "the episode must be carried until something observes "
+                      "a position")
+        # and the pass loop has to actually call it, or the episode is
+        # carried for ever and never written
+        self.assertIn("persist_filled_bids", inspect.getsource(T.main))
 
 
 if __name__ == "__main__":

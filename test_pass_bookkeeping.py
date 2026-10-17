@@ -42,20 +42,20 @@ class PruningRunsBeforeTheEarlyReturn(unittest.TestCase):
 
     def test_watchlist_pruning_precedes_preflight(self):
         prune, pre = self.positions("prune_watchlist(watching)",
-                                    "why = preflight(backend, state)")
+                                    "why = preflight(venue, state, halt_state, eqlog)")
         self.assertLess(prune, pre,
                         "prune_watchlist sits after the preflight early return, "
                         "so the TTL stops enforcing whenever a pass is refused")
 
     def test_cooldown_pruning_precedes_preflight(self):
         prune, pre = self.positions("prune_cooldowns(state)",
-                                    "why = preflight(backend, state)")
+                                    "why = preflight(venue, state, halt_state, eqlog)")
         self.assertLess(prune, pre)
 
     def test_the_early_return_is_still_there(self):
         """If this ever stops being true the ordering above is moot, and the
         reasoning in this file has gone stale rather than merely redundant."""
-        after = self.src[self.src.index("why = preflight(backend, state)"):]
+        after = self.src[self.src.index("why = preflight(venue, state, halt_state, eqlog)"):]
         self.assertIn("continue", after[:600])
 
     def test_pruning_happens_once_per_pass_not_twice(self):
@@ -63,7 +63,7 @@ class PruningRunsBeforeTheEarlyReturn(unittest.TestCase):
         by the one-shot --seed-watchlist branch, which is a different path and
         legitimately its own call -- an earlier version of this test counted
         across the whole of main() and flagged that as a duplicate."""
-        loop = self.src[self.src.index("reconcile_pending(backend, state)"):]
+        loop = self.src[self.src.index("protect.run_once(venue, meta)"):]
         self.assertEqual(loop.count("prune_watchlist(watching)"), 1)
         self.assertEqual(loop.count("prune_cooldowns(state)"), 1)
 

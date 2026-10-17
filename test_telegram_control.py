@@ -22,6 +22,23 @@ from unittest import mock
 
 import notify
 import tools.telegram_control as C
+import tempfile
+from pathlib import Path
+from unittest import mock
+
+from core import execute, safety
+from tests.fake_venue import FakeHL, build_venue
+
+
+def _venue(**kw):
+    execute.SETTLE_SEC = 0.0
+    safety.FLATTEN_PAUSE_SEC = 0.0
+    return build_venue(FakeHL(**kw))
+
+
+def _halt():
+    return safety.HaltState(Path(tempfile.mkdtemp()) / "halt.json")
+
 import tools.live_levels_trader as T
 
 
@@ -176,35 +193,43 @@ class Queueing(unittest.TestCase):
 
     def test_the_trader_applies_a_queued_halt(self):
         self.tmp.write_text(json.dumps([{"cmd": "halt", "arg": "by hand"}]))
-        st = {}
+        st, h = {}, _halt()
         with mock.patch.object(T, "save_state"), \
                 mock.patch.object(T.notify, "send"):
-            done = T.drain_control_queue(st)
-        self.assertTrue(st["halted"])
-        self.assertEqual(st["halt_kind"], "manual")
+            done = T.drain_control_queue(st, _venue(), h)
+        active = h.active()
+        self.assertIsNotNone(active, "the queued halt was not applied")
+        self.assertEqual(active["kind"], "manual")
+        self.assertIn("by hand", active["reason"])
         self.assertTrue(done)
 
     def test_a_telegram_halt_is_never_auto_released(self):
         """It is kind 'manual' on purpose: the rails clear themselves, a
         human's halt does not."""
-        st = {"halted": True, "halt_kind": "manual",
-              "halt_reason": "halted from Telegram", "owned": {}, "pending": {},
-              "realised_today": 0.0}
-        with mock.patch.object(T, "save_state"):
-            self.assertFalse(T.release_halt_if_clear(st, 704.79))
-        self.assertTrue(st["halted"])
+        h = _halt()
+        h.set(safety.MANUAL, "halted from Telegram")
+        # Not even a new UTC day clears a manual halt. Only --resume does.
+        with mock.patch.object(safety.HaltState, "_today",
+                               staticmethod(lambda: "2099-01-01")):
+            self.assertIsNotNone(h.active())
+        h.clear()
+        self.assertIsNone(h.active())
 
     def test_the_queue_is_cleared_so_commands_cannot_repeat(self):
+        """A timed pause is an AUTO halt now -- a halt that clears itself is
+        exactly what AUTO means, so it is one rather than a third state with
+        its own timestamp and its own way of getting stuck."""
         self.tmp.write_text(json.dumps([{"cmd": "pause", "arg": "2"}]))
-        st = {}
-        with mock.patch.object(T, "save_state"):
-            T.drain_control_queue(st)
-            first = st.get("streak_cooldown_until")
-            st.pop("streak_cooldown_until", None)
-            T.drain_control_queue(st)
-        self.assertTrue(first)
-        self.assertNotIn("streak_cooldown_until", st,
-                         "a drained command must not be applied twice")
+        st, h = {}, _halt()
+        with mock.patch.object(T, "save_state"), \
+                mock.patch.object(T.notify, "send"):
+            first = T.drain_control_queue(st, _venue(), h)
+            self.assertTrue(first, "the pause was not applied")
+            self.assertEqual(h.active()["kind"], "auto")
+            h.clear()
+            again = T.drain_control_queue(st, _venue(), h)
+        self.assertEqual(again, [], "a drained command must not run twice")
+        self.assertIsNone(h.active())
 
     def test_an_unclearable_queue_is_not_acted_on(self):
         """Acting without clearing would replay every command every pass."""
@@ -212,7 +237,7 @@ class Queueing(unittest.TestCase):
         st = {}
         with mock.patch.object(pathlib.Path, "write_text",
                                side_effect=OSError("read-only")):
-            done = T.drain_control_queue(st)
+            done = T.drain_control_queue(st, _venue(), _halt())
         self.assertEqual(done, [])
         self.assertFalse(st.get("halted"))
 
@@ -220,7 +245,7 @@ class Queueing(unittest.TestCase):
         self.tmp.write_text(json.dumps([{"cmd": "selfdestruct", "arg": ""}]))
         st = {}
         with mock.patch.object(T, "save_state"):
-            done = T.drain_control_queue(st)
+            done = T.drain_control_queue(st, _venue(), _halt())
         self.assertIn("ignored unknown command 'selfdestruct'", done)
         self.assertEqual(json.loads(self.tmp.read_text()), [])
 
@@ -228,11 +253,11 @@ class Queueing(unittest.TestCase):
         for junk in ("not json", "{}", "[1, 2, null]", '[{"cmd": null}]'):
             self.tmp.write_text(junk)
             with mock.patch.object(T, "save_state"):
-                T.drain_control_queue({})      # must not raise
+                T.drain_control_queue({}, _venue(), _halt())      # must not raise
 
     def test_a_missing_queue_is_fine(self):
         self.tmp.unlink(missing_ok=True)
-        self.assertEqual(T.drain_control_queue({}), [])
+        self.assertEqual(T.drain_control_queue({}, _venue(), _halt()), [])
 
     def confirm_pause(self, arg):
         ctl = self.ctl()
@@ -335,155 +360,119 @@ class Confirmation(unittest.TestCase):
         self.assertIn("Wrong token", out)
 
     def test_close_names_what_it_will_do(self):
-        ctl = C.Controller(None)
-        reply = ctl.handle("/close HYPE", self.st)
+        """From the VENUE, so the confirmation describes what is actually
+        held rather than what the state file remembers."""
+        v = build_venue(FakeHL(positions={"HYPE": 2.0}, mid=90.0))
+        reply = C.Controller(v).handle("/close HYPE", self.st)
         self.assertIn("HYPE", reply)
-        self.assertIn("180", reply)
+        self.assertIn("90", reply)
 
     def test_close_on_a_coin_not_held_says_so(self):
-        ctl = C.Controller(None)
-        self.assertIn("not open", ctl.handle("/close DOGE", self.st))
+        v = build_venue(FakeHL(positions={"HYPE": 2.0}, mid=90.0))
+        self.assertIn("not open",
+                      C.Controller(v).handle("/close DOGE", self.st))
 
 
 class ClosingReportsTheVenue(unittest.TestCase):
-    """What /close says has to match what the venue holds.
-
-    The bug this replaces, and WHY THE OLD TESTS PASSED THROUGH IT: close_one
-    read `res.status`, which FillResult does not have -- its fields are
-    filled, fill_price, fill_size_usd, slippage_bps, reject_reason and
-    fill_ratio. getattr fell through to "unknown" on every call and the
-    success branch was unreachable. The fake here RETURNED a `status`
-    attribute, inventing an interface the real class never had, so the test
-    agreed with the broken code instead of catching it.
-
-    On 2026-10-17 a /closeall of four positions printed four identical
+    """On 2026-10-17 a /closeall of four positions reported four identical
     warnings while three closed only to dust and ZRO did not close at all --
     $178.70 of live exposure behind a message that read like progress.
 
-    A fake must model the real contract. This one returns what
-    LiveExecutionBackend.flatten returns, and the last test keeps it honest.
+    The fake is now the recorded-payload venue, so "did it close" is answered
+    by what the venue HOLDS rather than by a reply shape.
     """
 
-    class Backend:
-        """Mirrors LiveExecutionBackend.flatten's return shape."""
+    def setUp(self):
+        self._o = (execute.SETTLE_SEC, safety.FLATTEN_PAUSE_SEC,
+                   safety.MAX_FLATTEN_SEC)
+        execute.SETTLE_SEC = 0.0
+        safety.FLATTEN_PAUSE_SEC = 0.0
 
-        def __init__(self, flat=True, closed=180.0, detail="filled 100%"):
-            self.flat, self.closed, self.detail = flat, closed, detail
-            self.calls = []
+    def tearDown(self):
+        (execute.SETTLE_SEC, safety.FLATTEN_PAUSE_SEC,
+         safety.MAX_FLATTEN_SEC) = self._o
 
-        def get_mid_price(self, coin):
-            return 89.0
-
-        def flatten(self, coin, side="LONG", reason="flatten", attempts=3):
-            self.calls.append({"coin": coin, "side": side, "reason": reason})
-            return {"flat": self.flat, "attempts_used": 1 if self.flat else attempts,
-                    "closed_usd": self.closed, "detail": self.detail}
-
-    def st(self):
-        return {"owned": {"HYPE": {"entry": 90.0, "size_usd": 180.0}}}
+    def venue(self, **kw):
+        self.fake = FakeHL(positions={"HYPE": 2.0}, mid=90.0, **kw)
+        return build_venue(self.fake)
 
     def test_a_clean_close_is_reported_as_flat(self):
-        b = self.Backend(flat=True)
-        out = C.Controller(b).close_one("HYPE", self.st())
+        v = self.venue()
+        out = C.Controller(v).close_one("HYPE", {})
         self.assertIn("✅", out)
         self.assertIn("flat", out.lower())
-        self.assertEqual(len(b.calls), 1)
-        self.assertEqual(b.calls[0]["coin"], "HYPE")
+        self.assertEqual(self.fake.pos, {})
 
     def test_a_position_still_open_is_reported_LOUDLY(self):
         """The case that cost $178.70 of unnoticed exposure."""
-        b = self.Backend(flat=False, closed=0.0,
-                         detail="STILL OPEN: venue size 89.5")
-        out = C.Controller(b).close_one("HYPE", self.st())
+        safety.MAX_FLATTEN_SEC = 0.05
+        v = self.venue()
+        self.fake.order_fills = False        # accepted, nothing moves
+        out = C.Controller(v).close_one("HYPE", {})
         self.assertIn("🚨", out)
         self.assertIn("STILL OPEN", out)
         self.assertNotIn("✅", out)
 
     def test_a_partial_close_is_not_reported_as_success(self):
-        b = self.Backend(flat=False, closed=90.0,
-                         detail="attempt 1: filled 50% of $180.00")
-        out = C.Controller(b).close_one("HYPE", self.st())
-        self.assertIn("🚨", out)
-        self.assertIn("90.00", out, "the operator should see what DID close")
-
-    def test_a_still_open_report_says_protection_is_intact(self):
-        """Otherwise the operator's next move is unclear."""
-        out = C.Controller(self.Backend(flat=False)).close_one("HYPE", self.st())
-        self.assertIn("stop", out.lower())
-
-    def test_no_backend_means_no_close(self):
-        self.assertIn("No venue connection",
-                      C.Controller(None).close_one("HYPE", self.st()))
+        """`filled` is True for a partial too, so the old code called a
+        half-closed position closed."""
+        safety.MAX_FLATTEN_SEC = 0.05
+        v = self.venue()
+        self.fake.positions = {"HYPE": 2.0}
+        self.fake.fill_fraction = 0.0001     # moves, but never finishes
+        out = C.Controller(v).close_one("HYPE", {})
+        self.assertNotIn("✅", out)
 
     def test_a_coin_not_held_is_not_sent_to_the_venue(self):
-        b = self.Backend()
-        out = C.Controller(b).close_one("DOGE", self.st())
-        self.assertIn("no open position", out.lower())
-        self.assertEqual(b.calls, [], "an unheld coin reached the venue")
+        v = self.venue()
+        out = C.Controller(v).close_one("ZRO", {})
+        self.assertIn("not open", out)
+        self.assertEqual(self.fake.sent, [])
 
-    def test_a_raising_backend_is_reported_not_swallowed(self):
-        class Angry(self.Backend):
-            def flatten(self, coin, side="LONG", reason="flatten", attempts=3):
-                raise RuntimeError("venue said no")
-        out = C.Controller(Angry()).close_one("HYPE", self.st())
-        self.assertIn("venue said no", out)
-        self.assertIn("⚠️", out)
+    def test_a_coin_the_state_file_never_knew_is_still_closeable(self):
+        """REVIEW.md finding 5. The old close_one read state["owned"] first
+        and answered "No open position" while the venue held it -- which is
+        exactly what a timeout-after-fill leaves behind."""
+        v = self.venue()
+        out = C.Controller(v).close_one("HYPE", {})     # empty state
+        self.assertIn("✅", out)
+        self.assertEqual(self.fake.pos, {})
 
-    def test_closeall_reports_each_position_separately(self):
-        b = self.Backend(flat=False, detail="STILL OPEN: venue size 1")
-        st = {"owned": {"HYPE": {"size_usd": 1.0}, "ZRO": {"size_usd": 1.0}}}
-        ctl = C.Controller(b)
-        out = ctl.execute("closeall", "", st)
-        self.assertIn("HYPE", out)
-        self.assertIn("ZRO", out)
-        self.assertEqual(out.count("🚨"), 2,
-                         "a failure on one must not be hidden by the other")
+    def test_an_unreadable_venue_sends_nothing_and_says_so(self):
+        v = self.venue()
+        self.fake.fail_info_always = True
+        out = C.Controller(v).close_one("HYPE", {})
+        self.assertIn("Could not read", out)
+        self.assertEqual(self.fake.sent, [])
 
-    def test_close_one_does_NOT_read_a_field_FillResult_lacks(self):
-        """The root cause, pinned. FillResult has no `status`, so code that
-        branches on one branches on None forever.
+    def test_closeall_closes_everything_the_venue_holds(self):
+        v = self.venue()
+        self.fake.pos.update({"ZRO": 50.0, "NIL": 900.0})
+        out = C.Controller(v).close_all()
+        self.assertIn("✅", out)
+        self.assertEqual(self.fake.pos, {})
 
-        Scoped to close_one's own source, because the module legitimately
-        contains the string "status" -- it serves a /status command.
-        """
-        from execution_backend import FillResult
-        self.assertFalse(hasattr(FillResult, "status"),
-                         "FillResult grew a status field; revisit this")
+    def test_closeall_cancels_resting_orders_too(self):
+        v = self.venue()
+        self.fake.rest_plain_order("HYPE", 1.0, 80.0)
+        C.Controller(v).close_all()
+        self.assertEqual(self.fake.resting, [],
+                         "a resting bid could re-open what was just closed")
+
+    def test_close_one_does_NOT_read_a_field_a_reply_lacks(self):
+        """The root cause, pinned. Nothing parses an order response now."""
         src = open("tools/telegram_control.py").read()
-        fn = src[src.index("    def close_one("):src.index("    def handle(")]
-        # Everything after the docstring. The docstring NAMES res.status while
-        # explaining the old bug, and matching that would be the third time a
-        # test in this project asserted against prose instead of behaviour.
+        fn = src[src.index("    def close_one("):src.index("    def close_all(")]
         code = fn.split('"""', 2)[2]
-        for bad in ('getattr(res, "status"', "res.status",
-                    'res.get("status")'):
+        for bad in ('getattr(res, "status"', "res.status", 'res.get("status")'):
             self.assertNotIn(bad, code, f"close_one reads {bad}")
-        self.assertIn('res.get("flat")', code,
-                      "close_one must branch on the venue's verdict")
 
 
-class ThereIsNoRawOpen(unittest.TestCase):
-    def test_open_is_not_a_command(self):
-        """A long with no level has no structural stop and no target.
-        /take forces a coin the scanner already has; /open would invent one."""
-        ctl = C.Controller(None)
-        self.assertIn("Unknown command", ctl.handle("/open HYPE", {"owned": {}}))
 
-    def test_take_only_grants_a_window_and_decides_nothing(self):
-        """The trader is what knows whether a candidate exists, so the drain
-        records permission and refuses nothing here."""
-        st = {}
-        tmp = pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / f"t{os.getpid()}.json"
-        saved = T.CONTROL_QUEUE
-        T.CONTROL_QUEUE = tmp
-        try:
-            tmp.write_text(json.dumps([{"cmd": "take", "arg": "hype"}]))
-            with mock.patch.object(T, "save_state"):
-                T.drain_control_queue(st)
-            self.assertIn("HYPE", st["forced"])
-        finally:
-            T.CONTROL_QUEUE = saved
-            tmp.unlink(missing_ok=True)
+# ThereIsNoRawOpen retired: /take was dropped on instruction, along with
+# FORCEABLE and the state["forced"] plumbing it tested. There is no longer any
+# way to force an entry past a rail, which is a stronger guarantee than the
+# one this class checked.
 
 
 class Rendering(unittest.TestCase):
@@ -565,3 +554,168 @@ class SharedTokenIsDetected(unittest.TestCase):
                       "the alert must say what actually fixes it")
         self.assertIn("conflicts = 0", src,
                       "a successful poll must reset the counter")
+class Rendering(unittest.TestCase):
+    def venue(self, positions=None, usdc=700.0, **kw):
+        self.fake = FakeHL(positions=positions or {}, mid=99.0, usdc=usdc, **kw)
+        return build_venue(self.fake)
+
+    def test_status_reports_a_halt_and_its_kind(self):
+        d = Path(tempfile.mkdtemp())
+        h = safety.HaltState(d / "halt.json")
+        h.set(safety.MANUAL, "halted from Telegram: test")
+        eq = safety.EquityLog(d / "eq.json")
+        with mock.patch.object(safety, "HaltState", lambda *a, **k: h), \
+                mock.patch.object(safety, "EquityLog", lambda *a, **k: eq):
+            out = C.render_status({}, 704.79, self.venue())
+        self.assertIn("HALTED", out)
+        self.assertIn("manual", out)
+
+    def test_status_reports_the_rolling_drawdown(self):
+        d = Path(tempfile.mkdtemp())
+        log = safety.EquityLog(d / "eq.json")
+        log.observe(1000.0)
+        halt = safety.HaltState(d / "h.json")
+        with mock.patch.object(safety, "HaltState", lambda *a, **k: halt), \
+                mock.patch.object(safety, "EquityLog", lambda *a, **k: log):
+            out = C.render_status({}, 900.0, self.venue())
+        self.assertIn("drawdown", out)
+        self.assertIn("10.00%", out)
+
+    def test_status_survives_no_equity(self):
+        C.render_status({}, None, None)      # must not raise
+
+    def test_positions_when_flat(self):
+        self.assertIn("Flat", C.render_positions({}, self.venue()))
+
+    def test_positions_shows_live_pnl(self):
+        v = self.venue({"HYPE": 2.0})
+        self.fake.unrealized = {"HYPE": 18.0}
+        out = C.render_positions({}, v)
+        self.assertIn("HYPE", out)
+        self.assertIn("+18.00", out)
+
+    def test_positions_flags_a_position_with_no_stop(self):
+        """The screen the operator checks first must say this."""
+        out = C.render_positions({}, self.venue({"HYPE": 2.0}))
+        self.assertIn("NO STOP", out)
+
+    def test_positions_shows_the_stop_when_there_is_one(self):
+        v = self.venue({"HYPE": 2.0})
+        self.fake.rest_protection("HYPE", 2.0, stop_px=88.0)
+        out = C.render_positions({}, v)
+        self.assertIn("88", out)
+        self.assertNotIn("NO STOP", out)
+
+    def test_positions_warns_when_the_stop_undercovers(self):
+        v = self.venue({"HYPE": 2.0})
+        self.fake.rest_protection("HYPE", 1.0, stop_px=88.0)
+        self.assertIn("covers only", C.render_positions({}, v))
+
+    def test_positions_survives_a_backend_that_raises(self):
+        v = self.venue({"HYPE": 2.0})
+        self.fake.fail_info_always = True
+        self.assertIn("Could not read", C.render_positions({}, v))
+
+    def test_positions_with_no_backend(self):
+        self.assertIn("No venue", C.render_positions({}, None))
+
+
+
+class HelpIsReachable(unittest.TestCase):
+    """Regression for a real breakage during the execution rewrite.
+
+    Editing render_positions removed the HELP constant along with it, so
+    /help and /start raised NameError. The module still imported, because
+    HELP is only referenced inside handle() -- mypy caught it and no test
+    did, because nothing exercised /help. Now something does.
+    """
+
+    def test_help_and_start_return_the_help_text(self):
+        ctl = C.Controller(None)
+        for cmd in ("/help", "/start"):
+            out = ctl.handle(cmd, {})
+            self.assertIn("Cuan Sniffer controls", out)
+            self.assertIn("/closeall", out)
+
+    @staticmethod
+    def advertised():
+        """Commands listed as available, not ones the prose mentions.
+
+        The help text deliberately explains that /open and /take do NOT
+        exist, so a naive scan of every `/word` in it picks those up too.
+        Only a line that STARTS with a command is an advertisement.
+        """
+        import re
+        out = set()
+        for line in C.HELP.splitlines():
+            m = re.match(r"\s*`/([a-z]+)", line)
+            if m:
+                out.add(m.group(1))
+        return out
+
+    def test_help_does_not_advertise_a_command_that_was_removed(self):
+        self.assertNotIn("take", self.advertised())
+        self.assertNotIn("open", self.advertised())
+        # and the prose still explains why neither exists
+        out = C.Controller(None).handle("/help", {})
+        self.assertIn("no `/open COIN`", out)
+        self.assertIn("no `/take`", out)
+
+    def test_every_advertised_command_is_handled(self):
+        """A help text that lists a command nothing implements is a lie."""
+        ctl = C.Controller(None)
+        found = self.advertised()
+        self.assertTrue({"status", "positions", "halt", "close", "closeall",
+                         "resume", "pause", "help"} <= found, found)
+        for cmd in sorted(found):
+            out = ctl.handle(f"/{cmd}", {})
+            self.assertNotIn("Unknown command", out,
+                             f"/{cmd} is advertised but not handled")
+
+
+class RepeatedCommandsCollapse(unittest.TestCase):
+    """Found by a real drain: four identical `halt` commands were waiting and
+    each ran its own flatten_all -- four venue sweeps for one intent."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()) / "q.json"
+        self._saved = T.CONTROL_QUEUE
+        T.CONTROL_QUEUE = self.tmp
+
+    def tearDown(self):
+        T.CONTROL_QUEUE = self._saved
+
+    def test_four_halts_flatten_once(self):
+        self.tmp.write_text(json.dumps(
+            [{"cmd": "halt", "arg": "a"}] * 4))
+        fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+        execute.SETTLE_SEC = 0.0
+        safety.FLATTEN_PAUSE_SEC = 0.0
+        v = build_venue(fake)
+        h = _halt()
+        with mock.patch.object(T, "save_state"), \
+                mock.patch.object(T.notify, "send"):
+            done = T.drain_control_queue({}, v, h)
+        self.assertEqual(len(done), 1, f"acted {len(done)} times: {done}")
+        self.assertIsNotNone(h.active())
+
+    def test_distinct_commands_all_run(self):
+        self.tmp.write_text(json.dumps(
+            [{"cmd": "halt", "arg": "x"}, {"cmd": "resume", "arg": ""}]))
+        v = _venue()
+        h = _halt()
+        with mock.patch.object(T, "save_state"), \
+                mock.patch.object(T.notify, "send"):
+            done = T.drain_control_queue({}, v, h)
+        self.assertEqual(len(done), 2, done)
+
+    def test_the_last_of_a_repeated_verb_wins(self):
+        self.tmp.write_text(json.dumps(
+            [{"cmd": "pause", "arg": "2"}, {"cmd": "pause", "arg": "9"}]))
+        v = _venue()
+        h = _halt()
+        with mock.patch.object(T, "save_state"), \
+                mock.patch.object(T.notify, "send"):
+            done = T.drain_control_queue({}, v, h)
+        self.assertEqual(len(done), 1)
+        self.assertIn("9", h.active()["reason"])

@@ -118,6 +118,7 @@ class Equity:
     """
     usdc_total: float
     unrealized_pnl: float    # informational only -- already inside usdc_total
+    available: float         # free collateral, per the venue
 
 
 class Venue:
@@ -135,6 +136,7 @@ class Venue:
             wallet, base, account_address=HL_ACCOUNT_ADDRESS,
             vault_address=HL_VAULT_ADDRESS, spot_meta=_EMPTY_SPOT_META)
         self._sz_decimals: Dict[str, int] = {}
+        self._max_leverage: Dict[str, int] = {}
         self._cloid_seq = 0
         self.load_meta()
         print(f"[VENUE] {'TESTNET' if HL_TESTNET else 'MAINNET'} "
@@ -153,6 +155,7 @@ class Venue:
                 name = str(asset.get("name", "")).upper()
                 if name:
                     self._sz_decimals[name] = int(asset.get("szDecimals", 3))
+                    self._max_leverage[name] = int(asset.get("maxLeverage", 0) or 0)
         except Exception as e:
             print(f"[VENUE] meta load failed: {str(e)[:120]}")
         return bool(self._sz_decimals)
@@ -292,7 +295,18 @@ class Venue:
             return None
         pos = self.positions(urgent=urgent)
         unreal = sum(p.unrealized_pnl for p in pos.values()) if pos else 0.0
-        return Equity(usdc_total=total, unrealized_pnl=unreal)
+        # tokenToAvailableAfterMaintenance is the venue's own answer to how
+        # much is actually free, and it nets out maintenance margin on open
+        # perps. `total - hold` was used before and `hold` is a SPOT order
+        # lock, so with a perp position open it reported the whole balance as
+        # free and the next trade was sized against committed collateral.
+        avail = _available_after_maintenance(spot, usdc.get("token"))
+        if avail is None:
+            avail = max(0.0, total - (_f(usdc.get("hold")) or 0.0))
+            print("[VENUE] tokenToAvailableAfterMaintenance missing -- "
+                  "falling back to total-hold, which may over-report")
+        return Equity(usdc_total=total, unrealized_pnl=unreal,
+                      available=max(0.0, min(avail, total)))
 
     def fills(self, since_ms: int, urgent: bool = False
               ) -> Optional[List[Dict[str, Any]]]:
@@ -307,6 +321,29 @@ class Venue:
         if not isinstance(raw, list):
             return None
         return [f for f in raw if isinstance(f, dict)]
+
+    def max_leverage_for(self, coin: str) -> Optional[int]:
+        """The venue's per-coin leverage ceiling, or None if unknown."""
+        if not self.load_meta():
+            return None
+        return self._max_leverage.get(coin.upper()) or None
+
+    def set_leverage(self, coin: str, leverage: int, is_cross: bool = True) -> bool:
+        """Set the account's leverage for one coin before sizing into it.
+
+        Hyperliquid enforces leverage per asset, so opening 5x notional while
+        the account is set to 3x on that coin is simply refused for margin.
+        130 of the venue's perps cap at 3x, so the ask has to know the ceiling.
+        """
+        coin = coin.upper().strip()
+        want = max(1, int(leverage))
+        cap = self.max_leverage_for(coin)
+        if cap:
+            want = min(want, int(cap))
+        resp = self._send(f"LEVERAGE {coin} {want}x",
+                          lambda: self.exchange.update_leverage(
+                              want, coin, is_cross))
+        return isinstance(resp, dict) and str(resp.get("status")) == "ok"
 
     def mid(self, coin: str) -> Optional[float]:
         """Mid price. Entry sizing only; the kill switch uses Position.mark_px,
@@ -370,6 +407,28 @@ class Venue:
         if self.debug:
             print(f"[VENUE] {what} -> {str(resp)[:200]}")
         return resp
+
+
+def _available_after_maintenance(spot: Any, token_id: Any) -> Optional[float]:
+    """Free collateral for one spot token, per the venue.
+
+    Arrives as [[token_id, "amount"], ...]. None when absent or not listed,
+    which the caller must treat as "ask a different way", never as zero free.
+    """
+    if not isinstance(spot, dict) or token_id is None:
+        return None
+    rows = spot.get("tokenToAvailableAfterMaintenance")
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) != 2:
+            continue
+        try:
+            if int(row[0]) == int(token_id):
+                return float(row[1])
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _f(v: Any) -> Optional[float]:

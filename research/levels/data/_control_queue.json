@@ -1,1 +1,7 @@
-[]
+[
+  {
+    "cmd": "halt",
+    "arg": "requested from Telegram",
+    "at": "2026-10-17T10:02:20.674574Z"
+  }
+]

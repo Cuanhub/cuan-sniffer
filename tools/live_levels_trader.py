@@ -53,6 +53,9 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 import notify                                                        # noqa: E402
+from core import execute, protect, safety, streak                     # noqa: E402
+from core.meta import MetaStore, TradeMeta                            # noqa: E402
+from core.venue import Venue                                          # noqa: E402
 from research.levels import storage                                   # noqa: E402
 from research.levels.call import find_candidates as _find_candidates  # noqa: E402
 from research.levels.venue_client import HyperliquidReadOnlyClient    # noqa: E402
@@ -66,14 +69,11 @@ from research.levels.levels import log_sigma, sigma_distance          # noqa: E4
 # whether they rest on a measurement or on my guess.
 from research.levels.config import (                                  # noqa: E402
     MAX_CONCURRENT, MAX_NEW_PER_DAY, MAX_LEVERAGE,
-    DAILY_LOSS_STOP_PCT, MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
+    MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
     ENTRY_MAX_BREAK_FRAC, ENTRY_MAX_BASIS_BPS, ENTRY_MAX_PULL_OVER_RUN,
-    HALT_ACTION, ORPHAN_ACTION, ERROR_RATE_ALERT,
-    COIN_REENTRY_COOLDOWN_HOURS, ACCOUNT_DD_HALT_PCT,
-    ACCOUNT_DD_WINDOW_HOURS, HALT_AUTO_RELEASE,
-    LOSS_STREAK_TRIGGER, LOSS_STREAK_COOLDOWN_HOURS,
+    COIN_REENTRY_COOLDOWN_HOURS,
     ENTRY_SPACING_MINUTES,
     MARGIN_PCT_PER_TRADE,
     NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
@@ -172,8 +172,11 @@ def load_state() -> Dict[str, Any]:
             parsed.pop(dead, None)
             print(f"[LEVELS_LIVE] dropped retired state key {dead!r}")
         return parsed
-    return {"owned": {}, "watching": {}, "pending": {}, "opened_today": 0, "day": "",
-            "realised_today": 0.0, "halted": False, "halt_reason": ""}
+    # Strategy state only. What the account HOLDS is not in here: that is
+    # read from the venue, and the halt and the loss limits live in
+    # core.safety. See core.meta for why this file can no longer express a
+    # position -- it is REVIEW.md findings 5, 6, 8, 9 and 11 in one line.
+    return {"watching": {}, "opened_today": 0, "day": ""}
 
 
 def save_state(s: Dict[str, Any]) -> None:
@@ -290,47 +293,10 @@ def passes_quality(ep: Dict[str, Any], watched: bool = False) -> Optional[str]:
     return None
 
 
-def account_equity(info, addr: str) -> Dict[str, float]:
-    """Equity, used and available margin, correct for BOTH account models.
-
-    This account is a unifiedAccount: perp collateral sits in the SPOT layer
-    as USDC, and clearinghouseState.marginSummary.accountValue is NOT equity
-    -- it is totalRawUsd + totalNtlPos, which read $70.88 against a real
-    $786.25 balance. Reading that figure as equity under-sized every position
-    by about 11x. live_execution_backend._get_margin_summary_unified() has
-    always handled this; this planner bypassed it and got it wrong.
-    """
-    # Never guess the account model. A failed query used to fall through to
-    # `standard`, which on THIS account reads marginSummary.accountValue --
-    # $70.88 against a real $786.25, an 11x under-read. Every position would
-    # then size off 11x too little equity and fall under MIN_NOTIONAL, so the
-    # trader would stop trading entirely and look like a quiet market. The
-    # query fails on a 429, which happens routinely.
-    try:
-        unified = str(info.query_user_abstraction_state(addr)).strip().lower() == "unifiedaccount"
-    except Exception as e:
-        raise RuntimeError(
-            f"cannot determine account model ({str(e)[:120]}); refusing to "
-            f"size against a guess") from e
-    if unified:
-        sp = info.spot_user_state(addr)
-        usdc = next((b for b in sp.get("balances", [])
-                     if str(b.get("coin", "")).upper() == "USDC"), None)
-        if usdc:
-            total = float(usdc.get("total", 0) or 0)
-            hold = float(usdc.get("hold", 0) or 0)
-            return {"equity": total, "used": hold, "available": max(0.0, total - hold),
-                    "model": "unified"}
-    st = info.user_state(addr)
-    ms = st.get("marginSummary", {}) or {}
-    eq = float(ms.get("accountValue", 0) or 0)
-    used = float(ms.get("totalMarginUsed", 0) or 0)
-    return {"equity": eq, "used": used, "available": max(0.0, eq - used), "model": "standard"}
-
-
 def size_from_stop(equity: float, entry: float, stop: float,
-                   available: float = None,
-                   venue_max_leverage: float = None) -> Dict[str, float]:
+                   available: Optional[float] = None,
+                   venue_max_leverage: Optional[float] = None
+                   ) -> Dict[str, float]:
     """Flat size: MARGIN_PCT_PER_TRADE of equity, levered FLAT_LEVERAGE times.
 
     Size was derived from the stop so risk stayed pinned at 3% of equity, and
@@ -595,7 +561,8 @@ def build_intents(client, universe, watching: Optional[Dict[str, Any]] = None,
     return intents, rejected
 
 
-def describe(ep: Dict[str, Any], equity: float, available: float = None) -> Dict[str, Any]:
+def describe(ep: Dict[str, Any], equity: float,
+             available: Optional[float] = None) -> Dict[str, Any]:
     """Turn a setup into the concrete order that would be sent, with the size
     derived from the structural stop rather than from a leverage choice."""
     def f(k, d=0.0):
@@ -655,20 +622,20 @@ def main():
         print(f"[LEVELS_LIVE] watchlist seeded: {before} -> {len(watching)} "
               f"({added} admitted from the trade log)")
         return 0
+    halt_state = safety.HaltState()
+    eqlog = safety.EquityLog()
     if args.resume:
-        state["halted"] = False
-        state["halt_reason"] = ""
-        # Cleared too, so a later auto-release cannot read a stale kind off a
-        # halt that no longer exists.
-        state["halt_kind"] = ""
-        save_state(state)
-        print("[LEVELS_LIVE] halt cleared")
+        was = halt_state.active()
+        halt_state.clear()
+        print(f"[LEVELS_LIVE] halt cleared"
+              + (f" (was: {was.get('reason')})" if was else " (none was active)"))
         return 0
     if args.clear_standdown:
-        left = clear_standdown(state)
-        print(f"[LEVELS_LIVE] stand-down cleared "
-              f"({left:.1f}h would have remained)" if left > 0
-              else "[LEVELS_LIVE] no stand-down was active")
+        # One timestamp, not a flag: it silences the run that caused the
+        # stand-down without disabling the rail, so a fresh loss afterwards
+        # starts a new run. See core.streak.
+        safety.StandDownOverride().clear_now()
+        print("[LEVELS_LIVE] stand-down cleared for the current losing run")
         return 0
 
     env_armed = os.getenv("LEVELS_LIVE_ARMED", "").strip().lower() == "yes"
@@ -684,8 +651,8 @@ def main():
     print(f"[LEVELS_LIVE] rails: margin {MARGIN_PCT_PER_TRADE}%/trade at "
           f"{FLAT_LEVERAGE:g}x, max {MAX_CONCURRENT} "
           f"concurrent, {'unlimited' if not MAX_NEW_PER_DAY else str(MAX_NEW_PER_DAY)+'/day'}, "
-          f"lev cap {MAX_LEVERAGE}x, daily stop {DAILY_LOSS_STOP_PCT}%, "
-          f"account dd halt {ACCOUNT_DD_HALT_PCT:g}%")
+          f"lev cap {MAX_LEVERAGE}x, daily stop {safety.DAILY_LOSS_PCT:g}%, "
+          f"drawdown halt {safety.DRAWDOWN_PCT:g}%")
     print(f"[LEVELS_LIVE] {config_summary()}")
     print("[LEVELS_LIVE] NOTE: this gate measured -0.0413R vs random entry "
           "(z=-0.93, n=688 backfill trades).")
@@ -696,8 +663,8 @@ def main():
             f"▶️ *Level trader armed*\nmargin {MARGIN_PCT_PER_TRADE}%/trade "
             f"at {FLAT_LEVERAGE:g}x, "
             f"max {MAX_CONCURRENT} concurrent, {MAX_NEW_PER_DAY}/day, "
-            f"daily stop {DAILY_LOSS_STOP_PCT}%, "
-            f"account dd halt {ACCOUNT_DD_HALT_PCT:g}%",
+            f"daily stop {safety.DAILY_LOSS_PCT:g}%, "
+            f"drawdown halt {safety.DRAWDOWN_PCT:g}%",
             key="armed_start", cooldown_sec=300)
 
     ro = HyperliquidReadOnlyClient()
@@ -711,68 +678,67 @@ def main():
     # is ever read stale. Bounded by the universe size: one entry per coin.
     tf_cache: Dict[Any, Any] = {}
 
+    # One Venue, built whether or not we are armed, so the banner equity and
+    # the equity a pass sizes against come from the same place. They used to
+    # come from two different code paths and could disagree.
+    venue = None
+    try:
+        venue = start_venue(Venue)
+    except Exception as e:
+        if armed:
+            raise SystemExit(
+                f"[LEVELS_LIVE] !! venue unavailable ({str(e)[:120]}) and this "
+                f"process is ARMED. Refusing to start.")
+        print(f"[LEVELS_LIVE] venue unavailable ({str(e)[:90]}); dry run")
+    if venue is None and armed and not _stop:
+        return 0                      # stopped while waiting to retry
+
     equity = args.equity
     available = None
+    if equity is None and venue is not None:
+        eq = venue.equity()
+        if eq is not None:
+            equity, available = eq.usdc_total, eq.available
+            print(f"[LEVELS_LIVE] equity ${equity:.2f}   "
+                  f"available ${available:.2f}"
+                  + (f"   (incl. unrealised {eq.unrealized_pnl:+.2f})"
+                     if eq.unrealized_pnl else ""))
+        elif armed:
+            raise SystemExit("[LEVELS_LIVE] !! equity query failed and this "
+                             "process is ARMED. Refusing to start on a "
+                             "guessed balance.")
     if equity is None:
-        try:
-            from hyperliquid.info import Info
-            from hyperliquid.utils import constants
-            addr = os.getenv("HL_ACCOUNT_ADDRESS", "").strip()
-            info = Info(constants.MAINNET_API_URL, skip_ws=True,
-                        spot_meta={"tokens": [], "universe": []})
-            acc = account_equity(info, addr)
-            equity, available = acc["equity"], acc["available"]
-            print(f"[LEVELS_LIVE] account model: {acc['model']}   equity ${equity:.2f}   "
-                  f"used ${acc['used']:.2f}   available ${available:.2f}")
-        except Exception as e:
-            if armed:
-                # The armed loop re-reads equity from the backend every pass,
-                # so this figure is only the banner -- but a banner that
-                # invents $100 against a real $768 is the kind of number an
-                # operator checks a pass against and believes.
-                raise SystemExit(
-                    f"[LEVELS_LIVE] !! equity query failed ({str(e)[:120]}) and "
-                    f"this process is ARMED. Refusing to start on a guessed "
-                    f"balance.")
-            equity = 100.0
-            print(f"[LEVELS_LIVE] equity query failed ({e}); dry run, "
-                  f"assuming ${equity:.2f} to print sizes")
+        equity = 100.0
+        print(f"[LEVELS_LIVE] no equity reading; dry run, assuming "
+              f"${equity:.2f} to print sizes")
     _margin = equity * MARGIN_PCT_PER_TRADE / 100.0
     print(f"[LEVELS_LIVE] per trade: margin ${_margin:.2f}, "
           f"notional ${_margin * FLAT_LEVERAGE:.2f}, "
           f"risk at a median 1.76% stop ${_margin * 0.088:.2f} "
           f"({_margin * 0.088 / equity * 100:.2f}% of equity)")
 
-    backend = None
-    if armed:
-        from live_execution_backend import LiveExecutionBackend
-        # Retried, because the SDK's Info.__init__ fetches perp metadata
-        # itself and a 429 there raises before any of our code runs. Twice on
-        # 2026-09-19 that killed the process outright at startup. launchd
-        # restarts it, so it self-heals, but a crash loop against a rate limit
-        # is the worst possible way to wait -- every restart is another
-        # request, which is what caused the limit.
-        backend = start_backend(LiveExecutionBackend)
-        if backend is None:
-            return 0                      # stopped while waiting to retry
-        print("[LEVELS_LIVE] live backend up")
-        # AUDIT C-1. Before the first pass, deal with anything the venue holds
-        # that this module did not open -- the timeout-after-fill case leaves
-        # exactly that, and venue_sanity would only halt on it.
-        adopt_or_flatten_orphans(backend, state)
+    meta = MetaStore()
+    if armed and venue is not None:
+        # Before the first pass, make sure everything the venue holds has a
+        # stop -- including anything this module did not open, which is what
+        # a timeout-after-fill leaves behind. The old startup sweep halted on
+        # such a position; this one protects it and carries on.
+        for r in protect.run_once(venue, meta):
+            print(f"[LEVELS_LIVE] startup protection {r.coin}: {r.action}")
 
     if args.limit_entry:
-        if not armed:
+        if not armed or venue is None:
             print("[LEVELS_LIVE] --limit-entry places a REAL order and needs "
                   "--arm plus LEVELS_LIVE_ARMED=yes")
             return 1
-        return place_resting_bid(backend, ro, universe, args.limit_entry[0],
-                                 args.limit_entry[1], equity, available, state)
+        coin, level = args.limit_entry[0].upper(), args.limit_entry[1]
+        return rest_one_bid(venue, meta, ro, universe, coin, level,
+                            equity, available, state)
 
     while not _stop:
         # Before anything else in the pass, so a queued halt takes effect on
         # this pass rather than the next one.
-        drain_control_queue(state)
+        drain_control_queue(state, venue, halt_state)
         if roll_day(state):
             # The universe is "top N perps by 24h volume, refreshed daily" --
             # and this loop never refreshed it. scanner.py has always rolled
@@ -786,11 +752,19 @@ def main():
             except Exception as e:
                 print(f"[LEVELS_LIVE] universe refresh failed ({str(e)[:80]}); "
                       f"keeping yesterday's {len(universe)} symbols")
-        if backend is not None:
-            # Pending first: a bid that filled must become a known, protected
-            # position before venue_sanity can meet it as an unknown one.
-            reconcile_pending(backend, state)
-            reconcile(backend, state)
+        if venue is not None:
+            # Protection first, every pass. There is nothing to "reconcile":
+            # the venue is read directly, so a bid that filled is simply a
+            # position this cycle finds and stops. The old pair of functions
+            # existed to keep a state file in step with the venue, and that
+            # step is what findings 2, 5, 6, 8, 9 and 11 all lived in.
+            for r in protect.run_once(venue, meta):
+                if not r.protected:
+                    print(f"[LEVELS_LIVE] protection {r.coin}: {r.action} "
+                          f"-- {r.detail[:100]}")
+            for coin in persist_filled_bids(venue, meta):
+                print(f"[LEVELS_LIVE] {coin}: resting bid filled -- episode "
+                      f"persisted")
 
             # Bookkeeping runs BEFORE the preflight early-return, not after it.
             # preflight continues the loop whenever it refuses a pass, so with
@@ -815,7 +789,7 @@ def main():
                       + ", ".join(f"{c} {cooldown_remaining(state, c):.1f}h left"
                                   for c in sorted(state.get("cooled") or {})))
 
-            why = preflight(backend, state)
+            why = preflight(venue, state, halt_state, eqlog)
             if why:
                 print(f"[LEVELS_LIVE] not opening this pass: {why}")
                 if args.once:
@@ -825,22 +799,9 @@ def main():
                         break
                     time.sleep(1)
                 continue
-            ms = backend.get_margin_summary()
-            if ms:
-                equity, _used, available = ms
-            bad, fatal = venue_sanity(backend, state, equity)
-            if bad and fatal:
-                halt(state, bad, "before trading", backend=backend)
-                return 1
-            if bad:
-                print(f"[LEVELS_LIVE] skipping this pass (transient): {bad}")
-                if args.once:
-                    return 0
-                for _ in range(POLL_SEC):
-                    if _stop:
-                        break
-                    time.sleep(1)
-                continue
+            eq = venue.equity()
+            if eq is not None:
+                equity, available = eq.usdc_total, eq.available
         # Created here, not after the scan, so build_intents can hand the 1h
         # bars it already fetched straight into it. Still one dict per pass:
         # the trigger asks what price did in the last two hours, so bars must
@@ -879,7 +840,7 @@ def main():
             print(f"{d['coin']:10} {d['entry']:>12.6g} {d['stop']:>12.6g} {d['tp']:>12.6g} "
                   f"{d['stop_dist_pct']:>6.2f}% {d['size_usd']:>9.2f} {d['risk_usd']:>7.2f} "
                   f"{d['rr']:>5.2f}  {','.join(flags)}")
-            if backend is None:
+            if venue is None or not armed:
                 log_trade({"ts_utc": now_iso(), "action": "dry_run", "result": "planned",
                            **{k: d[k] for k in ("coin", "episode_id", "level_price", "entry",
                                                 "stop", "tp", "rr", "hold_rate", "touches")},
@@ -887,16 +848,28 @@ def main():
                            "risk_usd": round(d["risk_usd"], 2),
                            "detail": ",".join(flags)})
                 continue
-            if (len(state.get("owned", {}))
-                    + len(state.get("pending", {}))) >= MAX_CONCURRENT:
-                print("[LEVELS_LIVE] concurrency cap reached, stopping this pass")
+            # Re-read from the VENUE, not from a counter. This is the guard
+            # the 2026-09-18 runaway defeated: it asked state["owned"], one
+            # parsing bug left that empty, and a single pass opened twelve
+            # positions across $5,454 of notional on $775 of equity with no
+            # stops on any of them. A reading of the venue cannot be emptied
+            # by a bug in our own parsing, because there is no parsing.
+            held = venue.positions()
+            if held is None:
+                print("[LEVELS_LIVE] venue unreadable mid-pass -- stopping here")
                 break
+            resting = venue.open_orders()
+            bids = {o.coin for o in (resting or []) if o.is_entry}
+            if len(held) + len(bids) >= MAX_CONCURRENT:
+                print(f"[LEVELS_LIVE] concurrency cap reached "
+                      f"({len(held)} held, {len(bids)} bid), stopping this pass")
+                break
+            if d["coin"] in held or d["coin"] in bids:
+                continue
             # The daily cap belongs in this guard too, not only in preflight.
             # preflight runs ONCE per pass, so on 2026-09-28 it saw
             # opened_today=4, allowed the pass, and BTC then filled (5) with
-            # DOGE filling six seconds later (6) -- one over the cap. The
-            # comment below already says this lesson for venue_sanity; the
-            # daily cap was simply left out of the same re-check.
+            # DOGE filling six seconds later (6) -- one over the cap.
             if MAX_NEW_PER_DAY and state.get("opened_today", 0) >= MAX_NEW_PER_DAY:
                 print(f"[LEVELS_LIVE] daily cap reached "
                       f"({state['opened_today']}/{MAX_NEW_PER_DAY}), "
@@ -911,29 +884,19 @@ def main():
                 print(f"[LEVELS_LIVE] entry spacing: {_gap:.0f}m until another "
                       f"position may open, stopping this pass")
                 break
-            outcome = execute_one(backend, ep, equity, available, armed, state,
-                                  ctx_cache=ctx_cache,
+            outcome = execute_one(venue, meta, ep, equity, available, armed,
+                                  state, ctx_cache=ctx_cache,
                                   bars_cache=bars_cache, watchboard=watchboard)
-            # Re-checked after every ORDER, not once per pass: the runaway
-            # opened twelve positions inside a single pass, so a per-pass check
-            # would have reported the damage rather than prevented it.
-            #
-            # After every order, though -- not after every candidate. Nearly
-            # all of them send nothing, and asking the venue anyway added ~130
-            # user_state calls a pass, tripped 429s, and truncated the pass on
-            # the transient branch below. The safety property is unchanged:
-            # nothing can reach the venue without this running straight after.
+            # Protect what just opened, immediately -- not on the next 60s
+            # cycle. An entry and its stop belong together, and the gap
+            # between them is the only window in which this system holds an
+            # unprotected position.
             if not outcome.order_sent:
                 continue
-            bad, fatal = venue_sanity(backend, state, equity)
-            if bad and fatal:
-                halt(state, bad, "after entry", backend=backend)
-                break
-            if bad:
-                # Cannot confirm what just happened at the venue, so stop
-                # opening anything else this pass rather than trade blind.
-                print(f"[LEVELS_LIVE] cannot verify after entry ({bad}) -- pausing this pass")
-                break
+            for r in protect.run_once(venue, meta):
+                if not r.protected:
+                    print(f"[LEVELS_LIVE] !! post-entry protection {r.coin}: "
+                          f"{r.action} -- {r.detail[:120]}")
         # Levels price has nearly reached. The board exists for looking at on
         # purpose; this is only so a zone cannot be reached unnoticed while
         # nobody is looking. Rate limited, and capped at five -- alerting on
@@ -964,6 +927,52 @@ def main():
                 break
             time.sleep(1)
     return 0
+
+
+def preflight(venue, state: Dict[str, Any], halt: "safety.HaltState",
+              eqlog: "safety.EquityLog"):
+    """Reasons not to open anything this pass. Returns a string, or None.
+
+    Everything it consults is either the venue or a derived rail. Nothing is
+    read from a counter this process maintains, which is what the 1,043 lines
+    this replaces got wrong.
+    """
+    active = halt.active()
+    if active:
+        return f"halted ({active.get('kind')}): {active.get('reason', '')}"
+
+    # Equity-based limits. They flatten and halt on a breach themselves.
+    verdicts = safety.enforce_limits(venue, halt, eqlog)
+    if any(v.breached for v in verdicts):
+        return "; ".join(v.detail for v in verdicts if v.breached)
+
+    sd = safety.standing_down(venue)
+    if sd is not None:
+        return f"standing down {sd.hours_left:.1f}h more -- {sd.reason}"
+
+    # Concurrency from the VENUE, plus anything resting that could become a
+    # position. state["owned"] used to answer this and a single parsing bug
+    # emptied it, which is how one pass opened twelve positions.
+    positions = venue.positions()
+    if positions is None:
+        safety.record_error("positions", "preflight could not read the venue")
+        return "venue unreadable -- not opening blind"
+    orders = venue.open_orders()
+    bidding = {o.coin for o in (orders or []) if o.is_entry}
+    if len(positions) + len(bidding) >= MAX_CONCURRENT:
+        return (f"holding {len(positions)} and bidding on {len(bidding)}, "
+                f"max {MAX_CONCURRENT}")
+
+    if MAX_NEW_PER_DAY and state.get("opened_today", 0) >= MAX_NEW_PER_DAY:
+        return f"opened {state['opened_today']} today, max {MAX_NEW_PER_DAY}"
+
+    eq = venue.equity()
+    if eq is None:
+        safety.record_error("equity", "preflight could not read equity")
+        return "equity query failed -- refusing to size blind"
+    if eq.usdc_total <= 0:
+        return f"equity {eq.usdc_total}"
+    return None
 
 
 def review_flags(ep: Dict[str, Any], size_usd: float, equity: float) -> List[str]:
@@ -1068,7 +1077,7 @@ def persist_traded_episode(ep: Dict[str, Any]) -> bool:
                 row[k] = "" if v is None else v
         return bool(storage.append_episode(row))
     except Exception as e:
-        record_error("persist_episode", e)
+        safety.record_error("persist_episode", e)
         return False
 
 
@@ -1092,7 +1101,7 @@ def pull_over_run(ep: Dict[str, Any]) -> Optional[float]:
     return pull / run
 
 
-def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float,
+def entry_is_actionable(venue, coin: str, planned_entry: float, stop: float,
                         tp: float, level: float = 0.0,
                         bars_1h: Optional[List[Dict[str, Any]]] = None,
                         ctx: Optional[Dict[str, Any]] = None,
@@ -1109,7 +1118,7 @@ def entry_is_actionable(backend, coin: str, planned_entry: float, stop: float,
     The plan is only valid near the level. This re-derives the geometry from
     the LIVE price and rejects the trade if it no longer holds.
     """
-    ref = backend.get_mid_price(coin)
+    ref = venue.mid(coin)
     if not ref or ref <= 0:
         return None, "no midprice"
     drift = (ref - planned_entry) / planned_entry * 100
@@ -1200,8 +1209,143 @@ def cached_1h(coin: str, cache: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
     return cache[coin]
 
 
-def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
-                armed: bool, state: Dict[str, Any],
+def start_venue(factory, sleep=time.sleep):
+    """Build the Venue, retrying a transient venue failure.
+
+    The SDK fetches perp metadata inside Info.__init__, so construction hits
+    the network and a 429 there raises before any of our code runs. Twice on
+    2026-09-19 that killed the process outright at startup. launchd restarts
+    it, so it self-heals -- but a crash loop against a rate limit is the worst
+    possible way to wait, because every restart is another request, which is
+    what caused the limit.
+
+    Returns None if a stop was requested while waiting. Re-raises if the venue
+    is still refusing after every attempt: coming up without a venue would
+    mean an armed trader that cannot trade and does not say so.
+    """
+    for attempt in range(1, BACKEND_START_ATTEMPTS + 1):
+        try:
+            return factory(debug=False)
+        except Exception as e:
+            if attempt == BACKEND_START_ATTEMPTS:
+                print(f"[LEVELS_LIVE] venue failed to start after "
+                      f"{attempt} attempts: {str(e)[:160]}")
+                raise
+            wait = BACKEND_START_BACKOFF_SEC * attempt
+            print(f"[LEVELS_LIVE] venue start attempt {attempt} failed "
+                  f"({str(e)[:80]}); retrying in {wait}s")
+            for _ in range(int(wait)):
+                if _stop:
+                    return None
+                sleep(1)
+    return None
+
+
+def persist_filled_bids(venue, meta: "MetaStore") -> List[str]:
+    """Persist the episode behind any resting bid that has since filled.
+
+    This is the "on fill, not on placement" half of the rule above. There is
+    no fill event to hook -- the venue is polled -- so the trigger is simply
+    observing a position for a coin whose plan still carries an unpersisted
+    episode. Clearing the field afterwards is what makes it once-only.
+    """
+    held = venue.positions() if venue is not None else None
+    if not held:
+        return []
+    done = []
+    for coin in sorted(held):
+        row = meta.get(coin)
+        if row is None or not row.pending_episode:
+            continue
+        try:
+            ep = json.loads(row.pending_episode)
+        except ValueError:
+            ep = None
+        if isinstance(ep, dict) and persist_traded_episode(ep):
+            done.append(coin)
+        row.pending_episode = ""
+        meta.put(coin, row)
+    return done
+
+
+def rest_one_bid(venue, meta, client, universe, coin: str, level: str,
+                 equity: float, available: float,
+                 state: Optional[Dict[str, Any]] = None) -> int:
+    """Rest a GTC bid at one level's planned entry, then exit.
+
+    The plan goes into metadata and the order goes to the venue. Nothing else
+    is recorded: the bid is visible in open_orders, carries the venue's own
+    timestamp for expiry, and the protection loop stops whatever it fills.
+    The old version kept an oid and a plan in state["pending"], and a partial
+    fill popped that record while the remainder stayed live -- REVIEW.md
+    finding 6.
+    """
+    cands, _ = build_intents(client, [coin], None)
+    want = f"{float(level):.10g}"
+    ep = next((e for e in cands
+               if f"{float(e.get('level_price') or 0):.10g}" == want), None)
+    if ep is None:
+        print(f"[LEVELS_LIVE] no live candidate for {coin} at {level} -- "
+              f"the scanner has to see the level before a bid can rest on it")
+        return 1
+
+    def g(k, d=0.0):
+        try:
+            return float(ep.get(k) or d)
+        except (TypeError, ValueError):
+            return d
+
+    gap = spacing_remaining(state) if state is not None else 0.0
+    if gap > 0:
+        # A bid commits future exposure even though it cannot be refused once
+        # it fills, so the spacing rail applies at placement.
+        print(f"[LEVELS_LIVE] entry spacing: {gap:.0f}m until another "
+              f"position may be committed")
+        return 1
+
+    entry, stop, tp = g("suggested_entry"), g("suggested_stop"), g("suggested_tp")
+    vmax = venue.max_leverage_for(coin)
+    szi = size_from_stop(equity, entry, stop, available, venue_max_leverage=vmax)
+    size_usd = szi["size_usd"]
+    if size_usd < MIN_NOTIONAL_USD:
+        print(f"[LEVELS_LIVE] {coin} sizes to ${size_usd:.2f}, below the "
+              f"${MIN_NOTIONAL_USD:g} minimum")
+        return 1
+
+    venue.set_leverage(coin, int(szi.get("leverage") or FLAT_LEVERAGE))
+    # The episode is carried, not persisted: a bid that is never hit is not
+    # a trade, and writing its features now would put setups we did not take
+    # into the set used to judge the ones we did.
+    meta.put(coin, TradeMeta(reason=f"resting bid at {entry:.6g}",
+                             planned_stop=stop, planned_tp=tp,
+                             opened_at=now_iso(),
+                             pending_episode=json.dumps(ep)))
+    order = execute.rest_bid(venue, coin, usd=size_usd, px=entry)
+    if order is not None and state is not None:
+        # Stamped at placement, not on fill: the commitment is made here, and
+        # a fill can happen while nothing is watching.
+        mark_entry(state)
+        save_state(state)
+    if order is None:
+        meta.drop(coin)
+        print(f"[LEVELS_LIVE] {coin}: no bid rested")
+        return 1
+    log_trade({"ts_utc": now_iso(), "action": "entry", "coin": coin,
+               "episode_id": ep.get("episode_id", ""), "entry": order.limit_px,
+               "stop": stop, "tp": tp, "size_usd": round(size_usd, 2),
+               "size_coin": order.size, "result": "bid_resting",
+               "detail": f"GTC oid={order.oid}, expires in "
+                         f"{protect.BID_TTL_HOURS:g}h"})
+    notify.send(f"🔵 *Bid resting on {coin}*\n{order.size:g} @ "
+                f"`{order.limit_px:.6g}`\nstop `{stop:.6g}`  tp `{tp:.6g}`\n"
+                f"Pulled after {protect.BID_TTL_HOURS:g}h if it never fills.")
+    print(f"[LEVELS_LIVE] bid resting {coin} {order.size:g} @ "
+          f"{order.limit_px:.6g} (oid {order.oid})")
+    return 0
+
+
+def execute_one(venue, meta, ep: Dict[str, Any], equity: float,
+                available: float, armed: bool, state: Dict[str, Any],
                 bars_cache: Optional[Dict[str, Any]] = None,
                 watchboard: Optional[List[Dict[str, Any]]] = None,
                 ctx_cache: Optional[Dict[str, Any]] = None) -> "Outcome":
@@ -1275,7 +1419,7 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     # filling at market is exactly what made the UNI position carry 3.5x its
     # intended risk.
     if armed:
-        ref, why = entry_is_actionable(backend, coin, entry, stop, tp,
+        ref, why = entry_is_actionable(venue, coin, entry, stop, tp,
                                        level=g("level_price"),
                                        bars_1h=bars1h if armed else None,
                                        ctx=(ctx_cache or {}).get(coin.upper()),
@@ -1289,11 +1433,7 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
             return Outcome()
         entry = ref
 
-    vmax = None
-    try:
-        vmax = backend.max_leverage_for(coin) if backend is not None else None
-    except Exception:
-        vmax = None
+    vmax = venue.max_leverage_for(coin) if venue is not None else None
     szi = size_from_stop(equity, entry, stop, available, venue_max_leverage=vmax)
     size_usd = szi["size_usd"]
     row = {"ts_utc": now_iso(), "coin": coin, "episode_id": ep.get("episode_id", ""),
@@ -1307,9 +1447,9 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         row.update({"action": "skip", "result": "below_min_notional"})
         log_trade(row)
         return Outcome()
-    if coin in state.get("owned", {}):
-        return Outcome()
-    left = cooldown_remaining(state, coin)
+
+    left = streak.coins_on_cooldown(venue, COIN_REENTRY_COOLDOWN_HOURS
+                                    ).get(coin, 0.0) if venue else 0.0
     if left > 0:
         row.update({"action": "skip", "result": "coin_cooldown",
                     "detail": f"stopped out {COIN_REENTRY_COOLDOWN_HOURS - left:.1f}h "
@@ -1328,18 +1468,18 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         log_trade(row)
         return Outcome()
 
-    # Claim the slot BEFORE sending the order, not after parsing the reply.
-    # On 2026-09-18 this recorded the position only after a fill it believed
-    # in, and it read success from a "filled_size_coin" attribute FillResult
-    # has never had -- so getattr returned 0, every real fill was scored as a
-    # rejection, state["owned"] stayed empty, MAX_CONCURRENT never engaged and
-    # the pass opened 12 positions across $5,454 of notional on $775 of equity
-    # with no stops on any of them. Counting what was SENT means a parsing bug
-    # can no longer uncap the loop; the worst case becomes a phantom slot,
-    # which reconcile() clears on the next pass.
-    state.setdefault("owned", {})[coin] = {
-        "episode_id": ep.get("episode_id", ""), "entry": entry, "stop": stop,
-        "tp": tp, "size_usd": size_usd, "opened_at": now_iso(), "confirmed": False}
+    # Record the PLAN before sending, then send, then look at the venue.
+    #
+    # There is no slot to claim any more. The old code claimed one in
+    # state["owned"] because the concurrency cap was counted from that dict,
+    # and on 2026-09-18 a parsing bug left the dict empty and one pass opened
+    # twelve positions across $5,454 of notional on $775 of equity with no
+    # stops. The cap is now counted from venue.positions(), which no parsing
+    # bug of ours can empty -- so what gets written here is only the plan, and
+    # losing it costs a planned stop, not a tracked position.
+    meta.put(coin, TradeMeta(reason=f"level {g('level_price'):.6g}",
+                             planned_stop=stop, planned_tp=tp,
+                             opened_at=now_iso()))
     mark_entry(state)
     save_state(state)
     # Persisted on the way IN, not on close: the features describe the setup as
@@ -1349,119 +1489,60 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     # Hyperliquid enforces leverage per asset, so a 5x-sized order into a coin
     # the account has set to 3x is refused for margin. Set it to match before
     # the order, capped at whatever the venue allows on this coin.
-    backend.set_leverage(coin, int(szi.get("leverage") or FLAT_LEVERAGE))
+    venue.set_leverage(coin, int(szi.get("leverage") or FLAT_LEVERAGE))
 
-    fill = backend.execute_entry(coin=coin, side="LONG", price=entry,
-                                 size_usd=size_usd, confidence=0.5)
+    out = execute.enter(venue, coin, usd=size_usd, is_long=True)
 
-    # FillResult's own flag, which is what executor.py used for months of live
-    # trading. Do not re-derive success from prices or sizes.
-    if not getattr(fill, "filled", False):
-        state["owned"].pop(coin, None)
-        save_state(state)
+    if out.unknown:
+        # An order went out and the venue cannot be read. This is neither a
+        # fill nor a reject, and the old code had no third answer: it recorded
+        # a reject and released the slot, leaving a live unprotected position
+        # untracked for up to a full poll interval. The plan stays written, so
+        # the next protection cycle -- 60s away, not 450s -- finds whatever is
+        # there and stops it at the price we planned.
+        row.update({"action": "entry", "result": "unknown",
+                    "detail": "order sent, venue unreadable afterwards; the "
+                              "protection loop will adopt whatever filled"})
+        log_trade(row)
+        notify.send(f"⚠️ *{coin}: order sent, result unknown*\nThe venue could "
+                    f"not be read after sending. The protection loop will "
+                    f"stop whatever filled at `{stop:.6g}` within a minute.",
+                    key=f"unknown_fill_{coin}", cooldown_sec=300)
+        return Outcome(order_sent=True)
+
+    if not out.filled:
+        meta.drop(coin)
         row.update({"action": "entry", "result": "rejected",
-                    "detail": str(getattr(fill, "reject_reason", ""))[:400]})
+                    "detail": out.note[:400]})
         log_trade(row)
         return Outcome(order_sent=True)
 
-    fill_px = float(getattr(fill, "fill_price", 0) or 0)
-    filled_usd = float(getattr(fill, "fill_size_usd", 0) or 0) or size_usd
-    # Dividing notional by price does not land on a clean coin count: PONS came
-    # out 114.99999999999999 for a 115-coin fill, and every consumer of this
-    # number rounds DOWN. Snap it to 12 significant places so a float artifact
-    # cannot cost a whole unit of size.
-    size_coin = round(filled_usd / fill_px, 12) if fill_px > 0 else 0.0
-    if fill_px <= 0 or size_coin <= 0:
-        # filled=True but unusable numbers: the position may well exist at the
-        # venue, so halt rather than guess. Leaving the slot claimed is
-        # deliberate.
-        halt(state, f"{coin}: filled=True but fill_price={fill_px} size={size_coin}",
-             backend=backend)
-        row.update({"action": "entry", "result": "unparseable_fill",
-                    "detail": state["halt_reason"]})
-        log_trade(row)
-        return Outcome(order_sent=True)
-
-    state["owned"][coin].update({"entry": fill_px, "size_coin": size_coin,
-                                 "confirmed": True})
+    fill_px, size_coin = out.avg_px, out.filled_size
     state["opened_today"] = state.get("opened_today", 0) + 1
     save_state(state)
     row.update({"action": "entry", "result": "filled", "size_coin": size_coin,
                 "detail": f"fill {fill_px:.8g}"})
     log_trade(row)
 
-    # Protection is not optional. The account held no resting stops at all when
-    # this was written, and every September winner would have been stopped out
-    # by a margin-denominated stop -- so what goes in here is the STRUCTURAL
-    # stop, at the venue, before anything else happens.
-    prot = backend.place_native_protection(coin=coin, side="LONG", size_coin=size_coin,
-                                           stop_price=stop, tp_price=tp)
-    # 400, not 120. The trade log is the only durable record of what the venue
-    # said about a stop, and at 120 the one live protection this account has
-    # placed was cut mid-string: the whole tp leg's verdict fell off the end,
-    # which is precisely the evidence this row exists to keep. DictWriter
-    # quotes the field, so length is free.
-    log_trade({**row, "action": "protection", "result": prot.get("status", ""),
-               "detail": (f"stop={prot.get('stop_order_id','')} "
-                          f"tp={prot.get('tp_order_id','')} "
-                          f"verified={prot.get('stop_verified')}/"
-                          f"{prot.get('tp_verified')} "
-                          f"{prot.get('error','')}")[:400]})
-    # place_native_protection returns "protected" / "partial" / "missing" --
-    # never "ok". Comparing against "ok" made the check fire on SUCCESS, so
-    # the first supervised trade placed a correct stop and take-profit and
-    # then immediately emergency-closed the position it had just protected.
-    if prot.get("status") != "protected":
-        print(f"[LEVELS_LIVE] !! protection FAILED on {coin} -- closing immediately; "
-              f"an unprotected position is not the trade")
-        # flatten, not execute_exit: this path already checked the result,
-        # which is why it was the one that behaved -- but `filled` is True for
-        # a PARTIAL fill too, so a half-closed position still passed the check
-        # and still released the slot. flatten verifies against the venue.
-        exit_fill = backend.flatten(coin, side="LONG",
-                                    reason="protection_failed")
-
-        # Cancel whatever the venue DID accept. Protection can fail with one
-        # leg resting, and a leg that failed verification may not be
-        # reduce-only -- an order like that, left on a flat account, opens a
-        # position rather than closing one: unstopped, and in a coin this
-        # module has just stopped tracking.
-        for oid in (prot.get("stop_order_id"), prot.get("tp_order_id")):
-            if not oid:
-                continue
-            try:
-                if not backend.cancel_order(coin=coin, oid=oid):
-                    print(f"[LEVELS_LIVE] !! cancel refused {coin} oid={oid}")
-            except Exception as e:
-                print(f"[LEVELS_LIVE] !! cancel failed {coin} oid={oid}: {str(e)[:80]}")
-
-        if not exit_fill.get("flat"):
-            # The close did not go through. The position is open, unprotected,
-            # and releasing the slot here would drop the only record this
-            # module has of it -- venue_sanity would then meet it as an
-            # unknown position and halt, but not until the next entry, with
-            # the rest of this pass still free to trade. Halt now and KEEP the
-            # slot, so reconcile() can retire it once it is genuinely flat.
-            halt(state, f"{coin}: protection failed and the emergency exit did "
-                        f"not clear the position "
-                        f"({str(exit_fill.get('detail'))[:120]}) -- it is open "
-                        f"and unprotected", backend=backend)
-            log_trade({**row, "action": "emergency_exit", "result": "exit_failed",
-                       "detail": state["halt_reason"]})
-            return Outcome(order_sent=True)
-
-        note = accrue_close(backend, state, coin, state["owned"].get(coin, {}))
-        state["owned"].pop(coin, None)
-        save_state(state)
-        log_trade({**row, "action": "emergency_exit", "result": "closed",
-                   "detail": note})
-        # Real money moved and the position existed unprotected, however
-        # briefly. MAX_NEW_PER_DAY bounds how often this can repeat, so it is
-        # sent every time rather than rate limited.
+    # Protection is not optional, and it is one call now: the loop sizes the
+    # stop to what the venue actually holds, so a partial fill needs no
+    # special case here. The old path placed protection for the size it
+    # believed it had filled and had no way to correct it afterwards.
+    results = protect.run_once(venue, meta)
+    mine = next((r for r in results if r.coin == coin), None)
+    log_trade({**row, "action": "protection",
+               "result": mine.action if mine else "no_result",
+               "detail": (mine.detail if mine else "position not found")[:400]})
+    if mine is None or not mine.protected:
+        # protect.run_once already flattened it if no stop would rest -- an
+        # unprotected position is not the trade. Say so and stop; there is no
+        # slot to release and nothing left to unwind.
+        print(f"[LEVELS_LIVE] !! {coin} could not be protected "
+              f"({mine.action if mine else 'not found'})")
         notify.send(
-            f"⚠️ *{coin}* opened and closed immediately\n"
-            f"protection came back `{prot.get('status', '?')}`\n"
-            f"{str(prot.get('error', ''))[:300]}\n{note}")
+            f"⚠️ *{coin}* opened but could not be protected\n"
+            f"`{(mine.detail if mine else 'position not found')[:300]}`\n"
+            f"The protection loop closes what it cannot stop.")
         return Outcome(order_sent=True)
 
     print(f"[LEVELS_LIVE] OPENED {coin} {size_coin} @ {fill_px:.6g} "
@@ -1480,134 +1561,6 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         f"size ${size_usd:.2f}   rr {reward_usd / risk_usd if risk_usd else 0:.2f}   "
         f"level {g('level_price'):.6g}")
     return Outcome(opened=True, order_sent=True)
-
-
-def cancel_protection(backend, coin: str, oids) -> list:
-    """Cancel protection legs and SAY which ones would not go.
-
-    Returns the oids still believed to be live.
-
-    Three call sites did this three ways: one checked the return value and
-    logged a refusal, two wrapped it in `except Exception: pass` and threw
-    the result away. The first site's own comment says why it matters -- "a
-    leg that failed verification may not be reduce-only -- an order like
-    that, left on a flat account, opens a position rather than closing one:
-    unstopped". That is the 2026-09-18 runaway shape, and two of the three
-    paths could not have told anyone it had happened.
-
-    Found in the 2026-10-17 pre-resume review: the fourth instance of one
-    pattern in this file, sibling call sites where one handles a failure and
-    the others do not.
-    """
-    stuck = []
-    for oid in oids:
-        if not oid:
-            continue
-        try:
-            if not backend.cancel_order(coin=coin, oid=oid):
-                print(f"[LEVELS_LIVE] !! cancel refused {coin} oid={oid}")
-                stuck.append(oid)
-        except Exception as e:
-            print(f"[LEVELS_LIVE] !! cancel failed {coin} oid={oid}: "
-                  f"{str(e)[:80]}")
-            stuck.append(oid)
-    if stuck:
-        # An uncancelled leg on a position being retired is the one shape
-        # that can OPEN an unstopped position, so it earns an alert even
-        # though the caller is mid-cleanup.
-        notify.send(f"⚠️ *{coin}: protection may still be resting*\n"
-                    f"Could not cancel: {', '.join(str(o) for o in stuck)}\n"
-                    f"An order that is not reduce-only, left on a flat "
-                    f"account, opens a position instead of closing one. "
-                    f"Check the venue.",
-                    key=f"stuck_cancel_{coin}", cooldown_sec=3600)
-    return stuck
-
-
-def venue_sanity(backend, state: Dict[str, Any], equity: float):
-    """Compare the venue against what this module believes.
-
-    Returns (reason, fatal). fatal=True is a real disagreement and should
-    halt; fatal=False is a transient failure to ask, and should only skip the
-    pass. Conflating the two put the bot into a permanent halt on its second
-    live pass over a 429 rate limit -- a network hiccup is not a safety
-    violation, and treating it as one means any busy minute stops trading
-    until a human clears it.
-
-    This is the backstop the 2026-09-18 runaway needed and did not have. Every
-    in-process guard shared one assumption -- that state["owned"] reflects
-    reality -- so a single bad attribute name defeated all of them at once. A
-    check against the venue does not share that assumption.
-    """
-    try:
-        st = backend.info.user_state(backend._get_user_state_address())
-    except Exception as e:
-        return f"venue query failed: {str(e)[:80]}", False
-    positions = [p["position"] for p in st.get("assetPositions", [])]
-    live = {p["coin"].upper() for p in positions if abs(float(p.get("szi", 0) or 0)) > 0}
-    known = {c.upper() for c in state.get("owned", {})}
-    unknown = live - known
-    if unknown:
-        return (f"venue holds {sorted(unknown)} which this module did not open "
-                f"(knows: {sorted(known) or 'nothing'})"), True
-    if len(live) > MAX_CONCURRENT:
-        return f"venue holds {len(live)} positions, cap is {MAX_CONCURRENT}", True
-    notional = sum(abs(float(p.get("positionValue", 0) or 0)) for p in positions)
-    ceiling = equity * MAX_LEVERAGE
-    if notional > ceiling:
-        return f"notional ${notional:,.0f} exceeds {MAX_LEVERAGE}x equity (${ceiling:,.0f})", True
-    return None, False
-
-
-def assumed_loss(info: Dict[str, Any]) -> float:
-    """What this trade cost if it hit its stop, from the plan we recorded.
-
-    Used when the venue will not tell us what a close actually realised. The
-    daily loss stop exists to react to losses, so the safe assumption when a
-    number is missing is the losing one -- an unmeasured close must never be
-    cheaper than a measured one.
-    """
-    try:
-        entry = float(info.get("entry") or 0)
-        stop = float(info.get("stop") or 0)
-        size_coin = float(info.get("size_coin") or 0)
-    except (TypeError, ValueError):
-        return 0.0
-    if entry <= 0 or stop <= 0 or size_coin <= 0:
-        return 0.0
-    return -abs(entry - stop) * size_coin
-
-
-def start_backend(factory, sleep=time.sleep):
-    """Build the live backend, retrying a transient venue failure.
-
-    The SDK fetches perp metadata inside Info.__init__, so construction itself
-    hits the network and a 429 there raises before any of our code runs. Twice
-    on 2026-09-19 that killed the process outright at startup. launchd restarts
-    it, so it self-heals -- but a crash loop against a rate limit is the worst
-    possible way to wait, because every restart is another request, which is
-    what caused the limit.
-
-    Returns None if a stop was requested while waiting. Re-raises if the venue
-    is still refusing after every attempt: coming up without a backend would
-    mean an armed trader that cannot trade and does not say so.
-    """
-    for attempt in range(1, BACKEND_START_ATTEMPTS + 1):
-        try:
-            return factory(debug=True)
-        except Exception as e:
-            if attempt == BACKEND_START_ATTEMPTS:
-                print(f"[LEVELS_LIVE] live backend failed to start after "
-                      f"{attempt} attempts: {str(e)[:160]}")
-                raise
-            wait = BACKEND_START_BACKOFF_SEC * attempt
-            print(f"[LEVELS_LIVE] backend start attempt {attempt} failed "
-                  f"({str(e)[:80]}); retrying in {wait}s")
-            for _ in range(wait):
-                if _stop:
-                    return None
-                sleep(1)
-    return None
 
 
 def roll_day(state: Dict[str, Any]) -> bool:
@@ -1630,847 +1583,18 @@ def roll_day(state: Dict[str, Any]) -> bool:
     # a rolling ACCOUNT_DD_WINDOW_HOURS window sampled every pass by
     # record_equity_sample, so there is nothing for a date boundary to do but
     # reset the daily counters.
-    state.update({"day": today, "opened_today": 0, "realised_today": 0.0})
+    state.update({"day": today, "opened_today": 0})
     save_state(state)
     print(f"[LEVELS_LIVE] new UTC day {today} (was {was}) -- "
           f"daily counters reset")
     return True
 
 
-# ---- error-rate rail (AUDIT section D) ------------------------------------
-# A sliding one-hour window of recorded errors. Over ERROR_RATE_ALERT it
-# alerts once, and keeps quiet until the window drains below the threshold
-# again -- a standing fault must not fire every pass and train the reader to
-# ignore it.
-ERROR_WINDOW_SEC = 3600
-_error_window: List[Tuple[float, str]] = []
-_error_alerted = False
-
-
-def reset_error_window() -> None:
-    """For tests, and for a deliberate clear after a known outage."""
-    global _error_alerted
-    _error_window.clear()
-    _error_alerted = False
-
-
-def errors_in_window() -> int:
-    """How many errors were recorded in the last hour."""
-    cutoff = time.time() - ERROR_WINDOW_SEC
-    while _error_window and _error_window[0][0] < cutoff:
-        _error_window.pop(0)
-    return len(_error_window)
-
-
-def record_error(source: str, detail: object = "") -> int:
-    """Note that something failed. Returns the count in the window.
-
-    Called from error paths, so it must never raise into its caller: an
-    error-reporting function that becomes the error is worse than no
-    reporting. Everything here is wrapped.
-
-    It does NOT halt. Errors are usually the venue having a bad minute, and a
-    rail that stops trading on transient noise is a worse failure than the
-    noise.
-    """
-    global _error_alerted
-    try:
-        _error_window.append((time.time(), str(source)[:40]))
-        n = errors_in_window()
-        print(f"[LEVELS_LIVE] error #{n}/{ERROR_RATE_ALERT} in the last hour "
-              f"[{str(source)[:40]}] {str(detail)[:120]}")
-        if n < ERROR_RATE_ALERT:
-            _error_alerted = False
-            return n
-        if _error_alerted:
-            return n
-        _error_alerted = True
-        counts: Dict[str, int] = {}
-        for _, src in _error_window:
-            counts[src] = counts.get(src, 0) + 1
-        worst = sorted(counts.items(), key=lambda kv: -kv[1])
-        notify.send(
-            f"⚠️ *Error rate is high*\n{n} errors in the last hour "
-            f"(threshold {ERROR_RATE_ALERT}).\n\nBy source:\n"
-            + "\n".join(f"• `{k}` x{v}" for k, v in worst[:5])
-            + "\n\nTrading is NOT halted -- this is a degradation warning.",
-            key="error_rate", cooldown_sec=3600)
-        return n
-    except Exception as e:                                  # noqa: BLE001
-        print(f"[LEVELS_LIVE] record_error itself failed: {str(e)[:80]}")
-        return 0
-
-
-def has_protection(backend, coin: str) -> Optional[bool]:
-    """Does the venue hold a reduce-only order for `coin`?
-
-    None means the question could not be asked, which is NOT the same as
-    "no" -- a failed query must not be reported as an unprotected position
-    and must not trigger a flatten.
-    """
-    if backend is None:
-        return None
-    try:
-        orders = backend.get_open_orders(coin)
-    except Exception as e:
-        record_error("open_orders", f"{coin}: {e}")
-        return None
-    if orders is None:
-        return None
-    for o in orders:
-        if str(o.get("coin", "")).upper() != coin.upper():
-            continue
-        if o.get("reduce_only") or o.get("reduceOnly") or o.get("is_trigger") \
-                or o.get("isTrigger") or o.get("trigger_px"):
-            return True
-    # An order list that came back and held nothing protective for this coin.
-    return any(str(o.get("coin", "")).upper() == coin.upper() for o in orders)
-
-
-def verify_open_protection(backend, state: Dict[str, Any]) -> List[str]:
-    """Names of open positions with no protective order. AUDIT D-1.
-
-    Coins whose order book could not be read are NOT listed: an unanswerable
-    query is not evidence of an unprotected position.
-    """
-    bare = []
-    for coin in sorted(state.get("owned") or {}):
-        if has_protection(backend, coin) is False:
-            bare.append(coin)
-    return bare
-
-
-def adopt_or_flatten_orphans(backend, state: Dict[str, Any]) -> List[str]:
-    """Deal with venue positions this module did not open. AUDIT C-1.
-
-    The timeout-after-fill case leaves exactly this: a position with no plan
-    and, because protection is placed AFTER the fill, usually no stop either.
-    venue_sanity already detected orphans and halted; what was missing was
-    doing anything about them.
-
-    Under ORPHAN_ACTION="auto" an orphan with no protective order is
-    flattened and one with protection is left alone for a human, because the
-    two cases are not alike: an unprotected, unplanned position has no stop
-    to fall back on and no level to reconstruct one from, while a protected
-    one is bounded and might be the operator's own trade.
-
-    Returns what it did, for the caller to log.
-    """
-    if backend is None or ORPHAN_ACTION == "halt":
-        return []
-    try:
-        state_coins = {c.upper() for c in (state.get("owned") or {})}
-        st = backend.info.user_state(backend._user_state_query_address())
-        live = {}
-        for p in st.get("assetPositions", []) or []:
-            pos = p.get("position") or {}
-            coin = str(pos.get("coin", "")).upper()
-            try:
-                szi = float(pos.get("szi") or 0)
-            except (TypeError, ValueError):
-                continue
-            if coin and abs(szi) > 0:
-                live[coin] = szi
-    except Exception as e:
-        record_error("orphan_sweep", e)
-        return []
-
-    done = []
-    for coin, szi in sorted((c, s) for c, s in live.items()
-                            if c not in state_coins):
-        protected = has_protection(backend, coin)
-        if ORPHAN_ACTION == "auto" and protected is not False:
-            # Protected, or unreadable. Leave it; venue_sanity halts anyway.
-            done.append(f"{coin} orphan left alone "
-                        f"({'protected' if protected else 'unreadable'})")
-            continue
-        side = "LONG" if szi > 0 else "SHORT"
-        res = backend.flatten(coin, side=side, reason="orphan")
-        done.append(f"{coin} orphan ({szi:g}) "
-                    + ("flattened" if res.get("flat")
-                       else f"NOT flattened: {str(res.get('detail'))[:80]}"))
-    if done:
-        for line in done:
-            print(f"[LEVELS_LIVE] {line}")
-        notify.send("⚠️ *Positions found that this bot did not open*\n"
-                    + "\n".join(done)
-                    + f"\n\nORPHAN_ACTION={ORPHAN_ACTION}",
-                    key="orphans", cooldown_sec=1800)
-    return done
-
-
-def halt(state: Dict[str, Any], reason: str, where: str = "",
-         kind: str = "", backend=None) -> str:
-    """Stop trading and tell a human. Returns the reason, for the caller.
-
-    Every halt goes through here. A halt is the one condition this module
-    cannot resolve on its own -- preflight refuses on the persisted flag until
-    someone clears it with --resume -- so it is the one condition where
-    printing into an unwatched log file is not enough. It is also the only
-    alert that would repeat forever if left unkeyed: the flag persists, the
-    trader polls every 15 minutes, and the halt would be re-announced on every
-    pass until it stopped meaning anything.
-    """
-    already = bool(state.get("halted"))
-    state["halted"] = True
-    state["halt_reason"] = reason
-    # Recorded so release_halt_if_clear knows which condition to re-check. A
-    # halt with no kind -- set by hand, or by a path that forgot -- is never
-    # auto-released, because clearing a halt by guessing is the one mistake
-    # this whole mechanism must not make.
-    state["halt_kind"] = kind
-    save_state(state)
-    print(f"[LEVELS_LIVE] !! HALT{' ' + where if where else ''} -- {reason}")
-
-    # AUDIT D-1. A halt used to block new entries and check nothing else, so
-    # the drawdown rail could fire with four positions open and leave full
-    # exposure on venue stops that nothing re-verified. `backend` is optional
-    # because some callers have none, and a halt that cannot happen is worse
-    # than one that happens unverified.
-    bare = verify_open_protection(backend, state)
-    if bare:
-        print(f"[LEVELS_LIVE] !! halted with UNPROTECTED position(s): "
-              f"{', '.join(bare)}")
-        notify.send(f"🚨 *Halted, and {len(bare)} position(s) are "
-                    f"unprotected*\n{', '.join(bare)}\n\nNo stop is resting "
-                    f"at the venue for these. Close them by hand or "
-                    f"`/closeall`.", key="halt_unprotected", cooldown_sec=900)
-    if HALT_ACTION == "flatten" and backend is not None:
-        for coin in sorted(state.get("owned") or {}):
-            res = backend.flatten(coin, side="LONG", reason="halt_flatten")
-            print(f"[LEVELS_LIVE] halt flatten {coin}: "
-                  + ("flat" if res.get("flat")
-                     else f"STILL OPEN {str(res.get('detail'))[:80]}"))
-
-    if not already:
-        notify.send(
-            f"🛑 *Level trader halted*\n{reason}\n\n"
-            + ("It clears itself once the condition passes."
-               if (HALT_AUTO_RELEASE and kind)
-               else "It will not open anything until cleared with --resume."),
-            key="halt", cooldown_sec=3600)
-    return reason
-
-
-def accrue_close(backend, state: Dict[str, Any], coin: str,
-                 info: Dict[str, Any]) -> str:
-    """Add what a closed position realised to the day's running total.
-
-    EVERY path that closes a position must come through here. A close that
-    does not reach realised_today is invisible to the daily loss stop, and the
-    emergency-exit path is the one most able to exploit that: it can fire on
-    every pass, paying a full round trip in fees and spread each time, while
-    realising too little PnL to ever trip a stop it is not reported to.
-
-    When the venue will not say, the close is charged as a stop-out. For an
-    emergency exit that overstates the cost -- it closed near the fill price,
-    so the true cost is fees and spread -- and that is the direction to be
-    wrong in. Halting a strategy with no measured edge one trade early costs
-    less than failing to halt it at all.
-    """
-    since = iso_to_ms(info.get("opened_at", ""))
-    pnl = None
-    if since is not None:
-        try:
-            pnl = backend.get_realised_pnl(coin, since)
-        except Exception as e:
-            print(f"[LEVELS_LIVE] realised PnL query failed for {coin}: {str(e)[:80]}")
-    if pnl is None:
-        pnl = assumed_loss(info)
-        note = f"pnl unavailable -- charged as a stop-out: {pnl:.2f}"
-    else:
-        note = f"realised {pnl:.2f}"
-    state["realised_today"] = state.get("realised_today", 0.0) + pnl
-    # The losing run is counted here for the same reason realised_today is:
-    # this is the single path every close comes through.
-    if note_closed_outcome(state, pnl):
-        note += (f"; {LOSS_STREAK_TRIGGER} losses in a row -- standing down "
-                 f"for {LOSS_STREAK_COOLDOWN_HOURS:g}h")
-    # Stamped here because this is the single path every close comes through,
-    # and it is the only place that knows the realised result -- which is what
-    # decides whether a cooldown is warranted at all.
-    if pnl <= 0:
-        start_cooldown(state, coin)
-        if COIN_REENTRY_COOLDOWN_HOURS:
-            note += (f"; {coin} on cooldown for "
-                     f"{COIN_REENTRY_COOLDOWN_HOURS:g}h")
-    return note
-
-
-def place_resting_bid(backend, client, universe, coin: str, level: str,
-                      equity: float, available: float, state: Dict[str, Any]) -> int:
-    """Rest a bid at a level's planned entry. One order, then exit.
-
-    Sized from the PLANNED entry and stop, never from the live price -- the
-    whole point is that the live price is somewhere else. Everything the
-    normal path checks still applies: reward/risk, minimum notional, the
-    concurrency cap and the daily cap.
-    """
-    coin = coin.upper()
-    try:
-        want = float(level)
-    except (TypeError, ValueError):
-        print(f"[LEVELS_LIVE] '{level}' is not a level price")
-        return 1
-
-    ep = next((e for e in _find_candidates(client, universe)
-               if str(e.get("coin", "")).upper() == coin
-               and abs(float(e.get("level_price") or 0) - want) < 1e-9), None)
-    if ep is None:
-        print(f"[LEVELS_LIVE] no current candidate for {coin} at {want:g}")
-        return 1
-
-    why = passes_quality(ep, watched=True)
-    if why:
-        print(f"[LEVELS_LIVE] {coin} {want:g} does not clear the entry bar: {why}")
-        return 1
-    if coin in state.get("owned", {}) or coin in state.get("pending", {}):
-        print(f"[LEVELS_LIVE] already holding or bidding on {coin}")
-        return 1
-    left = cooldown_remaining(state, coin)
-    if left > 0:
-        print(f"[LEVELS_LIVE] {coin} is on cooldown for another {left:.1f}h "
-              f"after a losing close")
-        return 1
-    gap = spacing_remaining(state)
-    if gap > 0:
-        print(f"[LEVELS_LIVE] entry spacing: {gap:.0f}m before another position "
-              f"may be committed (a resting bid commits future exposure)")
-        return 1
-    if len(state.get("owned", {})) + len(state.get("pending", {})) >= MAX_CONCURRENT:
-        print(f"[LEVELS_LIVE] at the concurrency cap ({MAX_CONCURRENT})")
-        return 1
-    if MAX_NEW_PER_DAY and state.get("opened_today", 0) >= MAX_NEW_PER_DAY:
-        print(f"[LEVELS_LIVE] daily cap reached ({MAX_NEW_PER_DAY})")
-        return 1
-
-    entry = float(ep["suggested_entry"]); stop = float(ep["suggested_stop"])
-    tp = float(ep["suggested_tp"])
-    vmax = None
-    try:
-        vmax = backend.max_leverage_for(coin)
-    except Exception:
-        vmax = None
-    d = size_from_stop(equity, entry, stop, available, venue_max_leverage=vmax)
-    backend.set_leverage(coin, int(d.get("leverage") or FLAT_LEVERAGE))
-    if d["size_usd"] < MIN_NOTIONAL_USD:
-        print(f"[LEVELS_LIVE] size ${d['size_usd']:.2f} below the "
-              f"${MIN_NOTIONAL_USD:g} minimum")
-        return 1
-
-    print(f"[LEVELS_LIVE] resting bid {coin} @ {entry:.6g} "
-          f"(stop {stop:.6g}, tp {tp:.6g}, rr {float(ep.get('suggested_rr') or 0):.2f}, "
-          f"${d['size_usd']:.2f})")
-    res = backend.place_limit_entry(coin=coin, side="LONG", price=entry,
-                                    size_usd=d["size_usd"])
-    if not res.get("oid"):
-        print(f"[LEVELS_LIVE] bid REJECTED: {res.get('error')}")
-        log_trade({"ts_utc": now_iso(), "action": "entry", "coin": coin,
-                   "episode_id": ep.get("episode_id", ""), "entry": entry,
-                   "stop": stop, "tp": tp, "result": "bid_rejected",
-                   "detail": str(res.get("error"))[:400]})
-        return 1
-
-    state.setdefault("pending", {})[coin] = {
-        "oid": res["oid"], "price": res["price"], "size_coin": res["size_coin"],
-        "stop": stop, "tp": tp, "episode_id": ep.get("episode_id", ""),
-        # Carried so the episode can be persisted when the bid FILLS rather
-        # than when it is placed. A bid that is never hit is not a trade, and
-        # writing it would put setups we did not take into the set we use to
-        # judge the ones we did.
-        "episode": {k: v for k, v in ep.items() if not str(k).startswith("_")},
-        "placed_at": now_iso()}
-    save_state(state)
-    log_trade({"ts_utc": now_iso(), "action": "entry", "coin": coin,
-               "episode_id": ep.get("episode_id", ""), "entry": res["price"],
-               "stop": stop, "tp": tp, "size_usd": round(d["size_usd"], 2),
-               "size_coin": res["size_coin"], "rr": ep.get("suggested_rr"),
-               "result": "bid_resting", "detail": f"oid={res['oid']}"})
-    notify.send(
-        f"🟡 *BID RESTING {coin}* {res['size_coin']:.6g} @ `{res['price']:.6g}`\n"
-        f"stop `{stop:.6g}`   tp `{tp:.6g}`   "
-        f"rr {float(ep.get('suggested_rr') or 0):.2f}   ${d['size_usd']:.2f}\n"
-        f"protected on fill; pulled after {LIMIT_ENTRY_TTL_HOURS}h if unfilled")
-    print(f"[LEVELS_LIVE] bid resting, oid={res['oid']}")
-    return 0
-
-
-def reconcile_pending(backend, state: Dict[str, Any]) -> None:
-    """Turn a filled resting bid into a protected position, or retire it.
-
-    A resting bid is the only path here that can put on a position while
-    nothing is watching, so this runs FIRST in the pass -- before
-    venue_sanity, which would otherwise meet the new position as one this
-    module did not open and halt.
-
-    The gap between fill and protection is one poll interval. That is the
-    honest cost of resting a bid instead of sending a marketable order, and
-    it is why the position is protected here before anything else happens,
-    and closed immediately if protection will not attach.
-    """
-    pending = state.setdefault("pending", {})
-    for coin in list(pending):
-        p = pending[coin]
-        try:
-            szi = backend._get_venue_signed_size(coin)
-        except Exception:
-            continue
-        if szi is None:
-            continue
-
-        if abs(szi) > 1e-12:
-            size_coin = abs(float(szi))
-            entry = float(p.get("price") or 0)
-            stop, tp = float(p.get("stop") or 0), float(p.get("tp") or 0)
-            size_usd = size_coin * entry
-            print(f"[LEVELS_LIVE] resting bid FILLED {coin} {size_coin} @ ~{entry:.6g}")
-            state.setdefault("owned", {})[coin] = {
-                "episode_id": p.get("episode_id", ""), "entry": entry, "stop": stop,
-                "tp": tp, "size_usd": size_usd, "size_coin": size_coin,
-                "opened_at": p.get("placed_at") or now_iso(), "confirmed": True}
-            state["opened_today"] = state.get("opened_today", 0) + 1
-            mark_entry(state)
-            if p.get("episode"):
-                persist_traded_episode(p["episode"])
-            pending.pop(coin, None)
-            save_state(state)
-            log_trade({"ts_utc": now_iso(), "action": "entry", "coin": coin,
-                       "episode_id": p.get("episode_id", ""), "entry": entry,
-                       "stop": stop, "tp": tp, "size_usd": round(size_usd, 2),
-                       "size_coin": size_coin, "result": "filled",
-                       "detail": f"resting bid oid={p.get('oid','')}"})
-
-            prot = backend.place_native_protection(coin=coin, side="LONG",
-                                                   size_coin=size_coin,
-                                                   stop_price=stop, tp_price=tp)
-            log_trade({"ts_utc": now_iso(), "action": "protection", "coin": coin,
-                       "episode_id": p.get("episode_id", ""),
-                       "result": prot.get("status", ""),
-                       "detail": (f"stop={prot.get('stop_order_id','')} "
-                                  f"tp={prot.get('tp_order_id','')} "
-                                  f"verified={prot.get('stop_verified')}/"
-                                  f"{prot.get('tp_verified')} "
-                                  f"{prot.get('error','')}")[:400]})
-            if prot.get("status") != "protected":
-                print(f"[LEVELS_LIVE] !! protection FAILED on {coin} -- closing")
-                # backend.flatten, not a single execute_exit: one marketable
-                # IOC is not a close. This path used to send one and then pop
-                # the position regardless of the outcome, so a partial or
-                # missed fill left a live, unprotected position that this
-                # module had stopped tracking. execute_one's equivalent path
-                # has always checked; these two drifted apart from it.
-                res = backend.flatten(coin, side="LONG",
-                                      reason="protection_failed")
-                cancel_protection(
-                    backend, coin,
-                    (prot.get("stop_order_id"), prot.get("tp_order_id")))
-                if not res.get("flat"):
-                    # Keep the slot. Releasing it drops the only record of a
-                    # position that is open and now unprotected.
-                    halt(state, f"{coin}: protection failed and the exit did "
-                                f"not clear the position "
-                                f"({str(res.get('detail'))[:120]}) -- it is "
-                                f"open and unprotected", backend=backend)
-                    log_trade({"ts_utc": now_iso(), "action": "emergency_exit",
-                               "coin": coin, "result": "exit_failed",
-                               "detail": state["halt_reason"]})
-                    save_state(state)
-                    continue
-                note = accrue_close(backend, state, coin, state["owned"].get(coin, {}))
-                state["owned"].pop(coin, None)
-                save_state(state)
-                notify.send(f"⚠️ *{coin}* resting bid filled but protection came back "
-                            f"`{prot.get('status','?')}` -- closed immediately\n{note}")
-                continue
-            notify.send(
-                f"🟢 *OPENED {coin}* (resting bid) {size_coin:.6g} @ `{entry:.6g}`\n"
-                f"stop `{stop:.6g}`   tp `{tp:.6g}`   size ${size_usd:.2f}")
-            continue
-
-        # Still resting. Pull it once the setup is too old to still be the setup.
-        placed = iso_to_ms(p.get("placed_at", ""))
-        age_h = ((datetime.now(timezone.utc).timestamp() * 1000) - placed) / 3600_000 \
-            if placed else 0
-        # Say so every pass. A resting bid that is being watched and one that
-        # was silently dropped from state look identical in a log that only
-        # speaks up when something changes -- and this is the one path that
-        # can open a position while nobody is looking.
-        try:
-            mid = backend.get_mid_price(coin) or 0.0
-        except Exception:
-            mid = 0.0
-        away = ((mid - float(p.get("price") or 0)) / mid * 100) if mid > 0 else 0.0
-        print(f"[LEVELS_LIVE] bid resting {coin} @ {float(p.get('price') or 0):.6g}"
-              + (f", mid {mid:.6g} ({away:+.2f}% away)" if mid > 0 else "")
-              + f", {age_h:.1f}h old of {LIMIT_ENTRY_TTL_HOURS}h")
-        if placed and age_h >= LIMIT_ENTRY_TTL_HOURS:
-            ok = False
-            try:
-                ok = backend.cancel_order(coin=coin, oid=p.get("oid", ""))
-            except Exception as e:
-                print(f"[LEVELS_LIVE] cancel failed {coin}: {str(e)[:80]}")
-            print(f"[LEVELS_LIVE] resting bid on {coin} expired after "
-                  f"{age_h:.1f}h -- cancel {'ok' if ok else 'FAILED'}")
-            log_trade({"ts_utc": now_iso(), "action": "skip", "coin": coin,
-                       "episode_id": p.get("episode_id", ""), "result": "bid_expired",
-                       "detail": f"unfilled after {age_h:.1f}h, cancel={'ok' if ok else 'failed'}"})
-            pending.pop(coin, None)
-            save_state(state)
-
-
-def reconcile(backend, state: Dict[str, Any]) -> None:
-    """Release slots for positions no longer open at the venue -- stopped out,
-    took profit, or closed by hand. Without this the module believes it still
-    holds something forever and quietly stops trading.
-
-    This is also the only place a closed trade's result is ever observed, so
-    it is where realised_today has to be accrued. Until 2026-09-18 nothing
-    wrote that field: it was initialised to 0.0, reset to 0.0 each day, and
-    read once by the daily loss stop, which therefore compared 0.0 against a
-    negative threshold and could not fire. The kill switch the module's own
-    SAFETY MODEL advertises was inert for every trade.
-    """
-    owned = state.get("owned", {})
-    for coin in list(owned):
-        try:
-            sz = backend._get_venue_signed_size(coin)
-        except Exception:
-            continue
-        believed = 0.0
-        try:
-            believed = abs(float(owned[coin].get("size_coin") or 0))
-        except (TypeError, ValueError):
-            believed = 0.0
-
-        # A partial close is not a close, and it was invisible here. reconcile
-        # only ever asked "is it flat?", so a take-profit that filled 114 of
-        # 115 PONS on 2026-09-25 left one coin behind: the slot stayed
-        # occupied, the recorded size stayed at 115, the protection left
-        # resting covered a position that no longer existed, and the $5.04 the
-        # trade actually made was never accrued. venue_sanity could not help
-        # either -- it looks for positions this module does NOT know about,
-        # never for ones whose size has moved.
-        if (sz is not None and abs(sz) > 1e-12 and believed > 0
-                and abs(sz) < believed * 0.99):
-            entry = float(owned[coin].get("entry") or 0)
-            residual_usd = abs(sz) * entry
-            print(f"[LEVELS_LIVE] {coin} partially closed at venue: holding "
-                  f"{abs(sz):g} of {believed:g} ({residual_usd:.2f} USD left)")
-            if residual_usd < MIN_NOTIONAL_USD:
-                # Dust. Not worth a concurrency slot, and too small to
-                # re-protect -- close it and book the trade.
-                print(f"[LEVELS_LIVE] {coin} residual is below the "
-                      f"${MIN_NOTIONAL_USD:g} minimum -- closing it out")
-                res = {"flat": False, "detail": "not attempted"}
-                try:
-                    res = backend.flatten(
-                        coin, side="LONG",
-                        reason="residual_after_partial_close")
-                except Exception as e:
-                    print(f"[LEVELS_LIVE] residual exit failed: {str(e)[:100]}")
-                    res = {"flat": False, "detail": str(e)[:120]}
-                if not res.get("flat"):
-                    # Dust, but dust that is really there. Cancelling the
-                    # protection and dropping the slot would leave it open and
-                    # unstopped with nothing tracking it, so keep both until a
-                    # later pass closes it or the venue shows it gone.
-                    print(f"[LEVELS_LIVE] {coin} residual did NOT close "
-                          f"({str(res.get('detail'))[:120]}) -- keeping the "
-                          f"slot and the protection until it is flat")
-                    log_trade({"ts_utc": now_iso(), "action": "skip",
-                               "coin": coin,
-                               "episode_id": owned[coin].get("episode_id", ""),
-                               "result": "residual_open",
-                               "detail": str(res.get("detail"))[:200]})
-                    save_state(state)
-                    continue
-                cancel_protection(
-                    backend, coin,
-                    (owned[coin].get("stop_oid"), owned[coin].get("tp_oid")))
-                info = owned.pop(coin, {})
-                note = accrue_close(backend, state, coin, info)
-                save_state(state)
-                log_trade({"ts_utc": now_iso(), "action": "closed", "coin": coin,
-                           "episode_id": info.get("episode_id", ""),
-                           "result": "flat", "detail": f"partial close, residual "
-                           f"{abs(sz):g} closed out; {note}"})
-                print(f"[LEVELS_LIVE] {coin} slot released, {note} "
-                      f"(day {state['realised_today']:.2f})")
-                notify.send(f"⚪ *CLOSED {coin}* (partial fill, residual closed)\n{note}\n"
-                            f"day realised ${state.get('realised_today', 0.0):.2f}")
-                continue
-            # Big enough to keep: correct the record and re-protect the size
-            # that is actually there.
-            owned[coin]["size_coin"] = abs(sz)
-            save_state(state)
-            prot = backend.place_native_protection(
-                coin=coin, side="LONG", size_coin=abs(sz),
-                stop_price=float(owned[coin].get("stop") or 0),
-                tp_price=float(owned[coin].get("tp") or 0))
-            print(f"[LEVELS_LIVE] {coin} re-protected at {abs(sz):g}: "
-                  f"{prot.get('status')}")
-            log_trade({"ts_utc": now_iso(), "action": "protection", "coin": coin,
-                       "episode_id": owned[coin].get("episode_id", ""),
-                       "result": prot.get("status", ""),
-                       "detail": f"re-protected after partial close at {abs(sz):g}"})
-            # This used to log the status and act on nothing, so a failed
-            # re-protection left a tracked position whose stop state was
-            # unknown while the bot carried on opening others. The two other
-            # protection sites have always treated that as fatal -- "an
-            # unprotected position is not the trade" -- and this one had
-            # drifted away from them, the same way the two exit paths had
-            # drifted from execute_one's.
-            #
-            # Halt rather than close: the position is a known size at a known
-            # level and its ORIGINAL reduce-only orders may still be covering
-            # it, so flattening it unasked could realise a loss nothing
-            # required. A human should look.
-            if prot.get("status") != "protected":
-                halt(state, f"{coin}: re-protection after a partial close "
-                            f"returned {prot.get('status')!r} "
-                            f"({str(prot.get('error'))[:80]}) -- its stop "
-                            f"state is unknown", backend=backend)
-                save_state(state)
-            continue
-
-        if sz is not None and abs(sz) < 1e-12:
-            info = owned.pop(coin, {})
-            note = accrue_close(backend, state, coin, info)
-            log_trade({"ts_utc": now_iso(), "action": "closed", "coin": coin,
-                       "episode_id": info.get("episode_id", ""), "result": "flat",
-                       "detail": f"no longer open at venue; {note}"})
-            print(f"[LEVELS_LIVE] {coin} closed at venue -- slot released, {note} "
-                  f"(day {state['realised_today']:.2f})")
-            # Closed by a venue stop, a take-profit, or by hand -- this module
-            # only ever learns after the fact, so the alert is how anyone finds
-            # out a position is gone and what it cost.
-            pnl = state.get("realised_today", 0.0)
-            entry = info.get("entry")
-            notify.send(
-                f"⚪ *CLOSED {coin}*\n{note}\n"
-                + (f"entry was `{float(entry):.6g}`, stop `{float(info.get('stop') or 0):.6g}`, "
-                   f"tp `{float(info.get('tp') or 0):.6g}`\n" if entry else "")
-                + f"day realised ${pnl:.2f}")
-    save_state(state)
-
-
-def prune_equity_samples(state: Dict[str, Any], now: datetime) -> List[float]:
-    """Drop readings older than the window. Returns the equities that remain.
-
-    The window is what makes this rail unable to strand the account: nothing
-    older than ACCOUNT_DD_WINDOW_HOURS survives in it, so however far the
-    account falls, the reference it is measured against follows within a day.
-    """
-    cutoff = now - timedelta(hours=ACCOUNT_DD_WINDOW_HOURS)
-    kept = []
-    for item in state.get("equity_samples") or []:
-        try:
-            ts, eq = item[0], float(item[1])
-        except (TypeError, ValueError, IndexError):
-            continue
-        try:
-            when = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
-        if when >= cutoff and eq > 0:
-            kept.append([str(ts), eq])
-    state["equity_samples"] = kept
-    return [e for _, e in kept]
-
-
-def record_equity_sample(backend, state: Dict[str, Any]):
-    """Read equity, add it to the rolling window, prune, persist.
-
-    Runs before every one of preflight's early returns, because the reading
-    is bookkeeping and not a trading decision. It used to live further down,
-    below the halted check and below the concurrency and day-count caps, so
-    any pass that returned early left the window untouched -- and a halted
-    trader returns early on EVERY pass. From the 2026-10-13 halt to 10-15 the
-    trader took no equity readings at all, which is how it spent two days
-    measured against a 10-12 reference it could no longer reach. Holding
-    MAX_CONCURRENT positions across midnight did the same thing.
-
-    Persisted here rather than left to the caller, because every early return
-    in preflight skips the pass loop's own save_state -- so on a halted pass
-    the reading lived only as long as the process did, and a halt is exactly
-    when a restart happens.
-
-    Returns (equity, used, avail), or None if the venue could not be read.
-    Costs one margin query on passes that previously made none; preflight
-    runs once per pass, against a budget of about 31 calls.
-    """
-    ms = backend.get_margin_summary()
-    if ms is None:
-        return None
-    equity, used, avail = ms
-    if equity > 0:
-        now = datetime.now(timezone.utc)
-        samples = list(state.get("equity_samples") or [])
-        samples.append([now.isoformat().replace("+00:00", "Z"), equity])
-        state["equity_samples"] = samples
-        prune_equity_samples(state, now)
-        save_state(state)
-    return ms
-
-
-def drawdown_now(state: Dict[str, Any], equity: float) -> Tuple[float, float]:
-    """(drawdown percent, reference) against the rolling window high.
-
-    Current equity is folded into the reference so a fresh state, or one
-    whose window has just been pruned empty, cannot report a drawdown it has
-    no evidence for.
-    """
-    seen = prune_equity_samples(state, datetime.now(timezone.utc))
-    ref = max(seen + [equity])
-    if ref <= 0:
-        return 0.0, 0.0
-    return (ref - equity) / ref * 100.0, ref
-
-
-def release_halt_if_clear(state: Dict[str, Any], equity: float) -> bool:
-    """Clear a halt whose condition has passed. True if it released.
-
-    Only a halt whose condition can be re-checked releases itself. Both that
-    qualify are bounded in time by construction, so release is guaranteed
-    rather than hoped for: the drawdown reference ages out within
-    ACCOUNT_DD_WINDOW_HOURS, and realised_today resets at 00:00 UTC. A halt
-    set by hand, or one whose kind cannot be established, still waits for
-    --resume -- an unrecognised halt must not be cleared by guessing.
-
-    Before this, every halt waited for --resume, which is why the 10-13
-    daily-loss halt was still blocking trading on 10-15: the day had rolled
-    twice, realised_today had reset to zero both times, and the flag stayed.
-    """
-    if not state.get("halted") or not HALT_AUTO_RELEASE:
-        return False
-    kind = state.get("halt_kind")
-    if not kind:
-        # State written before halts carried a kind. Infer it from the reason
-        # the halt was recorded with, and say so -- the inference is on the
-        # text this module writes itself, not on anything a venue supplies.
-        reason = str(state.get("halt_reason") or "")
-        if reason.startswith("daily loss stop"):
-            kind = "daily_loss"
-        elif reason.startswith("account drawdown"):
-            kind = "drawdown"
-        if kind:
-            print(f"[LEVELS_LIVE] halt carries no kind -- read as '{kind}' "
-                  f"from its reason")
-    if kind == "daily_loss":
-        lost = state.get("realised_today", 0.0)
-        limit = -abs(equity) * DAILY_LOSS_STOP_PCT / 100.0
-        if lost > limit:
-            now = f"day realised ${lost:.2f}, stop at ${limit:.2f}"
-        else:
-            return False
-    elif kind == "drawdown":
-        dd, ref = drawdown_now(state, equity)
-        if ACCOUNT_DD_HALT_PCT and dd >= ACCOUNT_DD_HALT_PCT:
-            return False
-        now = (f"drawdown {dd:.2f}% against a {ref:.2f} "
-               f"{ACCOUNT_DD_WINDOW_HOURS:g}h high, limit "
-               f"{ACCOUNT_DD_HALT_PCT:g}%")
-    else:
-        return False
-    was = state.get("halt_reason", "")
-    state["halted"] = False
-    state["halt_reason"] = ""
-    state["halt_kind"] = ""
-    # Clearing the alert key lets the NEXT halt announce itself. Without this
-    # the keyed cooldown would swallow it and a second halt would be silent.
-    keys = state.get("alert_keys")
-    if isinstance(keys, dict):
-        keys.pop("halt", None)
-    save_state(state)
-    print(f"[LEVELS_LIVE] halt released -- {now} (was: {was})")
-    notify.send(f"✅ *Level trader resumed*\nThe halt has cleared on its own.\n"
-                f"{now}\n\nWas halted for: {was}", key="halt_release",
-                cooldown_sec=600)
-    return True
-
-
-def clear_standdown(state: Dict[str, Any]) -> float:
-    """Drop the loss-streak stand-down. Returns the hours it had left.
-
-    One definition, called by --clear-standdown and by a queued `pause 0`, so
-    the two cannot drift. There was no way to lift a stand-down at all until
-    2026-10-16: /pause set one and nothing unset it, and on 10-15 the rail
-    fired an hour before the market turned and then locked the account out
-    for the remaining eight hours of a recovery it could see happening.
-
-    The losing run is reset too. Leaving it at 2 would re-trigger on the
-    next single loss, which is not what lifting a stand-down means.
-    """
-    left = streak_cooldown_remaining(state)
-    state.pop("streak_cooldown_until", None)
-    state["loss_streak"] = 0
-    save_state(state)
-    return left
-
-
-def streak_cooldown_remaining(state: Dict[str, Any]) -> float:
-    """Hours left on the post-losing-run stand-down, 0 if none."""
-    until = state.get("streak_cooldown_until")
-    if not until:
-        return 0.0
-    try:
-        when = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
-    except ValueError:
-        return 0.0
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    left = (when - datetime.now(timezone.utc)).total_seconds() / 3600.0
-    return max(0.0, left)
-
-
-def note_closed_outcome(state: Dict[str, Any], pnl: float) -> bool:
-    """Track the losing run and open a stand-down when it gets long enough.
-
-    Called from accrue_close, which every path that closes a position must go
-    through -- a close that does not reach it is invisible here for the same
-    reason it would be invisible to the daily loss stop.
-
-    The streak resets to zero on triggering rather than continuing to count,
-    so one losing run buys one stand-down and then re-arms. That is exactly
-    what the replay measured; letting it keep counting would re-trigger on
-    every subsequent loss and extend the stand-down indefinitely.
-
-    Returns True if a stand-down was opened.
-    """
-    if pnl > 0:
-        state["loss_streak"] = 0
-        return False
-    streak = int(state.get("loss_streak") or 0) + 1
-    state["loss_streak"] = streak
-    if not LOSS_STREAK_TRIGGER or streak < LOSS_STREAK_TRIGGER:
-        print(f"[LEVELS_LIVE] losing run at {streak} of "
-              f"{LOSS_STREAK_TRIGGER}")
-        return False
-    until = (datetime.now(timezone.utc)
-             + timedelta(hours=LOSS_STREAK_COOLDOWN_HOURS))
-    state["streak_cooldown_until"] = until.isoformat().replace("+00:00", "Z")
-    state["loss_streak"] = 0
-    print(f"[LEVELS_LIVE] {streak} losses in a row -- standing down for "
-          f"{LOSS_STREAK_COOLDOWN_HOURS:g}h, until {state['streak_cooldown_until']}")
-    notify.send(f"⏸ *Standing down*\n{streak} losing trades in a row.\n"
-                f"No new entries for {LOSS_STREAK_COOLDOWN_HOURS:g}h "
-                f"(until {state['streak_cooldown_until']}).\n\n"
-                f"Losses arrive in day-sized clumps: across the first 98 "
-                f"trades, those opened 6+ losses deep won 7% of the time.",
-                key="streak_standdown", cooldown_sec=3600)
-    return True
-
-
 CONTROL_QUEUE = STATE_PATH.parent / "_control_queue.json"
 
-# Commands the operator may force past a rail. Held as a set rather than
-# checked inline so that adding one is a deliberate edit in one place.
-FORCEABLE = {"take"}
 
-
-def drain_control_queue(state: Dict[str, Any]) -> List[str]:
+def drain_control_queue(state: Dict[str, Any], venue,
+                        halt_state: "safety.HaltState") -> List[str]:
     """Apply queued Telegram commands. Returns what was done, for the log.
 
     The control process never writes _live_state.json -- it appends here and
@@ -2497,20 +1621,45 @@ def drain_control_queue(state: Dict[str, Any]) -> List[str]:
         print(f"[LEVELS_LIVE] control queue unclearable ({e}) -- ignoring it")
         return []
 
-    done: List[str] = []
+    # Collapse repeats before acting. A real drain found four identical
+    # `halt` commands waiting, and each one ran its own flatten_all -- four
+    # venue sweeps for one intent. Commands are idempotent by nature here
+    # (halt, resume, pause), so the last of each verb is the one that counts.
+    collapsed: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    skipped = 0
     for item in raw:
         if not isinstance(item, dict):
             continue
-        cmd = str(item.get("cmd") or "").lower()
+        verb = str(item.get("cmd") or "").lower()
+        if verb in collapsed:
+            skipped += 1
+        else:
+            order.append(verb)
+        collapsed[verb] = item
+    if skipped:
+        print(f"[LEVELS_LIVE] control: collapsed {skipped} repeated "
+              f"command(s); acting on {order}")
+
+    done: List[str] = []
+    for verb in order:
+        item = collapsed[verb]
+        cmd = verb
         arg = str(item.get("arg") or "")
         if cmd == "halt":
-            halt(state, f"halted from Telegram: {arg}" if arg
-                 else "halted from Telegram", kind="manual")
+            # The venue is passed in, so this halt can verify and flatten.
+            # Every queued halt used to run with backend=None, which made its
+            # protection check a silent no-op -- REVIEW.md finding 4, on the
+            # one path whose whole job is reacting to an unprotected position.
+            if venue is None:
+                done.append("halt requested but no venue -- NOT applied")
+                continue
+            safety.halt(venue, halt_state,
+                        f"halted from Telegram: {arg}" if arg
+                        else "halted from Telegram", kind=safety.MANUAL)
             done.append("halted by request")
         elif cmd == "resume":
-            state["halted"] = False
-            state["halt_reason"] = ""
-            state["halt_kind"] = ""
+            halt_state.clear()
             keys = state.get("alert_keys")
             if isinstance(keys, dict):
                 keys.pop("halt", None)
@@ -2522,28 +1671,21 @@ def drain_control_queue(state: Dict[str, Any]) -> List[str]:
                 done.append(f"ignored pause '{arg}': not a number")
                 continue
             if hours <= 0:
-                # `pause 0` means "stop pausing". Spelled this way rather than
-                # as a separate command so there is one verb for the dial and
-                # zero is the obvious way to turn it off.
-                left = clear_standdown(state)
-                done.append(f"stand-down cleared ({left:.1f}h remained)"
-                            if left > 0 else "no stand-down was active")
+                # `pause 0` means "stop pausing". One verb for the dial, with
+                # zero as the obvious way to turn it off.
+                safety.StandDownOverride().clear_now()
+                done.append("stand-down cleared for the current losing run")
                 continue
-            until = datetime.now(timezone.utc) + timedelta(hours=hours)
-            state["streak_cooldown_until"] = (
-                until.isoformat().replace("+00:00", "Z"))
-            done.append(f"paused {hours:g}h by request")
-        elif cmd in FORCEABLE:
-            # Recorded, not acted on here. The entry path is the only thing
-            # that knows whether the scanner has a real level for this coin,
-            # and a forced entry still has to go through sizing and
-            # protection. An override with no candidate behind it is refused
-            # there, where the refusal can say why.
-            forced = state.setdefault("forced", {})
-            forced[arg.upper()] = (datetime.now(timezone.utc)
-                                   + timedelta(hours=1)
-                                   ).isoformat().replace("+00:00", "Z")
-            done.append(f"{arg.upper()} may be forced for 1h")
+            # A timed pause is a halt that clears itself, which is exactly
+            # what AUTO means -- so it is one, rather than a third state with
+            # its own timestamp and its own way of getting stuck.
+            if venue is None:
+                done.append("pause requested but no venue -- NOT applied")
+                continue
+            safety.halt(venue, halt_state,
+                        f"paused {hours:g}h from Telegram", kind=safety.AUTO,
+                        flatten=False)
+            done.append(f"paused by request (clears on the next UTC day)")
         else:
             done.append(f"ignored unknown command '{cmd}'")
     if done:
@@ -2551,67 +1693,6 @@ def drain_control_queue(state: Dict[str, Any]) -> List[str]:
         for line in done:
             print(f"[LEVELS_LIVE] control: {line}")
     return done
-
-
-def preflight(backend, state: Dict[str, Any]):
-    """Reasons not to open anything this pass. Returns a string, or None."""
-    ms = record_equity_sample(backend, state)
-    if ms is not None and ms[0] > 0:
-        release_halt_if_clear(state, ms[0])
-    if state.get("halted"):
-        return f"halted: {state.get('halt_reason', '')}"
-    left = streak_cooldown_remaining(state)
-    if left > 0:
-        return (f"standing down after {LOSS_STREAK_TRIGGER} losses in a row, "
-                f"{left:.1f}h left of {LOSS_STREAK_COOLDOWN_HOURS:g}h")
-    owned = state.get("owned", {})
-    pending = state.get("pending", {})
-    # A resting bid is a position the account has already committed to; it
-    # just has not been filled yet. Counting only `owned` would let the bot
-    # open its full allowance alongside bids that then fill on top.
-    if len(owned) + len(pending) >= MAX_CONCURRENT:
-        return (f"holding {len(owned)} and bidding on {len(pending)}, "
-                f"max {MAX_CONCURRENT}")
-    if MAX_NEW_PER_DAY and state.get("opened_today", 0) >= MAX_NEW_PER_DAY:
-        return f"opened {state['opened_today']} today, max {MAX_NEW_PER_DAY}"
-    if ms is None:
-        record_error("margin_query", "returned None")
-        return "margin query failed -- refusing to size blind"
-    equity, used, avail = ms
-    if equity <= 0:
-        return f"equity {equity}"
-    lost = state.get("realised_today", 0.0)
-    if lost <= -abs(equity) * DAILY_LOSS_STOP_PCT / 100.0:
-        return halt(state, f"daily loss stop: {lost:.2f} against "
-                           f"{equity:.2f} equity", kind="daily_loss",
-                    backend=backend)
-    # Account drawdown, measured against the highest equity seen in the last
-    # ACCOUNT_DD_WINDOW_HOURS. The daily stop above watches REALISED PnL and
-    # resets at 00:00 UTC; this watches total equity, so it is the only rail
-    # that sees four open positions all underwater before any of them close.
-    #
-    # Rolling rather than per-day on instruction, because a reference that
-    # only moves when a day rolls can strand the account: the 10-13 halt ran
-    # two days against a 10-12 reference. Nothing older than the window
-    # survives in it, so the rail releases itself within a day no matter what.
-    #
-    # 10% is not the dead rail a one-day reference would be. Across the 3,193
-    # equity readings logged over 23 days it fires exactly once -- the
-    # 10-12/13 collapse at 10.85% -- and the next worst day is 4.97%.
-    if ACCOUNT_DD_HALT_PCT:
-        dd_pct, ref = drawdown_now(state, equity)
-        if ref > 0 and dd_pct >= ACCOUNT_DD_HALT_PCT:
-            return halt(state, f"account drawdown {dd_pct:.1f}% ({equity:.2f} "
-                               f"against a {ref:.2f} high over the last "
-                               f"{ACCOUNT_DD_WINDOW_HOURS:g}h), limit "
-                               f"{ACCOUNT_DD_HALT_PCT:g}%", kind="drawdown",
-                        backend=backend)
-    # Still tracked, purely so the logs and alerts can say how far the account
-    # is from its best. It no longer decides anything.
-    if equity > float(state.get("equity_peak") or 0.0):
-        state["equity_peak"] = equity
-        save_state(state)
-    return None
 
 
 if __name__ == "__main__":

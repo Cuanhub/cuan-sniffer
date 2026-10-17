@@ -29,10 +29,10 @@ import tools.live_levels_trader as T
 
 class Backend:
     def __init__(self, mid):
-        self.mid = mid
+        self._mid = mid
 
-    def get_mid_price(self, coin):
-        return self.mid
+    def mid(self, coin):
+        return self._mid
 
 
 def bars(low, n=40):

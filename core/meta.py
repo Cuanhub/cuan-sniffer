@@ -50,11 +50,20 @@ def write_json(path: pathlib.Path, obj: Any) -> None:
 
 @dataclass
 class TradeMeta:
-    """Why we took this trade, and what we planned. Never what we hold."""
+    """Why we took this trade, and what we planned. Never what we hold.
+
+    `pending_episode` carries the scanner episode for a bid that has been
+    placed but not filled, as JSON. A bid that is never hit is not a trade,
+    so its features must not reach the set used to judge the trades we did
+    take -- and the fill can happen while nothing is watching, so the payload
+    has to survive until something observes the position. Losing this file
+    costs research data, never a position: the venue holds those.
+    """
     reason: str = ""
     planned_stop: float = 0.0
     planned_tp: float = 0.0
     opened_at: str = ""
+    pending_episode: str = ""
 
 
 class MetaStore:
@@ -79,7 +88,8 @@ class MetaStore:
         return TradeMeta(reason=str(row.get("reason") or ""),
                          planned_stop=_f(row.get("planned_stop")),
                          planned_tp=_f(row.get("planned_tp")),
-                         opened_at=str(row.get("opened_at") or ""))
+                         opened_at=str(row.get("opened_at") or ""),
+                         pending_episode=str(row.get("pending_episode") or ""))
 
     def put(self, coin: str, meta: TradeMeta) -> None:
         rows = self._all()

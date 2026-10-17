@@ -30,7 +30,7 @@ import signal
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from research.levels import storage
 from research.levels.gate import evaluate
@@ -125,7 +125,7 @@ def _fired_previous_bar(bars: List[Dict[str, Any]], i: int, level_price: float,
 
 
 def scan_series(coin: str, bars: List[Dict[str, Any]], start: int = VOL_LOOKBACK,
-                until_ts: int = None) -> List[Dict[str, Any]]:
+                until_ts: Optional[int] = None) -> List[Dict[str, Any]]:
     """Walk the whole series once, emitting an episode only where a level's
     gate OPENS. Carries the previous bar's gated levels forward instead of
     recomputing them, which is what makes a backfill finish."""
@@ -149,9 +149,9 @@ def scan_series(coin: str, bars: List[Dict[str, Any]], start: int = VOL_LOOKBACK
     return rows
 
 
-def scan_coin(coin: str, bars: List[Dict[str, Any]], i: int = None,
+def scan_coin(coin: str, bars: List[Dict[str, Any]], i: Optional[int] = None,
               onset_only: bool = True,
-              ctx: Dict[str, Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+              ctx: Optional[Dict[str, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Evaluate every detected support level as of bar i. Returns episode rows
     for levels whose gate fires, by default only where the gate has just
     OPENED rather than where it merely remains open."""

@@ -229,21 +229,48 @@ def test_drawdown_is_measured_against_the_peak_and_is_manual(tmp_path):
     assert dd.breached and dd.halt_kind == MANUAL
 
 
-def test_the_peak_survives_a_new_utc_day(tmp_path, monkeypatch):
-    log = EquityLog(tmp_path / "eq.json")
-    assert log.observe(1000.0) == (1000.0, 1000.0)
-    monkeypatch.setattr(safety, "datetime", safety.datetime)
-    # a new day resets day_start but must not reset the peak
+def test_the_drawdown_reference_is_a_rolling_window_not_an_all_time_peak(tmp_path):
+    """The reference must follow the account down within the window.
+
+    This replaces a test that asserted the opposite -- that the peak survives
+    a new UTC day. That encoded an ALL-TIME high, which never decays: an
+    account that falls 10% and stabilises then reads as breached for ever.
+    The reference was deliberately moved off an all-time high (`7764dee`), and
+    on 2026-10-13 a stale one kept the rail firing for two days against a high
+    the account could no longer reach.
+    """
     import datetime as _dt
+    log = EquityLog(tmp_path / "eq.json")
+    t0 = _dt.datetime(2026, 10, 13, 12, 0, tzinfo=_dt.timezone.utc)
+    assert log.observe(1000.0, now=t0) == (1000.0, 1000.0)
 
-    class _Tomorrow(_dt.datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return _dt.datetime(2099, 1, 1, tzinfo=tz)
+    # Still inside the window: the old high is the reference.
+    _, high = log.observe(900.0, now=t0 + _dt.timedelta(hours=1))
+    assert high == 1000.0
 
-    monkeypatch.setattr(safety, "datetime", _Tomorrow)
-    day_start, peak = log.observe(900.0)
-    assert day_start == 900.0 and peak == 1000.0
+    # Past the window: the 1000 reading is gone and 900 is the new high, so
+    # the drawdown reads 0% rather than 10% for ever.
+    day_start, high = log.observe(900.0,
+                                  now=t0 + _dt.timedelta(
+                                      hours=safety.DRAWDOWN_WINDOW_HOURS + 1))
+    assert high == 900.0, "an all-time peak would strand the account here"
+    assert day_start == 900.0, "a new UTC day resets the day-start"
+
+
+def test_a_sample_is_taken_even_on_a_pass_that_refuses_to_trade(tmp_path):
+    """From 2026-10-13 to 10-15 the halted trader took no equity readings at
+    all, so it spent two days measured against a reference it could not
+    reach. check_limits is what samples, and preflight calls it before every
+    early return."""
+    import inspect
+    src = inspect.getsource(safety.check_limits)
+    assert "log.observe" in src
+    from core import safety as S
+    pre = inspect.getsource(__import__("tools.live_levels_trader",
+                                       fromlist=["x"]).preflight)
+    assert "enforce_limits" in pre
+    assert pre.index("enforce_limits") < pre.index("MAX_CONCURRENT"), (
+        "the equity sample must be taken before the caps can return early")
 
 
 def test_the_limits_act(tmp_path):
@@ -365,3 +392,27 @@ def test_errors_age_out_of_the_window(monkeypatch):
     monkeypatch.setattr(safety.time, "time",
                         lambda: base + safety.ERROR_WINDOW_SEC + 1)
     assert safety.record_error("venue", "much later") == 1
+
+
+def test_the_error_alert_names_the_commonest_source(captured_alerts):
+    """Ported from test_error_rate.py before it was retired: an operator
+    needs to know WHICH thing is failing, not just that something is."""
+    for _ in range(4):
+        safety.record_error("open_orders", "429")
+    for _ in range(2):
+        safety.record_error("positions", "429")
+    blob = " ".join(str(p) for p in captured_alerts)
+    assert "Error rate" in blob
+    assert "open_orders` x4" in blob and "positions` x2" in blob
+    assert blob.index("open_orders") < blob.index("positions"), \
+        "sources must be listed worst first"
+
+
+def test_the_venue_read_paths_record_their_failures():
+    """Also ported: the rail is worthless if the paths that fail never call
+    it. These are the reads whose failure the operator must hear about."""
+    import inspect
+    from core import protect
+    assert "record_error" in inspect.getsource(protect.ensure_stop)
+    assert "record_error" in inspect.getsource(protect.run_once)
+    assert "record_error" in inspect.getsource(safety.check_limits)

@@ -32,7 +32,7 @@ import pathlib
 import shutil
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -117,7 +117,8 @@ def prune_trade_log(apply: bool, now: Optional[datetime] = None
     with TRADE_LOG.open(newline="") as fh:
         reader = csv.DictReader(fh)
         cols = list(reader.fieldnames or [])
-        kept, pruned = [], []
+        kept: List[Dict[str, Any]] = []
+        pruned: List[Dict[str, Any]] = []
         for row in reader:
             (kept if keep(row, cut) else pruned).append(row)
     counts = {"kept": len(kept), "pruned": len(pruned)}

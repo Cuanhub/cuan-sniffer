@@ -145,10 +145,12 @@ def test_a_win_ends_the_run():
     assert losing_run([t(-1), t(-2), t(5)]) == []
 
 
-def test_a_scratch_trade_ends_the_run():
-    """The old counter treated anything not strictly positive as a loss, so a
-    break-even trade extended a run it should have ended."""
-    assert losing_run([t(-1), t(-2), t(0.0)]) == []
+def test_a_scratch_trade_counts_as_a_loss():
+    """A round trip that nets zero paid a full set of fees for nothing, which
+    is the churn both rails exist to stop. Only a strictly profitable trade
+    ends a run."""
+    assert len(losing_run([t(-1), t(-2), t(0.0)])) == 3
+    assert losing_run([t(-1), t(-2), t(0.01)]) == []
 
 
 def test_no_trades_is_no_run():

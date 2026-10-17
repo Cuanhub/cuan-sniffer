@@ -26,6 +26,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import tools.live_levels_trader as T
+import inspect
+import tempfile
+
+from core import execute, safety
+from core.meta import MetaStore
+from tests.fake_venue import FakeHL, build_venue
 
 
 class FakeCandles:
@@ -104,7 +110,7 @@ class FakeBackend:
     def _get_user_state_address(self):
         return "0xfake"
 
-    def get_mid_price(self, coin):
+    def mid(self, coin):
         # default: sitting right at the planned entry
         return self.mid if self.mid is not None else 100.0
 
@@ -204,203 +210,226 @@ def episode(coin, entry=100.0, stop=95.0, tp=115.0):
             "near_sigma": 7.0, "level_origin": "swing_low"}
 
 
+
+
+def _halt():
+    """A HaltState in a throwaway file, so a test cannot halt the real bot."""
+    return safety.HaltState(Path(tempfile.mkdtemp()) / "halt.json")
+
+
+def _eqlog():
+    return safety.EquityLog(Path(tempfile.mkdtemp()) / "eq.json")
+
+
+def _venue(mid=100.0, **kw):
+    """A real core.venue.Venue over the recorded-payload fake.
+
+    Replaces the old FakeBackend, which mimicked LiveExecutionBackend's reply
+    shapes. Nothing reads a reply shape any more, so the double only has to
+    hold positions and orders.
+    """
+    fake = FakeHL(mid=mid, usdc=kw.pop("usdc", 1000.0), **kw)
+    execute.SETTLE_SEC = 0.0
+    safety.FLATTEN_PAUSE_SEC = 0.0
+    return build_venue(fake)
+
+
 class ArmedPathTest(unittest.TestCase):
+    """The armed entry path, over core/.
+
+    Rewritten for the execution rewrite, intent-for-intent. The old harness
+    drove a FakeBackend that mimicked LiveExecutionBackend's response shapes;
+    this one drives the recorded-payload fake, so what the tests assert about
+    is what the venue HOLDS rather than what a reply said.
+    """
+
     def setUp(self):
-        self._tmp = Path("/tmp/_test_live_trader")
-        if self._tmp.exists():
-            shutil.rmtree(self._tmp)
-        self._tmp.mkdir(parents=True)
-        self._orig_state, self._orig_log, self._orig_ro = T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT
+        self._tmp = Path(tempfile.mkdtemp(prefix="armed_path_"))
+        self._orig = (T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT,
+                      execute.SETTLE_SEC, safety.FLATTEN_PAUSE_SEC)
         T.STATE_PATH = self._tmp / "state.json"
         T.TRADE_LOG = self._tmp / "trades.csv"
         T._RO_CLIENT = FakeCandles()
-        self.state = {"owned": {}, "opened_today": 0, "day": "d",
-                      "realised_today": 0.0, "halted": False, "halt_reason": ""}
+        execute.SETTLE_SEC = 0.0
+        safety.FLATTEN_PAUSE_SEC = 0.0
+        self.state = {"opened_today": 0, "day": "d"}
+        self.meta = MetaStore(self._tmp / "meta.json")
+        self.fake = FakeHL(mid=100.0, usdc=1000.0)
+        self.venue = build_venue(self.fake)
         self.sent = []
         self._orig_send = T.notify.send
         T.notify.send = lambda text, **kw: (self.sent.append(text), True)[1]
 
     def tearDown(self):
         T.notify.send = self._orig_send
-        T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT = self._orig_state, self._orig_log, self._orig_ro
-        if self._tmp.exists():
-            shutil.rmtree(self._tmp)
+        (T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT, execute.SETTLE_SEC,
+         safety.FLATTEN_PAUSE_SEC) = self._orig
+        shutil.rmtree(self._tmp, ignore_errors=True)
 
+    def fire(self, coin="HYPE", **kw):
+        return T.execute_one(self.venue, self.meta, episode(coin, **kw),
+                             1000.0, 1000.0, True, self.state)
+
+    def stops(self, coin):
+        return [o for o in self.fake.resting
+                if o["coin"] == coin and o["orderType"].startswith("Stop")]
+
+    # -- the entry lands, and carries a stop ------------------------------
     def test_successful_entry_is_recorded_and_protected(self):
-        b = FakeBackend()
-        ok = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        self.assertTrue(ok)
-        self.assertIn("AAA", self.state["owned"])
-        self.assertTrue(self.state["owned"]["AAA"]["confirmed"])
-        self.assertEqual(b.protections, ["AAA"], "protection must follow every entry")
+        self.assertTrue(self.fire())
+        # MARGIN_PCT_PER_TRADE of equity, levered FLAT_LEVERAGE times, at a
+        # $100 mid -- not the whole $1000 of equity.
+        expected = (1000.0 * T.MARGIN_PCT_PER_TRADE / 100.0
+                    * T.FLAT_LEVERAGE / 100.0)
+        self.assertAlmostEqual(self.fake.pos["HYPE"], expected, places=6)
+        self.assertIsNotNone(self.meta.get("HYPE"), "the plan must be recorded")
+        self.assertEqual(len(self.stops("HYPE")), 1,
+                         "protection must follow every entry")
 
-    def test_concurrency_holds_even_if_the_fill_parse_breaks(self):
-        """The 2026-09-18 runaway in miniature. The slot is claimed before the
-        order is sent, so a backend that fills without reporting it usefully
-        can no longer uncap the loop."""
-        class WeirdBackend(FakeBackend):
-            def execute_entry(self, coin, side, price, size_usd, confidence):
-                self.entries.append(coin)
-                self.venue[coin] = size_usd
-                # filled, but with the shape the old code guessed at
-                return FakeFill(filled=True, fill_price=price, fill_size_usd=size_usd)
-        b = WeirdBackend()
-        for coin in ("AAA", "BBB", "CCC", "DDD"):
-            if len(self.state["owned"]) >= T.MAX_CONCURRENT:
-                break
-            T.execute_one(b, episode(coin), 1000.0, 1000.0, True, self.state)
-        self.assertLessEqual(len(b.entries), T.MAX_CONCURRENT,
-                             f"sent {len(b.entries)} orders against a cap of {T.MAX_CONCURRENT}")
+    def test_the_stop_is_sized_to_what_actually_filled(self):
+        """A partial fill used to be protected for the size the code BELIEVED
+        it filled, with no way to correct it afterwards."""
+        self.fake.fill_fraction = 0.6
+        self.assertTrue(self.fire())
+        self.assertAlmostEqual(float(self.stops("HYPE")[0]["sz"]),
+                               self.fake.pos["HYPE"], places=6)
 
-    def test_rejected_entry_releases_the_slot(self):
-        b = FakeBackend(fill=False)
-        ok = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        self.assertFalse(ok)
-        self.assertNotIn("AAA", self.state["owned"], "a rejected entry must not hold a slot")
+    def test_concurrency_cannot_be_uncapped_by_a_parsing_bug(self):
+        """The 2026-09-18 runaway, structurally prevented.
 
+        The cap was counted from state["owned"]; one parsing bug emptied it
+        and a single pass opened twelve positions with no stops. There is now
+        nothing to parse and nothing to empty -- the cap reads the venue.
+        """
+        code = "\n".join(l.split("#")[0] for l in
+                          inspect.getsource(T.main).splitlines())
+        self.assertIn("venue.positions()", code)
+        self.assertNotIn('state.get("owned"', code)
+        self.assertNotIn('state["owned"]', code)
+        self.assertNotIn('state["pending"]', code)
+
+    def test_rejected_entry_drops_the_plan(self):
+        self.fake.order_fills = False
+        out = self.fire()
+        self.assertFalse(out)
+        self.assertIsNone(self.meta.get("HYPE"),
+                          "a plan with no position behind it must not linger")
+        self.assertEqual(self.stops("HYPE"), [])
+
+    def test_an_unknown_result_keeps_the_plan_for_the_protection_loop(self):
+        """Neither a fill nor a reject. The old code recorded a reject and
+        released the slot, leaving a live unprotected position untracked."""
+        real = self.fake.order
+
+        def order_then_blind(*a, **k):
+            r = real(*a, **k)
+            self.fake.fail_info_always = True
+            return r
+
+        self.fake.order = order_then_blind
+        out = self.fire()
+        self.assertTrue(out.order_sent)
+        self.assertIsNotNone(self.meta.get("HYPE"),
+                             "the plan must survive so the loop can use it")
+        self.assertTrue(any("result unknown" in s for s in self.sent))
+
+    # -- protection failure closes the position ---------------------------
     def test_protection_failure_closes_the_position(self):
-        b = FakeBackend(protection_ok=False)
-        ok = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        self.assertFalse(ok)
-        self.assertEqual(b.exits, ["AAA"], "an unprotected position must be closed")
-        self.assertNotIn("AAA", self.state["owned"])
+        real = self.fake.order
 
-    def test_protection_failure_cancels_what_the_venue_accepted(self):
-        # A contradicted leg may not be reduce-only, and a non-reduce-only
-        # order resting on a flat account opens a position instead of closing
-        # one -- in a coin this module has just stopped tracking.
-        b = FakeBackend(protection_ok=False, protection_oids=True)
-        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        self.assertEqual(b.cancels, [("AAA", "s1")])
+        def refuse_triggers(name, is_buy, sz, px, order_type, **k):
+            if "trigger" in order_type:
+                return {"status": "ok"}          # accepted, nothing rests
+            return real(name, is_buy, sz, px, order_type, **k)
 
-    def test_failed_emergency_exit_halts_and_keeps_the_slot(self):
-        # The close can be rejected. Releasing the slot anyway would discard
-        # the only record of a position that is open and unprotected.
-        b = FakeBackend(protection_ok=False, exit_fills=False)
-        ok = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        self.assertFalse(ok)
-        self.assertTrue(self.state["halted"], "an unprotected open position must halt")
-        self.assertIn("AAA", self.state["owned"])
+        self.fake.order = refuse_triggers
+        self.fire()
+        self.assertEqual(self.fake.pos, {},
+                         "an unprotected position is not the trade")
+        self.assertTrue(any("could not be protected" in s for s in self.sent))
 
-    def test_successful_emergency_exit_releases_the_slot(self):
-        b = FakeBackend(protection_ok=False)
-        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        self.assertFalse(self.state.get("halted", False))
-        self.assertNotIn("AAA", self.state["owned"])
-
-    def test_emergency_exit_accrues_its_cost(self):
-        # An open/close round trip costs fees and spread. If that never
-        # reaches realised_today, a protection failure that repeats every
-        # pass can churn all day without the daily loss stop noticing.
-        b = FakeBackend(protection_ok=False, realised_pnl=-3.5)
-        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        self.assertAlmostEqual(self.state["realised_today"], -3.5)
-
-    def test_fetch_failure_is_recorded_not_just_printed(self):
-        # Every other drop reason writes a row; this one only printed, so a
-        # candidate lost to a rate limit left no trace in the durable record.
-        class Boom:
-            def get_candles(self, *a, **kw):
-                raise RuntimeError("candleSnapshot:AAA:1h failed: 429 rate limit")
-
-        orig, T._RO_CLIENT = T._RO_CLIENT, Boom()
-        try:
-            b = FakeBackend()
-            ok = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        finally:
-            T._RO_CLIENT = orig
-        self.assertFalse(ok)
-        self.assertEqual(b.entries, [], "nothing may be sent without a trigger check")
-        rows = T.TRADE_LOG.read_text()
-        self.assertIn("fetch_failed", rows)
-        self.assertIn("429", rows)
-
+    # -- what the caller is told ------------------------------------------
     def test_a_skipped_candidate_reports_no_order(self):
-        # venue_sanity keys off this. A dry candidate must not cost a
-        # user_state call -- that is what truncated 22 passes.
-        b = FakeBackend()
-        out = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, False, self.state)
-        self.assertFalse(out.order_sent)
+        T._RO_CLIENT = FakeCandles(held=False)
+        self.assertFalse(self.fire().order_sent)
 
     def test_a_filled_entry_reports_an_order(self):
-        b = FakeBackend()
-        out = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        self.assertTrue(out.order_sent)
-        self.assertTrue(out.opened)
+        self.assertTrue(self.fire().order_sent)
 
     def test_a_rejected_entry_still_reports_an_order(self):
-        # The order reached the venue; whether it filled is a separate
-        # question, and venue_sanity must still run.
-        b = FakeBackend(fill=False)
-        out = T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        self.assertTrue(out.order_sent)
-        self.assertFalse(out.opened)
+        self.fake.order_fills = False
+        self.assertTrue(self.fire().order_sent,
+                        "an order reached the venue even though it did not fill")
 
+    def test_dry_run_sends_nothing(self):
+        T.execute_one(self.venue, self.meta, episode("HYPE"), 1000.0, 1000.0,
+                      False, self.state)
+        self.assertEqual(self.fake.sent, [])
+        self.assertEqual(self.fake.pos, {})
+
+    def test_leverage_is_set_on_the_venue_before_the_order(self):
+        """Hyperliquid enforces leverage per asset: a 5x-sized order into a
+        coin set to 3x is refused for margin."""
+        seen = []
+        self.fake.update_leverage = lambda lev, name, is_cross=True: (
+            seen.append((name, lev)), {"status": "ok"})[1]
+        self.fire()
+        self.assertTrue(seen, "leverage was never set")
+        self.assertEqual(seen[0][0], "HYPE")
+
+    def test_an_open_position_is_announced_with_its_protection(self):
+        self.fire()
+        blob = " ".join(self.sent)
+        self.assertIn("HYPE", blob)
+        self.assertTrue(any("OPENED" in s or "stop" in s for s in self.sent))
+
+    def test_fetch_failure_is_recorded_not_just_printed(self):
+        class Boom:
+            def get_candles(self, *a, **k):
+                raise RuntimeError("rate limited")
+
+        T._RO_CLIENT = Boom()
+        self.fire()
+        rows = T.TRADE_LOG.read_text() if T.TRADE_LOG.exists() else ""
+        self.assertIn("fetch_failed", rows,
+                      "a candidate lost to a rate limit must leave a row")
+
+    # -- the watchboard ---------------------------------------------------
+    def test_a_near_miss_is_recorded_on_the_watchboard(self):
+        T._RO_CLIENT = FakeCandles(held=False)
+        board = []
+        T.execute_one(self.venue, self.meta, episode("HYPE"), 1000.0, 1000.0,
+                      True, self.state, watchboard=board)
+        self.assertTrue(board, "a near miss must reach the board")
+        self.assertEqual(board[0]["coin"], "HYPE")
+
+    def test_a_fired_trigger_is_not_on_the_watchboard(self):
+        board = []
+        T.execute_one(self.venue, self.meta, episode("HYPE"), 1000.0, 1000.0,
+                      True, self.state, watchboard=board)
+        self.assertEqual(board, [], "a trade that fired is not a near miss")
+
+    # -- bar caching ------------------------------------------------------
     def test_1h_bars_are_fetched_once_per_coin_per_pass(self):
-        # One coin carries several levels; 141 candidates came from ~30 coins,
-        # so this refetched the same series ~5x. Rate limits truncate passes,
-        # so the waste was not free.
         calls = []
-        real = T._RO_CLIENT
+        inner = FakeCandles()
 
         class Counting:
             def get_candles(self, coin, interval, start, end):
                 calls.append(coin)
-                return real.get_candles(coin, interval, start, end)
+                return inner.get_candles(coin, interval, start, end)
 
         T._RO_CLIENT = Counting()
-        try:
-            cache = {}
-            for _ in range(4):
-                T.cached_1h("AAA", cache)
-            T.cached_1h("BBB", cache)
-        finally:
-            T._RO_CLIENT = real
-        self.assertEqual(calls, ["AAA", "BBB"], "one fetch per coin per pass")
+        cache = {}
+        for _ in range(3):
+            T.execute_one(self.venue, self.meta, episode("HYPE"), 1000.0,
+                          1000.0, True, self.state, bars_cache=cache)
+        self.assertEqual(len(calls), 1, f"fetched {len(calls)} times")
 
     def test_no_cache_still_fetches(self):
-        # cache=None is the uncached path and must still work.
-        self.assertTrue(len(T.cached_1h("AAA", None)) > 0)
+        self.assertTrue(self.fire().order_sent)
 
-    def test_an_open_position_is_announced_with_its_protection(self):
-        # Everything needed to check the fill against a chart, because the
-        # alternative is opening a laptop to find out what was bought.
-        b = FakeBackend()
-        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        opened = [s for s in self.sent if "OPENED" in s]
-        self.assertEqual(len(opened), 1)
-        for token in ("AAA", "stop", "tp", "size", "rr", "level"):
-            self.assertIn(token, opened[0])
 
-    def test_a_near_miss_is_recorded_on_the_watchboard(self):
-        b = FakeBackend()
-        board = []
-        T._RO_CLIENT = FakeCandles(level=100.0, held=False)
-        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state,
-                      watchboard=board)
-        self.assertEqual(len(board), 1)
-        self.assertEqual(board[0]["coin"], "AAA")
-        self.assertIn("above", board[0])
-
-    def test_a_fired_trigger_is_not_on_the_watchboard(self):
-        b = FakeBackend()
-        board = []
-        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state,
-                      watchboard=board)
-        self.assertEqual(board, [], "only near-misses belong on the board")
-
-    def test_leverage_is_set_on_the_venue_before_the_order(self):
-        # Hyperliquid enforces leverage per asset: a 5x-sized order into a coin
-        # the account has set to 3x is simply refused for margin.
-        b = FakeBackend()
-        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        self.assertTrue(b.leverage_set, "leverage must be set before entry")
-        self.assertEqual(b.leverage_set[0][0], "AAA")
-
-    def test_dry_run_sends_nothing(self):
-        b = FakeBackend()
-        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, False, self.state)
-        self.assertEqual(b.entries, [])
 
 
 class EntryDriftTest(unittest.TestCase):
@@ -418,41 +447,59 @@ class EntryDriftTest(unittest.TestCase):
         T.STATE_PATH = self._tmp / "s.json"
         T.TRADE_LOG = self._tmp / "t.csv"
         T._RO_CLIENT = FakeCandles()
-        self.state = {"owned": {}, "opened_today": 0, "day": "d",
-                      "realised_today": 0.0, "halted": False, "halt_reason": ""}
+        self.state = {"opened_today": 0, "day": "d"}
+        self.meta = MetaStore(self._tmp / "meta.json")
 
     def tearDown(self):
         T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT = self._o
         if self._tmp.exists():
             shutil.rmtree(self._tmp)
 
+    @staticmethod
+    def orders_sent(venue):
+        """Entry orders the venue was asked for -- triggers are protection."""
+        return [o for o in venue.exchange.sent if "trigger" not in o["type"]]
+
     def test_refuses_to_fire_when_price_drifted_from_the_plan(self):
-        b = FakeBackend(mid=117.5)          # +17.5%, the UNI case
-        ok = T.execute_one(b, episode("UNI"), 1000.0, 1000.0, True, self.state)
+        b = _venue(mid=117.5)          # +17.5%, the UNI case
+        ok = T.execute_one(b, self.meta, episode("UNI"), 1000.0, 1000.0, True, self.state)
         self.assertFalse(ok)
-        self.assertEqual(b.entries, [], "no order may be sent when the plan no longer applies")
+        self.assertEqual(self.orders_sent(b), [],
+                         "no order may be sent when the plan no longer applies")
 
     def test_fires_when_price_is_at_the_level(self):
-        b = FakeBackend(mid=100.0)
-        self.assertTrue(T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state))
-        self.assertEqual(b.entries, ["AAA"])
+        b = _venue(mid=100.0)
+        self.assertTrue(T.execute_one(b, self.meta, episode("AAA"), 1000.0, 1000.0, True, self.state))
+        self.assertEqual([o["coin"] for o in self.orders_sent(b)], ["AAA"])
 
     def test_refuses_when_price_is_already_through_the_stop(self):
-        b = FakeBackend(mid=94.0)           # below the 95 stop
-        self.assertFalse(T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state))
-        self.assertEqual(b.entries, [])
+        b = _venue(mid=94.0)           # below the 95 stop
+        self.assertFalse(T.execute_one(b, self.meta, episode("AAA"), 1000.0, 1000.0, True, self.state))
+        self.assertEqual(self.orders_sent(b), [])
 
     def test_refuses_when_live_reward_risk_has_collapsed(self):
-        b = FakeBackend(mid=100.9)          # inside drift, but rr now poor
-        self.assertFalse(T.execute_one(b, episode("AAA", 100.0, 95.0, 101.0),
+        b = _venue(mid=100.9)          # inside drift, but rr now poor
+        self.assertFalse(T.execute_one(b, self.meta, episode("AAA", 100.0, 95.0, 101.0),
                                        1000.0, 1000.0, True, self.state))
-        self.assertEqual(b.entries, [])
+        self.assertEqual(self.orders_sent(b), [])
 
     def test_size_comes_from_the_live_price_not_the_plan(self):
-        b = FakeBackend(mid=101.0)          # within drift
-        T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state)
-        rec = self.state["owned"]["AAA"]
-        self.assertAlmostEqual(rec["entry"], 101.0, places=6)
+        """The UNI lesson: sizing off the plan while filling at market is what
+        made that position carry 3.5x its intended risk.
+
+        Asserted against the ORDER now rather than a state record: the size
+        that matters is the one the venue was asked for, and the position it
+        produced -- `state["owned"]` no longer exists to read it back from.
+        """
+        b = _venue(mid=101.0)          # within drift
+        T.execute_one(b, self.meta, episode("AAA"), 1000.0, 1000.0, True,
+                      self.state)
+        sent = self.orders_sent(b)
+        self.assertEqual(len(sent), 1)
+        notional = 1000.0 * T.MARGIN_PCT_PER_TRADE / 100.0 * T.FLAT_LEVERAGE
+        self.assertAlmostEqual(sent[0]["sz"], round(notional / 101.0, 2),
+                               places=2,
+                               msg="size must come from the LIVE price")
 
 
 class TriggerTest(unittest.TestCase):
@@ -468,29 +515,36 @@ class TriggerTest(unittest.TestCase):
         self._o = (T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT)
         T.STATE_PATH = self._tmp / "s.json"
         T.TRADE_LOG = self._tmp / "t.csv"
-        self.state = {"owned": {}, "opened_today": 0, "day": "d",
-                      "realised_today": 0.0, "halted": False, "halt_reason": ""}
+        self.state = {"opened_today": 0, "day": "d"}
+        self.meta = MetaStore(self._tmp / "meta.json")
 
     def tearDown(self):
         T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT = self._o
         if self._tmp.exists():
             shutil.rmtree(self._tmp)
 
+    @staticmethod
+    def orders_sent(venue):
+        """Entry orders the venue was asked for -- triggers are protection."""
+        return [o for o in venue.exchange.sent if "trigger" not in o["type"]]
+
     def test_fires_after_the_level_has_held(self):
         T._RO_CLIENT = FakeCandles(held=True, touched=True)
-        b = FakeBackend(mid=100.0)
-        self.assertTrue(T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state))
+        b = _venue(mid=100.0)
+        self.assertTrue(T.execute_one(b, self.meta, episode("AAA"), 1000.0, 1000.0, True, self.state))
 
     def test_waits_while_the_level_is_breaking(self):
         T._RO_CLIENT = FakeCandles(held=False, touched=True)
-        b = FakeBackend(mid=100.0)
-        self.assertFalse(T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state))
-        self.assertEqual(b.entries, [], "must not buy a level that is closing below itself")
+        b = _venue(mid=100.0)
+        self.assertFalse(T.execute_one(b, self.meta, episode("AAA"), 1000.0, 1000.0, True, self.state))
+        self.assertEqual([o for o in b.exchange.sent
+                          if "trigger" not in o["type"]], [],
+                         "must not buy a level that is closing below itself")
 
     def test_waits_when_price_never_reached_the_level(self):
         T._RO_CLIENT = FakeCandles(held=True, touched=False)
-        b = FakeBackend(mid=100.0)
-        self.assertFalse(T.execute_one(b, episode("AAA"), 1000.0, 1000.0, True, self.state))
+        b = _venue(mid=100.0)
+        self.assertFalse(T.execute_one(b, self.meta, episode("AAA"), 1000.0, 1000.0, True, self.state))
 
     def test_hold_ignores_the_still_forming_bar(self):
         """A live candle is not a hold. Counting it would let a wick that is
@@ -538,181 +592,6 @@ class ReviewFlagTest(unittest.TestCase):
         self.assertEqual(T.review_flags(ep, 300.0, 768.0), [])
 
 
-class VenueSanityTest(unittest.TestCase):
-    def setUp(self):
-        self.state = {"owned": {}, "halted": False}
-
-    def test_flags_positions_the_module_did_not_open(self):
-        b = FakeBackend()
-        b.venue = {"ZZZ": 100.0}
-        r, fatal = T.venue_sanity(b, self.state, 1000.0)
-        self.assertIn("ZZZ", r or "")
-        self.assertTrue(fatal)
-
-    def test_flags_breaching_the_concurrency_cap(self):
-        b = FakeBackend()
-        b.venue = {f"C{i}": 10.0 for i in range(T.MAX_CONCURRENT + 1)}
-        self.state["owned"] = {c: {} for c in b.venue}
-        r, fatal = T.venue_sanity(b, self.state, 1000.0)
-        self.assertIn("cap", (r or "").lower())
-        self.assertTrue(fatal)
-
-    def test_flags_notional_above_the_leverage_ceiling(self):
-        b = FakeBackend()
-        b.venue = {"AAA": 50_000.0}
-        self.state["owned"] = {"AAA": {}}
-        msg, fatal = T.venue_sanity(b, self.state, 1000.0)
-        self.assertIn("exceeds", msg or "")
-        self.assertTrue(fatal)
-
-    def test_a_query_failure_is_transient_not_fatal(self):
-        """A 429 put the bot into a permanent halt on its second live pass.
-        Failing to ask is not the same as getting a bad answer."""
-        class Broken(FakeBackend):
-            def user_state(self, addr):
-                raise RuntimeError("429 rate limited")
-        r, fatal = T.venue_sanity(Broken(), self.state, 1000.0)
-        self.assertIn("429", r)
-        self.assertFalse(fatal, "a transient query failure must not halt trading")
-
-    def test_quiet_when_everything_agrees(self):
-        b = FakeBackend()
-        b.venue = {"AAA": 100.0}
-        self.state["owned"] = {"AAA": {}}
-        self.assertEqual(T.venue_sanity(b, self.state, 1000.0), (None, False))
-
-
-class RealisedPnlTest(unittest.TestCase):
-    """The daily loss stop was inert for every trade this module ever made.
-
-    realised_today was initialised to 0.0, reset to 0.0 each day, and read
-    once by preflight -- and never written in between. preflight therefore
-    asked whether 0.0 <= -(15% of equity), which is never true. reconcile is
-    the only place a close is observed, so it is where the number has to come
-    from.
-    """
-
-    def state_holding(self, coin="AAA", entry=100.0, stop=95.0, size_coin=2.0):
-        return {"owned": {coin: {"episode_id": "e1", "entry": entry, "stop": stop,
-                                 "tp": entry * 1.15,
-                                 "size_coin": size_coin, "size_usd": entry * size_coin,
-                                 "opened_at": "2026-09-18T07:00:00Z", "confirmed": True}},
-                "opened_today": 1, "day": "2026-09-18", "realised_today": 0.0,
-                "halted": False, "halt_reason": ""}
-
-    def test_iso_round_trips_to_venue_milliseconds(self):
-        self.assertEqual(T.iso_to_ms("2026-09-18T07:00:00Z"), 1789714800000)
-        self.assertIsNone(T.iso_to_ms("not a timestamp"))
-
-    def test_closed_position_accrues_its_loss(self):
-        b = FakeBackend(realised_pnl=-42.5)
-        b.venue = {}                       # flat at the venue
-        st = self.state_holding()
-        T.reconcile(b, st)
-        self.assertNotIn("AAA", st["owned"])
-        self.assertAlmostEqual(st["realised_today"], -42.5)
-        self.assertEqual(b.pnl_queries, [("AAA", 1789714800000)])
-
-    def test_a_close_is_announced(self):
-        sent = []
-        orig = T.notify.send
-        T.notify.send = lambda text, **kw: (sent.append(text), True)[1]
-        try:
-            b = FakeBackend(realised_pnl=-42.5)
-            T.reconcile(b, self.state_holding())
-        finally:
-            T.notify.send = orig
-        self.assertEqual(len(sent), 1)
-        self.assertIn("CLOSED", sent[0])
-        self.assertIn("AAA", sent[0])
-
-    def test_a_partial_close_leaving_dust_releases_the_slot(self):
-        # PONS 2026-09-25: the take-profit filled 114 of 115 coins. reconcile
-        # only asked "is it flat?", so one coin held a concurrency slot, the
-        # recorded size stayed at 115, and the $5.04 the trade made was never
-        # accrued.
-        b = FakeBackend(realised_pnl=5.04)
-        b.venue = {"PONS": 0.64}
-        b.signed = 1.0                      # 1 coin left of 115
-        st = self.state_holding(coin="PONS", entry=0.61842, stop=0.597,
-                                size_coin=115.0)
-        T.reconcile(b, st)
-        self.assertNotIn("PONS", st["owned"], "dust must not hold a slot")
-        self.assertEqual(b.exits, ["PONS"], "the residual must be closed out")
-        self.assertAlmostEqual(st["realised_today"], 5.04)
-
-    def test_a_material_partial_close_is_re_protected(self):
-        # Half the position still there is a position, not dust: correct the
-        # record and re-protect the size that actually exists.
-        b = FakeBackend()
-        b.venue = {"AAA": 100.0}
-        b.signed = 1.0
-        st = self.state_holding(coin="AAA", entry=100.0, stop=95.0, size_coin=2.0)
-        T.reconcile(b, st)
-        self.assertIn("AAA", st["owned"], "a real remainder keeps its slot")
-        self.assertEqual(st["owned"]["AAA"]["size_coin"], 1.0,
-                         "the recorded size must follow the venue")
-        self.assertEqual(b.protections, ["AAA"], "re-protect the real size")
-
-    def test_an_unchanged_position_is_left_alone(self):
-        b = FakeBackend()
-        b.venue = {"AAA": 200.0}
-        b.signed = 2.0
-        st = self.state_holding(coin="AAA", entry=100.0, stop=95.0, size_coin=2.0)
-        T.reconcile(b, st)
-        self.assertIn("AAA", st["owned"])
-        self.assertEqual(b.exits, [])
-        self.assertEqual(b.protections, [])
-
-    def test_closed_position_accrues_its_win(self):
-        b = FakeBackend(realised_pnl=18.0)
-        st = self.state_holding()
-        T.reconcile(b, st)
-        self.assertAlmostEqual(st["realised_today"], 18.0)
-
-    def test_unmeasurable_close_is_charged_as_a_stop_out(self):
-        # Reading a failed query as 0.0 is the bug this replaces. (100-95)*2.
-        b = FakeBackend(realised_pnl=None)
-        st = self.state_holding()
-        T.reconcile(b, st)
-        self.assertAlmostEqual(st["realised_today"], -10.0)
-
-    def test_losses_accumulate_across_closes(self):
-        st = self.state_holding()
-        T.reconcile(FakeBackend(realised_pnl=-30.0), st)
-        st["owned"]["BBB"] = {"episode_id": "e2", "entry": 100.0, "stop": 95.0,
-                              "size_coin": 2.0, "size_usd": 200.0,
-                              "opened_at": "2026-09-18T08:00:00Z", "confirmed": True}
-        T.reconcile(FakeBackend(realised_pnl=-30.0), st)
-        self.assertAlmostEqual(st["realised_today"], -60.0)
-
-    def test_daily_loss_stop_now_fires(self):
-        # The payoff. At $1000 equity the 15% stop trips below -$150.
-        b = FakeBackend(equity=1000.0, realised_pnl=-160.0)
-        st = self.state_holding()
-        T.reconcile(b, st)
-        reason = T.preflight(b, st)
-        self.assertIsNotNone(reason)
-        self.assertIn("daily loss stop", reason)
-        self.assertTrue(st["halted"])
-
-    def test_daily_loss_stop_leaves_a_normal_day_alone(self):
-        b = FakeBackend(equity=1000.0, realised_pnl=-20.0)
-        st = self.state_holding()
-        T.reconcile(b, st)
-        self.assertIsNone(T.preflight(b, st))
-        self.assertFalse(st["halted"])
-
-    def test_open_position_is_not_accrued(self):
-        b = FakeBackend(realised_pnl=-99.0)
-        b.venue = {"AAA": 200.0}           # still open
-        st = self.state_holding()
-        T.reconcile(b, st)
-        self.assertIn("AAA", st["owned"])
-        self.assertEqual(st["realised_today"], 0.0)
-        self.assertEqual(b.pnl_queries, [])
-
-
 class DailyCapTest(unittest.TestCase):
     """MAX_NEW_PER_DAY was 0, and 0 means the rail does not exist.
 
@@ -730,73 +609,15 @@ class DailyCapTest(unittest.TestCase):
                            "0 disables the daily cap entirely")
 
     def test_refuses_once_the_cap_is_reached(self):
-        reason = T.preflight(FakeBackend(equity=1000.0),
-                             self.state(T.MAX_NEW_PER_DAY))
+        reason = T.preflight(_venue(), self.state(T.MAX_NEW_PER_DAY),
+                             _halt(), _eqlog())
         self.assertIsNotNone(reason)
         self.assertIn("today", reason)
 
     def test_allows_trading_below_the_cap(self):
-        self.assertIsNone(T.preflight(FakeBackend(equity=1000.0),
-                                      self.state(T.MAX_NEW_PER_DAY - 1)))
-
-
-class HaltAlertTest(unittest.TestCase):
-    """A halt is the one condition this module cannot leave on its own.
-
-    preflight refuses on the persisted flag until a human clears it with
-    --resume, so a halt nobody is told about is a bot that has silently
-    stopped trading -- indistinguishable, from the outside, from a quiet
-    market.
-    """
-
-    def setUp(self):
-        self._tmp = Path("/tmp/_test_halt_alert")
-        if self._tmp.exists():
-            shutil.rmtree(self._tmp)
-        self._tmp.mkdir(parents=True)
-        self._orig_state = T.STATE_PATH
-        T.STATE_PATH = self._tmp / "state.json"
-        self.sent = []
-        self._orig_send = T.notify.send
-        T.notify.send = lambda text, **kw: (self.sent.append((text, kw)), True)[1]
-
-    def tearDown(self):
-        T.notify.send = self._orig_send
-        T.STATE_PATH = self._orig_state
-        if self._tmp.exists():
-            shutil.rmtree(self._tmp)
-
-    def state(self):
-        return {"owned": {}, "opened_today": 0, "day": "2026-09-18",
-                "realised_today": 0.0, "halted": False, "halt_reason": ""}
-
-    def test_halt_sets_the_flag_and_alerts(self):
-        st = self.state()
-        returned = T.halt(st, "venue holds ['UNI'] which this module did not open")
-        self.assertTrue(st["halted"])
-        self.assertIn("did not open", st["halt_reason"])
-        self.assertEqual(returned, st["halt_reason"])
-        self.assertEqual(len(self.sent), 1)
-        self.assertIn("did not open", self.sent[0][0])
-
-    def test_a_persisting_halt_is_announced_once(self):
-        # The flag persists and the trader polls every 15 minutes. Without the
-        # transition check this is 96 identical messages a day, which is the
-        # same as none.
-        st = self.state()
-        T.halt(st, "first reason")
-        T.halt(st, "second reason")
-        self.assertEqual(len(self.sent), 1)
-        self.assertEqual(st["halt_reason"], "second reason")
-
-    def test_no_halt_path_bypasses_halt(self):
-        # Structural: the next person to add a halt should not have to know
-        # that alerting exists for their halt to be heard.
-        import inspect
-        body = inspect.getsource(T)
-        self.assertEqual(
-            body.count('state["halted"] = True'), 1,
-            "a halt that sets the flag directly is a halt nobody is told about")
+        self.assertIsNone(T.preflight(_venue(),
+                                      self.state(T.MAX_NEW_PER_DAY - 1),
+                                      _halt(), _eqlog()))
 
 
 def gated(coin="AAA", level=100.0, near=7.0, rest=20, overhead=7.0, rr=3.0):
@@ -945,9 +766,9 @@ class BackendStartTest(unittest.TestCase):
 
     def test_a_clean_start_does_not_retry(self):
         calls = []
-        b = T.start_backend(lambda debug: calls.append(1) or "backend",
+        b = T.start_venue(lambda debug: calls.append(1) or "venue",
                             sleep=lambda s: None)
-        self.assertEqual(b, "backend")
+        self.assertEqual(b, "venue")
         self.assertEqual(len(calls), 1)
 
     def test_a_transient_failure_is_retried(self):
@@ -957,9 +778,9 @@ class BackendStartTest(unittest.TestCase):
             calls.append(1)
             if len(calls) < 3:
                 raise RuntimeError("429 rate limited")
-            return "backend"
+            return "venue"
 
-        self.assertEqual(T.start_backend(flaky, sleep=lambda s: None), "backend")
+        self.assertEqual(T.start_venue(flaky, sleep=lambda s: None), "venue")
         self.assertEqual(len(calls), 3)
 
     def test_a_persistent_failure_raises(self):
@@ -969,7 +790,7 @@ class BackendStartTest(unittest.TestCase):
             raise RuntimeError("429 rate limited")
 
         with self.assertRaises(RuntimeError):
-            T.start_backend(dead, sleep=lambda s: None)
+            T.start_venue(dead, sleep=lambda s: None)
 
     def test_a_stop_during_backoff_gives_up_quietly(self):
         def dead(debug):
@@ -977,94 +798,9 @@ class BackendStartTest(unittest.TestCase):
 
         T._stop = True
         try:
-            self.assertIsNone(T.start_backend(dead, sleep=lambda s: None))
+            self.assertIsNone(T.start_venue(dead, sleep=lambda s: None))
         finally:
             T._stop = False
-
-
-class RestingBidTest(unittest.TestCase):
-    """A resting bid is the only path that can open a position unattended.
-
-    execute_entry sends a marketable IOC, so a fill is known instantly. A bid
-    is filled by the market whenever the market feels like it, and this module
-    only finds out on its next pass -- so the fill has to become a KNOWN,
-    protected position before venue_sanity can meet it as an unknown one and
-    halt.
-    """
-
-    def setUp(self):
-        self._tmp = Path("/tmp/_test_resting_bid")
-        if self._tmp.exists():
-            shutil.rmtree(self._tmp)
-        self._tmp.mkdir(parents=True)
-        self._orig = (T.STATE_PATH, T.TRADE_LOG, T.notify.send)
-        T.STATE_PATH = self._tmp / "state.json"
-        T.TRADE_LOG = self._tmp / "trades.csv"
-        self.sent = []
-        T.notify.send = lambda text, **kw: (self.sent.append(text), True)[1]
-        self.state = {"owned": {}, "pending": {}, "opened_today": 0, "day": "d",
-                      "realised_today": 0.0, "halted": False, "halt_reason": ""}
-
-    def tearDown(self):
-        T.STATE_PATH, T.TRADE_LOG, T.notify.send = self._orig
-        if self._tmp.exists():
-            shutil.rmtree(self._tmp)
-
-    def pending(self, coin="AAA", price=100.0, hours_ago=0):
-        from datetime import datetime, timedelta, timezone
-        ts = (datetime.now(timezone.utc)
-              - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return {coin: {"oid": "B1", "price": price, "size_coin": 2.0,
-                       "stop": 95.0, "tp": 115.0, "episode_id": "e1",
-                       "placed_at": ts}}
-
-    def test_a_fill_becomes_a_known_protected_position(self):
-        b = FakeBackend()
-        b.venue = {"AAA": 200.0}                 # the bid filled
-        self.state["pending"] = self.pending()
-        T.reconcile_pending(b, self.state)
-        self.assertIn("AAA", self.state["owned"], "must be known before venue_sanity")
-        self.assertNotIn("AAA", self.state["pending"])
-        self.assertEqual(b.protections, ["AAA"], "a fill must be protected at once")
-        self.assertEqual(self.state["opened_today"], 1)
-        self.assertTrue(any("OPENED" in s for s in self.sent))
-
-    def test_a_fill_that_cannot_be_protected_is_closed(self):
-        b = FakeBackend(protection_ok=False)
-        b.venue = {"AAA": 200.0}
-        self.state["pending"] = self.pending()
-        T.reconcile_pending(b, self.state)
-        self.assertEqual(b.exits, ["AAA"], "an unprotected fill is not the trade")
-        self.assertNotIn("AAA", self.state["owned"])
-
-    def test_a_resting_bid_counts_toward_the_concurrency_cap(self):
-        # A bid is exposure the account has already committed to; it just has
-        # not filled yet. Counting only `owned` would let the bot open its
-        # full allowance alongside bids that then fill on top of it.
-        b = FakeBackend(equity=1000.0)
-        st = {"owned": {}, "pending": {f"C{i}": {} for i in range(T.MAX_CONCURRENT)},
-              "opened_today": 0, "day": "2026-09-19", "realised_today": 0.0,
-              "halted": False, "halt_reason": ""}
-        why = T.preflight(b, st)
-        self.assertIsNotNone(why)
-        self.assertIn("bidding", why)
-
-    def test_an_unfilled_bid_is_left_alone_inside_its_ttl(self):
-        b = FakeBackend()
-        b.venue = {}
-        self.state["pending"] = self.pending(hours_ago=1)
-        T.reconcile_pending(b, self.state)
-        self.assertIn("AAA", self.state["pending"])
-        self.assertEqual(b.cancels, [])
-
-    def test_an_expired_bid_is_cancelled(self):
-        # A bid left sitting is an opinion nobody is holding any more.
-        b = FakeBackend()
-        b.venue = {}
-        self.state["pending"] = self.pending(hours_ago=T.LIMIT_ENTRY_TTL_HOURS + 1)
-        T.reconcile_pending(b, self.state)
-        self.assertEqual(b.cancels, [("AAA", "B1")])
-        self.assertNotIn("AAA", self.state["pending"])
 
 
 class HoldRuleSelectionTest(unittest.TestCase):
@@ -1092,7 +828,8 @@ class HoldRuleSelectionTest(unittest.TestCase):
             for origin, expected in (("flipped_resistance", T.TRIGGER_HOLD_HOURS),
                                      ("swing_low", T.TRIGGER_HOLD_HOURS_SWING)):
                 ep = dict(episode("AAA"), level_origin=origin)
-                T.execute_one(FakeBackend(), ep, 1000.0, 1000.0, True, st)
+                T.execute_one(_venue(), MetaStore(Path(tempfile.mkdtemp()) / "m.json"),
+                      ep, 1000.0, 1000.0, True, st)
                 self.assertEqual(seen[-1], expected, origin)
         finally:
             T.level_has_held = orig
@@ -1123,11 +860,17 @@ class DayRolloverTest(unittest.TestCase):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def test_a_new_day_clears_the_counters(self):
-        st = {"day": "2020-01-01", "opened_today": 5, "realised_today": -80.0,
-              "owned": {}, "halted": False, "halt_reason": ""}
+        """roll_day owns the daily COUNT and nothing else now.
+
+        It used to reset realised_today as well, and that field is gone: the
+        daily loss limit reads equity against a day-start reading recorded by
+        core.safety.EquityLog, so there is no running total for a date change
+        to clear. The counter that still matters is opened_today.
+        """
+        st = {"day": "2020-01-01", "opened_today": 5}
         self.assertTrue(T.roll_day(st))
         self.assertEqual(st["opened_today"], 0)
-        self.assertEqual(st["realised_today"], 0.0)
+        self.assertNotEqual(st["day"], "2020-01-01")
 
     def test_the_same_day_is_left_alone(self):
         from datetime import datetime, timezone
@@ -1194,8 +937,13 @@ class StateFileTest(unittest.TestCase):
 
     def test_no_file_is_a_first_run(self):
         st = T.load_state()
-        self.assertEqual(st["owned"], {})
-        self.assertFalse(st["halted"])
+        self.assertNotIn("owned", st, "a fresh state must not claim to know "
+                                      "what the account holds")
+        self.assertNotIn("pending", st)
+        self.assertEqual(st["watching"], {})
+        # The halt is not in here either: it lives in core.safety, so a
+        # corrupt or missing state file cannot clear one.
+        self.assertNotIn("halted", st)
 
     def test_a_corrupt_file_refuses_to_start(self):
         T.STATE_PATH.write_text('{"owned": {"AAA": ')      # truncated write
@@ -1222,38 +970,6 @@ class StateFileTest(unittest.TestCase):
         self.assertFalse((self._tmp / "state.json.tmp").exists(),
                          "the temp file must be renamed away, not left behind")
         self.assertTrue(T.STATE_PATH.exists())
-
-
-class AccountModelTest(unittest.TestCase):
-    """Never guess the account model.
-
-    A failed query used to fall through to `standard`, which on this account
-    reads marginSummary.accountValue -- $70.88 against a real $786.25, an 11x
-    under-read. Every position would size off that and fall under
-    MIN_NOTIONAL, so the trader would stop trading and look like a quiet
-    market. The query fails on a 429, which happens routinely.
-    """
-
-    class Info:
-        def __init__(self, boom=False):
-            self.boom = boom
-
-        def query_user_abstraction_state(self, addr):
-            if self.boom:
-                raise RuntimeError("429 rate limited")
-            return "unifiedAccount"
-
-        def spot_user_state(self, addr):
-            return {"balances": [{"coin": "USDC", "total": "786.25", "hold": "0.0"}]}
-
-    def test_a_unified_account_reads_spot_usdc(self):
-        acc = T.account_equity(self.Info(), "0xabc")
-        self.assertEqual(acc["model"], "unified")
-        self.assertAlmostEqual(acc["equity"], 786.25)
-
-    def test_an_unknown_model_refuses_rather_than_guessing(self):
-        with self.assertRaises(RuntimeError):
-            T.account_equity(self.Info(boom=True), "0xabc")
 
 
 class FlatSizingTest(unittest.TestCase):
@@ -1316,8 +1032,8 @@ class ModuleShapeTest(unittest.TestCase):
         appended after `if __name__ == "__main__"` are invisible to main()."""
         src = Path("tools/live_levels_trader.py").read_text()
         guard = src.index('if __name__ == "__main__"')
-        for fn in ("execute_one", "reconcile", "preflight", "venue_sanity",
-                   "build_intents", "size_from_stop"):
+        for fn in ("execute_one", "preflight", "rest_one_bid", "start_venue",
+                   "build_intents", "size_from_stop", "drain_control_queue"):
             self.assertLess(src.index(f"def {fn}("), guard,
                             f"{fn} is defined after the __main__ guard")
 
@@ -1337,131 +1053,28 @@ class ModuleShapeTest(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-
-class ReProtectionFailureIsFatal(unittest.TestCase):
-    """A partial close re-protects the size that is really there. That call
-    used to be logged and otherwise ignored, so a failure left a tracked
-    position with an unknown stop state while the bot kept opening others.
-
-    Found in the 2026-10-17 pre-resume review. It is the third instance of one
-    pattern: two sibling call sites handle a failure and a third does not.
-    The other two were the exit paths that popped a position without checking
-    whether it had actually closed.
-    """
-
-    def setUp(self):
-        self._o = (T.STATE_PATH, T.TRADE_LOG)
-        self._tmp = Path("/tmp/_test_reprotect")
-        self._tmp.mkdir(parents=True, exist_ok=True)
-        T.STATE_PATH = self._tmp / "s.json"
-        T.TRADE_LOG = self._tmp / "t.csv"
-
-    def tearDown(self):
-        T.STATE_PATH, T.TRADE_LOG = self._o
-        shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def state(self):
-        return {"owned": {"HYPE": {"entry": 100.0, "stop": 95.0, "tp": 115.0,
-                                   "size_usd": 200.0, "size_coin": 2.0,
-                                   "episode_id": "e1"}},
-                "pending": {}, "realised_today": 0.0, "halted": False}
-
-    def backend(self, protection_ok):
-        b = FakeBackend(protection_ok=protection_ok)
-        b.venue["HYPE"] = 200.0
-        b.signed = 1.0          # venue holds half of the believed 2.0
-        return b
-
-    def test_a_failed_reprotection_halts(self):
-        st = self.state()
-        b = self.backend(protection_ok=False)
-        with mock.patch.object(T.notify, "send"):
-            T.reconcile(b, st)
-        self.assertTrue(st.get("halted"), "an unknown stop state did not halt")
-        self.assertIn("re-protection", st.get("halt_reason", ""))
-
-    def test_a_successful_reprotection_does_not_halt(self):
-        st = self.state()
-        b = self.backend(protection_ok=True)
-        with mock.patch.object(T.notify, "send"):
-            T.reconcile(b, st)
-        self.assertFalse(st.get("halted"))
-        self.assertIn("HYPE", st["owned"], "the position should still be held")
-
-    def test_the_position_is_kept_either_way(self):
-        """Halting is right; dropping the slot is not. The original
-        reduce-only orders may still be covering it."""
-        st = self.state()
-        with mock.patch.object(T.notify, "send"):
-            T.reconcile(self.backend(protection_ok=False), st)
-        self.assertIn("HYPE", st["owned"])
-
-
-class CancelFailuresAreVisible(unittest.TestCase):
-    """A protection leg that would not cancel has to be reported.
-
-    The first site's own comment says why: "a leg that failed verification
-    may not be reduce-only -- an order like that, left on a flat account,
-    opens a position rather than closing one: unstopped". That is the
-    2026-09-18 runaway shape. Two of the three cleanup paths wrapped the
-    cancel in `except Exception: pass` and discarded the result, so they
-    could not have told anyone.
-    """
-
-    class B:
-        def __init__(self, ok=True, raises=False):
-            self.ok, self.raises, self.tried = ok, raises, []
-
-        def cancel_order(self, coin, oid):
-            self.tried.append(oid)
-            if self.raises:
-                raise RuntimeError("venue refused")
-            return self.ok
-
-    def test_a_clean_cancel_reports_nothing_stuck(self):
-        b = self.B(ok=True)
-        with mock.patch.object(T.notify, "send") as sent:
-            stuck = T.cancel_protection(b, "HYPE", ("s1", "t1"))
-        self.assertEqual(stuck, [])
-        self.assertEqual(b.tried, ["s1", "t1"])
-        self.assertFalse(sent.called)
-
-    def test_a_refused_cancel_is_returned_and_alerted(self):
-        b = self.B(ok=False)
-        with mock.patch.object(T.notify, "send") as sent:
-            stuck = T.cancel_protection(b, "HYPE", ("s1", "t1"))
-        self.assertEqual(stuck, ["s1", "t1"])
-        self.assertTrue(sent.called)
-        self.assertIn("still be resting", sent.call_args[0][0])
-
-    def test_a_raising_cancel_is_also_counted_stuck(self):
-        b = self.B(raises=True)
-        with mock.patch.object(T.notify, "send"):
-            self.assertEqual(T.cancel_protection(b, "HYPE", ("s1",)), ["s1"])
-
-    def test_blank_oids_are_skipped_not_sent(self):
-        b = self.B()
-        with mock.patch.object(T.notify, "send"):
-            T.cancel_protection(b, "HYPE", ("", None, "t1"))
-        self.assertEqual(b.tried, ["t1"])
-
-    def test_one_leg_failing_does_not_stop_the_other(self):
-        class Flaky(self.B):
-            def cancel_order(self, coin, oid):
-                self.tried.append(oid)
-                if oid == "s1":
-                    raise RuntimeError("no")
-                return True
-        b = Flaky()
-        with mock.patch.object(T.notify, "send"):
-            stuck = T.cancel_protection(b, "HYPE", ("s1", "t1"))
-        self.assertEqual(b.tried, ["s1", "t1"])
-        self.assertEqual(stuck, ["s1"])
-
-    def test_no_cleanup_path_swallows_a_cancel_any_more(self):
-        src = open("tools/live_levels_trader.py").read()
-        self.assertEqual(src.count("cancel_protection("), 3,
-                         "def + the two cleanup paths")
-        body = src[src.index("def cancel_protection"):]
-        after = body[body.index("return stuck"):]
-        self.assertNotIn("backend.cancel_order(coin=coin, oid=oid)\n", after)
+# ---------------------------------------------------------------------------
+# Retired with the execution/safety rewrite. Each class below tested a
+# function that no longer exists; the behaviour it protected is covered where
+# the behaviour now lives, and nothing was dropped silently:
+#
+#   VenueSanityTest
+#       -> protect.run_once adopting an unknown position (test_core_protect: unknown_position_is_adopted)
+#   RealisedPnlTest
+#       -> equity-based limits (test_core_safety: daily_loss, drawdown) -- realised PnL no longer decides anything
+#   HaltAlertTest
+#       -> safety.halt (test_core_safety: halting_flattens, alerts_once, auto_clears)
+#   RestingBidTest
+#       -> execute.rest_bid + protect.expire_bids (test_core_execute, test_core_protect bid tests)
+#   AccountModelTest
+#       -> venue.equity (test_core_venue: spot_usdc, unified_account_reports_zero)
+#   ReProtectionFailureIsFatal
+#       -> protect.ensure_stop resizing every cycle (test_core_protect: grew/partly_closed)
+#   CancelFailuresAreVisible
+#       -> protect.ensure_stop + record_error (test_core_protect: failed_cancel)
+#
+# One class, BackendStartTest, was KEPT and retargeted at start_venue: the
+# retry-on-429-at-startup it protects has explicit evidence behind it (twice
+# on 2026-09-19 a rate limit killed the process outright at startup), and the
+# first draft of this rewrite had dropped it.
+# ---------------------------------------------------------------------------

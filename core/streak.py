@@ -47,7 +47,16 @@ class Trade:
 
     @property
     def lost(self) -> bool:
-        return self.pnl < 0
+        """Not strictly profitable, net of fees.
+
+        `<= 0`, not `< 0`, and deliberately so: a round trip that nets zero
+        paid a full set of fees for nothing, which is exactly the churn both
+        rails exist to stop. This matches the original intent -- the code
+        this replaces reset its counter only on `pnl > 0`. An earlier draft
+        of the rewrite used `< 0` and called it a fix; it was not, it just
+        made a scratch trade look like a win.
+        """
+        return self.pnl <= 0
 
 
 def _f(v: Any) -> float:
@@ -168,3 +177,36 @@ def current(venue: Venue, ignore_before_ms: int = 0,
     if until <= now:
         return None                    # the run is old enough to have expired
     return StandDown(until_ms=until, run=run)
+
+
+def coins_on_cooldown(venue: Venue, hours: float,
+                      now_ms: Optional[int] = None) -> Dict[str, float]:
+    """coin -> hours of cooldown left, for coins whose last trade lost.
+
+    "Leave a coin alone after it stops us out" (`18a688d`). The old version
+    stamped a timestamp into the state file from accrue_close, so a coin's
+    cooldown depended on a close having been observed and booked by this
+    process -- a restart or a failed PnL query lost it. This derives it from
+    the same fills the losing run uses, so it cannot be lost or faked.
+
+    Only the MOST RECENT trade on a coin counts: a win clears the cooldown,
+    which is what "leave it alone until it behaves" means.
+    """
+    if hours <= 0:
+        return {}
+    now = now_ms if now_ms is not None else int(time.time() * 1000)
+    fills = venue.fills(now - int(max(hours, 1.0) * 2 * 3_600_000))
+    if fills is None:
+        return {}
+    latest: Dict[str, Trade] = {}
+    for t in trades_from_fills(fills):
+        if t.coin not in latest or t.closed_ms > latest[t.coin].closed_ms:
+            latest[t.coin] = t
+    out: Dict[str, float] = {}
+    for coin, t in latest.items():
+        if not t.lost:
+            continue
+        left = hours - (now - t.closed_ms) / 3_600_000.0
+        if left > 0:
+            out[coin] = left
+    return out

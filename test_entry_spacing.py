@@ -103,15 +103,23 @@ class WiredEverywhereItMatters(unittest.TestCase):
         it fills."""
         import inspect
         self.assertIn("spacing_remaining(state)",
-                      inspect.getsource(T.place_resting_bid))
+                      inspect.getsource(T.rest_one_bid))
 
-    def test_a_bid_fill_stamps_the_clock(self):
+    def test_placing_a_bid_stamps_the_clock(self):
+        """Stamped at PLACEMENT, not on fill.
+
+        It used to be stamped on fill, by the function that turned a filled
+        bid into a tracked position. That function is gone -- the venue is
+        read directly now -- and placement is the better moment anyway: the
+        exposure is committed there, and a fill can happen while nothing is
+        watching.
+        """
         import inspect
-        self.assertIn("mark_entry(state)", inspect.getsource(T.reconcile_pending))
+        self.assertIn("mark_entry(state)", inspect.getsource(T.rest_one_bid))
 
     def test_stamping_happens_once_per_path(self):
         import inspect
-        for fn in (T.execute_one, T.reconcile_pending):
+        for fn in (T.execute_one, T.rest_one_bid):
             self.assertEqual(inspect.getsource(fn).count("mark_entry(state)"), 1,
                              f"{fn.__name__} stamps more than once")
 

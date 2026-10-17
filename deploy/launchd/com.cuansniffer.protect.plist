@@ -13,13 +13,13 @@
   process raises the alarm through the same command queue Telegram uses.
 
   Install:
-    cp deploy/launchd/com.cuansniffer.reconcile.plist ~/Library/LaunchAgents/
-    launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.reconcile.plist
+    cp deploy/launchd/com.cuansniffer.protect.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.protect.plist
 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.cuansniffer.reconcile</string>
+  <string>com.cuansniffer.protect</string>
 
   <!-- The venv's own python, NOT its resolved homebrew target. CPython only
        adds the venv's site-packages when invoked through the venv directory. -->
@@ -28,7 +28,7 @@
     <string>/Users/myair/CuanSniffer/.venv/bin/python</string>
     <string>-u</string>
     <string>-m</string>
-    <string>tools.reconcile_loop</string>
+    <string>tools.protect_loop</string>
   </array>
 
   <key>WorkingDirectory</key>
@@ -45,8 +45,8 @@
   <integer>30</integer>
 
   <key>StandardOutPath</key>
-  <string>/Users/myair/Library/Logs/cuan-sniffer/reconcile.log</string>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/protect.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/myair/Library/Logs/cuan-sniffer/reconcile.err.log</string>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/protect.err.log</string>
 </dict>
 </plist>

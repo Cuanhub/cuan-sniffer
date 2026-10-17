@@ -30,8 +30,8 @@ from research.levels import config as C
 
 
 class Backend:
-    def __init__(self, mid): self.mid = mid
-    def get_mid_price(self, coin): return self.mid
+    def __init__(self, mid): self._mid = mid
+    def mid(self, coin): return self._mid
 
 
 def bars(low=99.5, n=40):

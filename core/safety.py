@@ -16,7 +16,7 @@ import os
 import pathlib
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import notify
@@ -28,6 +28,8 @@ MAX_FLATTEN_SEC = float(os.getenv("SAFETY_MAX_FLATTEN_SEC", "120"))
 FLATTEN_PAUSE_SEC = float(os.getenv("SAFETY_FLATTEN_PAUSE_SEC", "3"))
 DAILY_LOSS_PCT = float(os.getenv("SAFETY_DAILY_LOSS_PCT", "5.0"))
 DRAWDOWN_PCT = float(os.getenv("SAFETY_DRAWDOWN_PCT", "10.0"))
+# Rolling, not all-time. See EquityLog.
+DRAWDOWN_WINDOW_HOURS = float(os.getenv("SAFETY_DRAWDOWN_WINDOW_HOURS", "24"))
 ERROR_WINDOW_SEC = 600.0
 ERROR_LIMIT = 5
 
@@ -231,22 +233,71 @@ def halt(venue: Venue, state: HaltState, reason: str, kind: str = AUTO,
 # ── limits, measured from equity ───────────────────────────────────────────
 
 class EquityLog:
-    """Day-start and peak equity, for the two limits."""
+    """Day-start equity, and a ROLLING-window high for the drawdown rail.
+
+    The window keeps the REFERENCE fresh. An all-time peak never decays, so
+    a drawdown measured against it grows for ever: the account falls 10%,
+    stabilises, and every later reading still reads as a breach. The
+    reference was deliberately moved off an all-time high (`7764dee`) for
+    this reason, and on 2026-10-13 a stale reference kept the rail firing for
+    two days against a high the account could no longer reach.
+
+    Nothing older than DRAWDOWN_WINDOW_HOURS survives here, so the reference
+    follows the account within a day. The drawdown halt itself stays MANUAL
+    per the safety rules -- the window is what stops the rail re-firing the
+    moment a human resumes it, not a way of releasing it unattended.
+
+    Measured over 3,193 readings across 23 days, a 10% limit on this window
+    fires exactly once -- the 2026-10-12/13 collapse at 10.85% -- and the
+    next worst day reaches 4.97%.
+    """
 
     def __init__(self, path: Optional[pathlib.Path] = None) -> None:
         self.path = path or (DATA / "_equity.json")
 
-    def observe(self, usdc_total: float) -> Tuple[float, float]:
-        """Record this reading. Returns (day_start, peak)."""
+    def _read(self) -> Dict[str, Any]:
         row = read_json(self.path, {})
-        row = row if isinstance(row, dict) else {}
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return row if isinstance(row, dict) else {}
+
+    def observe(self, usdc_total: float,
+                now: Optional[datetime] = None) -> Tuple[float, float]:
+        """Record this reading. Returns (day_start, rolling_high).
+
+        Called on every pass INCLUDING ones that refuse to trade. The old
+        version sat below the halted check, so a halted trader took no
+        readings at all -- and from 2026-10-13 to 10-15 it therefore spent
+        two days measured against a 10-12 reference it could no longer reach.
+        A rail whose reference only updates when trading is allowed cannot
+        release itself.
+        """
+        ref = now or datetime.now(timezone.utc)
+        row = self._read()
+        today = ref.strftime("%Y-%m-%d")
         if row.get("day") != today:
-            row = {"day": today, "day_start": usdc_total,
-                   "peak": max(float(row.get("peak") or 0.0), usdc_total)}
-        row["peak"] = max(float(row.get("peak") or 0.0), usdc_total)
+            row["day"] = today
+            row["day_start"] = usdc_total
+        raw = [s for s in (row.get("samples") or [])
+               if isinstance(s, (list, tuple)) and len(s) == 2]
+        raw.append([ref.isoformat().replace("+00:00", "Z"), usdc_total])
+        cutoff = ref - timedelta(hours=DRAWDOWN_WINDOW_HOURS)
+        kept: List[List[Any]] = []
+        for ts, eq in raw:
+            try:
+                when = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                value = float(eq)
+            except (TypeError, ValueError):
+                continue
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            if when >= cutoff and value > 0:
+                kept.append([str(ts), value])
+        row["samples"] = kept
         write_json(self.path, row)
-        return float(row["day_start"]), float(row["peak"])
+        # Current equity is folded into the reference so a fresh log, or one
+        # whose window just pruned empty, cannot report a drawdown it has no
+        # evidence for.
+        high = max([float(v) for _, v in kept] + [usdc_total])
+        return float(row.get("day_start", usdc_total)), float(high)
 
 
 def check_limits(venue: Venue, log: EquityLog) -> List[Verdict]:
@@ -260,12 +311,13 @@ def check_limits(venue: Venue, log: EquityLog) -> List[Verdict]:
     if eq is None:
         record_error("equity_read", "venue returned None")
         return []
-    day_start, peak = log.observe(eq.usdc_total)
+    day_start, high = log.observe(eq.usdc_total)
 
     print(f"[SAFETY] equity {eq.usdc_total:.4f} "
           + (f"(incl. unrealised {eq.unrealized_pnl:+.4f}) "
              if eq.unrealized_pnl != 0.0 else "")
-          + f"day_start={day_start:.4f} peak={peak:.4f}")
+          + f"day_start={day_start:.4f} "
+            f"{DRAWDOWN_WINDOW_HOURS:g}h-high={high:.4f}")
 
     out: List[Verdict] = []
     if day_start > 0:
@@ -274,12 +326,13 @@ def check_limits(venue: Venue, log: EquityLog) -> List[Verdict]:
             "daily_loss", lost_pct >= DAILY_LOSS_PCT,
             f"down {lost_pct:.2f}% today ({eq.usdc_total:.2f} from "
             f"{day_start:.2f}), limit {DAILY_LOSS_PCT:g}%", AUTO))
-    if peak > 0:
-        dd_pct = (peak - eq.usdc_total) / peak * 100.0
+    if high > 0:
+        dd_pct = (high - eq.usdc_total) / high * 100.0
         out.append(Verdict(
             "drawdown", dd_pct >= DRAWDOWN_PCT,
-            f"{dd_pct:.2f}% below the {peak:.2f} peak "
-            f"({eq.usdc_total:.2f}), limit {DRAWDOWN_PCT:g}%", MANUAL))
+            f"{dd_pct:.2f}% below the {high:.2f} high over the last "
+            f"{DRAWDOWN_WINDOW_HOURS:g}h ({eq.usdc_total:.2f}), limit "
+            f"{DRAWDOWN_PCT:g}%", MANUAL))
     for v in out:
         if v.breached:
             print(f"[SAFETY] {'!! LIMIT BREACHED' if LIMITS_ENFORCE else 'limit breached (LOG ONLY)'}"

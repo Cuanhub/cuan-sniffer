@@ -291,3 +291,22 @@ def test_order_is_protective_requires_both_flags():
     assert Order(reduce_only=True, is_trigger=True, **base).is_protective
     assert not Order(reduce_only=True, is_trigger=False, **base).is_protective
     assert not Order(reduce_only=False, is_trigger=True, **base).is_protective
+
+
+def test_the_test_double_sets_every_attribute_the_real_init_does():
+    """Guard against the silent-degradation trap.
+
+    `load_meta` catches Exception so a venue outage degrades gracefully. That
+    also means a missing attribute on a hand-built Venue is swallowed, leaving
+    szDecimals=3 for every coin -- wrong sizing on every order, with nothing
+    said. Adding a field to __init__ and forgetting it in build_venue must
+    fail here, not quietly mis-size trades.
+    """
+    import ast
+    import inspect
+    src = inspect.getsource(Venue.__init__)
+    assigned = {n.attr for n in ast.walk(ast.parse(src.strip()))
+                if isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Store)}
+    built = build_venue(FakeHL())
+    missing = {a for a in assigned if not hasattr(built, a)}
+    assert not missing, f"build_venue is missing {sorted(missing)}"
