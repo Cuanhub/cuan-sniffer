@@ -70,6 +70,7 @@ from research.levels.config import (                                  # noqa: E4
     TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
     MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
     ENTRY_MAX_BREAK_FRAC, ENTRY_MAX_BASIS_BPS, ENTRY_MAX_PULL_OVER_RUN,
+    HALT_ACTION, ORPHAN_ACTION,
     COIN_REENTRY_COOLDOWN_HOURS, ACCOUNT_DD_HALT_PCT,
     ACCOUNT_DD_WINDOW_HOURS, HALT_AUTO_RELEASE,
     LOSS_STREAK_TRIGGER, LOSS_STREAK_COOLDOWN_HOURS,
@@ -755,6 +756,10 @@ def main():
         if backend is None:
             return 0                      # stopped while waiting to retry
         print("[LEVELS_LIVE] live backend up")
+        # AUDIT C-1. Before the first pass, deal with anything the venue holds
+        # that this module did not open -- the timeout-after-fill case leaves
+        # exactly that, and venue_sanity would only halt on it.
+        adopt_or_flatten_orphans(backend, state)
 
     if args.limit_entry:
         if not armed:
@@ -825,7 +830,7 @@ def main():
                 equity, _used, available = ms
             bad, fatal = venue_sanity(backend, state, equity)
             if bad and fatal:
-                halt(state, bad, "before trading")
+                halt(state, bad, "before trading", backend=backend)
                 return 1
             if bad:
                 print(f"[LEVELS_LIVE] skipping this pass (transient): {bad}")
@@ -922,7 +927,7 @@ def main():
                 continue
             bad, fatal = venue_sanity(backend, state, equity)
             if bad and fatal:
-                halt(state, bad, "after entry")
+                halt(state, bad, "after entry", backend=backend)
                 break
             if bad:
                 # Cannot confirm what just happened at the venue, so stop
@@ -1370,7 +1375,8 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
         # filled=True but unusable numbers: the position may well exist at the
         # venue, so halt rather than guess. Leaving the slot claimed is
         # deliberate.
-        halt(state, f"{coin}: filled=True but fill_price={fill_px} size={size_coin}")
+        halt(state, f"{coin}: filled=True but fill_price={fill_px} size={size_coin}",
+             backend=backend)
         row.update({"action": "entry", "result": "unparseable_fill",
                     "detail": state["halt_reason"]})
         log_trade(row)
@@ -1439,7 +1445,7 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
             halt(state, f"{coin}: protection failed and the emergency exit did "
                         f"not clear the position "
                         f"({str(exit_fill.get('detail'))[:120]}) -- it is open "
-                        f"and unprotected")
+                        f"and unprotected", backend=backend)
             log_trade({**row, "action": "emergency_exit", "result": "exit_failed",
                        "detail": state["halt_reason"]})
             return Outcome(order_sent=True)
@@ -1631,8 +1637,108 @@ def roll_day(state: Dict[str, Any]) -> bool:
     return True
 
 
+def has_protection(backend, coin: str) -> Optional[bool]:
+    """Does the venue hold a reduce-only order for `coin`?
+
+    None means the question could not be asked, which is NOT the same as
+    "no" -- a failed query must not be reported as an unprotected position
+    and must not trigger a flatten.
+    """
+    if backend is None:
+        return None
+    try:
+        orders = backend.get_open_orders(coin)
+    except Exception as e:
+        print(f"[LEVELS_LIVE] could not read open orders for {coin}: "
+              f"{str(e)[:90]}")
+        return None
+    if orders is None:
+        return None
+    for o in orders:
+        if str(o.get("coin", "")).upper() != coin.upper():
+            continue
+        if o.get("reduce_only") or o.get("reduceOnly") or o.get("is_trigger") \
+                or o.get("isTrigger") or o.get("trigger_px"):
+            return True
+    # An order list that came back and held nothing protective for this coin.
+    return any(str(o.get("coin", "")).upper() == coin.upper() for o in orders)
+
+
+def verify_open_protection(backend, state: Dict[str, Any]) -> List[str]:
+    """Names of open positions with no protective order. AUDIT D-1.
+
+    Coins whose order book could not be read are NOT listed: an unanswerable
+    query is not evidence of an unprotected position.
+    """
+    bare = []
+    for coin in sorted(state.get("owned") or {}):
+        if has_protection(backend, coin) is False:
+            bare.append(coin)
+    return bare
+
+
+def adopt_or_flatten_orphans(backend, state: Dict[str, Any]) -> List[str]:
+    """Deal with venue positions this module did not open. AUDIT C-1.
+
+    The timeout-after-fill case leaves exactly this: a position with no plan
+    and, because protection is placed AFTER the fill, usually no stop either.
+    venue_sanity already detected orphans and halted; what was missing was
+    doing anything about them.
+
+    Under ORPHAN_ACTION="auto" an orphan with no protective order is
+    flattened and one with protection is left alone for a human, because the
+    two cases are not alike: an unprotected, unplanned position has no stop
+    to fall back on and no level to reconstruct one from, while a protected
+    one is bounded and might be the operator's own trade.
+
+    Returns what it did, for the caller to log.
+    """
+    if backend is None or ORPHAN_ACTION == "halt":
+        return []
+    try:
+        state_coins = {c.upper() for c in (state.get("owned") or {})}
+        st = backend.info.user_state(backend._user_state_query_address())
+        live = {}
+        for p in st.get("assetPositions", []) or []:
+            pos = p.get("position") or {}
+            coin = str(pos.get("coin", "")).upper()
+            try:
+                szi = float(pos.get("szi") or 0)
+            except (TypeError, ValueError):
+                continue
+            if coin and abs(szi) > 0:
+                live[coin] = szi
+    except Exception as e:
+        print(f"[LEVELS_LIVE] orphan sweep could not read the venue: "
+              f"{str(e)[:90]}")
+        return []
+
+    done = []
+    for coin, szi in sorted((c, s) for c, s in live.items()
+                            if c not in state_coins):
+        protected = has_protection(backend, coin)
+        if ORPHAN_ACTION == "auto" and protected is not False:
+            # Protected, or unreadable. Leave it; venue_sanity halts anyway.
+            done.append(f"{coin} orphan left alone "
+                        f"({'protected' if protected else 'unreadable'})")
+            continue
+        side = "LONG" if szi > 0 else "SHORT"
+        res = backend.flatten(coin, side=side, reason="orphan")
+        done.append(f"{coin} orphan ({szi:g}) "
+                    + ("flattened" if res.get("flat")
+                       else f"NOT flattened: {str(res.get('detail'))[:80]}"))
+    if done:
+        for line in done:
+            print(f"[LEVELS_LIVE] {line}")
+        notify.send("⚠️ *Positions found that this bot did not open*\n"
+                    + "\n".join(done)
+                    + f"\n\nORPHAN_ACTION={ORPHAN_ACTION}",
+                    key="orphans", cooldown_sec=1800)
+    return done
+
+
 def halt(state: Dict[str, Any], reason: str, where: str = "",
-         kind: str = "") -> str:
+         kind: str = "", backend=None) -> str:
     """Stop trading and tell a human. Returns the reason, for the caller.
 
     Every halt goes through here. A halt is the one condition this module
@@ -1653,6 +1759,27 @@ def halt(state: Dict[str, Any], reason: str, where: str = "",
     state["halt_kind"] = kind
     save_state(state)
     print(f"[LEVELS_LIVE] !! HALT{' ' + where if where else ''} -- {reason}")
+
+    # AUDIT D-1. A halt used to block new entries and check nothing else, so
+    # the drawdown rail could fire with four positions open and leave full
+    # exposure on venue stops that nothing re-verified. `backend` is optional
+    # because some callers have none, and a halt that cannot happen is worse
+    # than one that happens unverified.
+    bare = verify_open_protection(backend, state)
+    if bare:
+        print(f"[LEVELS_LIVE] !! halted with UNPROTECTED position(s): "
+              f"{', '.join(bare)}")
+        notify.send(f"🚨 *Halted, and {len(bare)} position(s) are "
+                    f"unprotected*\n{', '.join(bare)}\n\nNo stop is resting "
+                    f"at the venue for these. Close them by hand or "
+                    f"`/closeall`.", key="halt_unprotected", cooldown_sec=900)
+    if HALT_ACTION == "flatten" and backend is not None:
+        for coin in sorted(state.get("owned") or {}):
+            res = backend.flatten(coin, side="LONG", reason="halt_flatten")
+            print(f"[LEVELS_LIVE] halt flatten {coin}: "
+                  + ("flat" if res.get("flat")
+                     else f"STILL OPEN {str(res.get('detail'))[:80]}"))
+
     if not already:
         notify.send(
             f"🛑 *Level trader halted*\n{reason}\n\n"
@@ -1881,7 +2008,7 @@ def reconcile_pending(backend, state: Dict[str, Any]) -> None:
                     halt(state, f"{coin}: protection failed and the exit did "
                                 f"not clear the position "
                                 f"({str(res.get('detail'))[:120]}) -- it is "
-                                f"open and unprotected")
+                                f"open and unprotected", backend=backend)
                     log_trade({"ts_utc": now_iso(), "action": "emergency_exit",
                                "coin": coin, "result": "exit_failed",
                                "detail": state["halt_reason"]})
@@ -2040,7 +2167,7 @@ def reconcile(backend, state: Dict[str, Any]) -> None:
                 halt(state, f"{coin}: re-protection after a partial close "
                             f"returned {prot.get('status')!r} "
                             f"({str(prot.get('error'))[:80]}) -- its stop "
-                            f"state is unknown")
+                            f"state is unknown", backend=backend)
                 save_state(state)
             continue
 
@@ -2393,7 +2520,8 @@ def preflight(backend, state: Dict[str, Any]):
     lost = state.get("realised_today", 0.0)
     if lost <= -abs(equity) * DAILY_LOSS_STOP_PCT / 100.0:
         return halt(state, f"daily loss stop: {lost:.2f} against "
-                           f"{equity:.2f} equity", kind="daily_loss")
+                           f"{equity:.2f} equity", kind="daily_loss",
+                    backend=backend)
     # Account drawdown, measured against the highest equity seen in the last
     # ACCOUNT_DD_WINDOW_HOURS. The daily stop above watches REALISED PnL and
     # resets at 00:00 UTC; this watches total equity, so it is the only rail
@@ -2413,7 +2541,8 @@ def preflight(backend, state: Dict[str, Any]):
             return halt(state, f"account drawdown {dd_pct:.1f}% ({equity:.2f} "
                                f"against a {ref:.2f} high over the last "
                                f"{ACCOUNT_DD_WINDOW_HOURS:g}h), limit "
-                               f"{ACCOUNT_DD_HALT_PCT:g}%", kind="drawdown")
+                               f"{ACCOUNT_DD_HALT_PCT:g}%", kind="drawdown",
+                        backend=backend)
     # Still tracked, purely so the logs and alerts can say how far the account
     # is from its best. It no longer decides anything.
     if equity > float(state.get("equity_peak") or 0.0):

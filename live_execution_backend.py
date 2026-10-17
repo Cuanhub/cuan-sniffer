@@ -67,6 +67,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from eth_account import Account
 
+import threading
+
+from hyperliquid.utils.types import Cloid
+
 from execution_backend import ExecutionBackend, FillResult
 from live_data_guard import (
     LIVE_MAX_MIDPRICE_AGE_SECONDS,
@@ -160,6 +164,11 @@ class LiveExecutionBackend(ExecutionBackend):
         self._sz_decimals: Dict[str, int] = {}
         self._max_leverage: Dict[str, int] = {}
         self._unified_account_cache: Optional[bool] = None
+        # AUDIT C-1: client order ids. A lock because the Telegram control
+        # process and the trader both hold a backend, and a repeated cloid
+        # would make two orders indistinguishable to a lookup.
+        self._cloid_seq = 0
+        self._cloid_lock = threading.Lock()
 
         self._load_meta()
 
@@ -171,6 +180,80 @@ class LiveExecutionBackend(ExecutionBackend):
         )
 
     # ── Entry ──────────────────────────────────────────────────────────────
+
+    def _new_cloid(self):
+        """A fresh client order id, unique per order this process sends.
+
+        AUDIT C-1. Every order went out with no identity, so an ambiguous
+        response -- a timeout, a dropped connection -- was unanswerable: there
+        was no way to ask the venue "did my order land?". The code recorded a
+        reject, and if the order HAD filled the account held a position that
+        was live, unprotected and untracked until the next reconcile, up to
+        POLL_SEC (450s) later.
+
+        Monotonic-nanosecond high bits plus a counter, so two orders in the
+        same nanosecond still differ, and the value is recoverable from the
+        log for a manual lookup.
+        """
+        with self._cloid_lock:
+            self._cloid_seq += 1
+            seq = self._cloid_seq
+        raw = (time.time_ns() << 16) | (seq & 0xFFFF)
+        return Cloid.from_int(raw & ((1 << 128) - 1))
+
+    @staticmethod
+    def _fill_response_from_order(found, sz, limit_px):
+        """Shape a cloid lookup like an order response, for _parse_fill.
+
+        Sizes and prices come from the VENUE's record where it gives them,
+        and fall back to what was requested only for the fields it omits.
+        Assuming the request's size would overstate a partial fill.
+        """
+        o = (found.get("order") or {})
+        inner = o.get("order") or o
+        def num(key, default):
+            try:
+                return float(inner.get(key))
+            except (TypeError, ValueError):
+                return default
+        filled_sz = num("totalSz", num("sz", sz))
+        px = num("avgPx", num("limitPx", limit_px))
+        return {"status": "ok", "response": {"type": "order", "data": {
+            "statuses": [{"filled": {"totalSz": str(filled_sz),
+                                     "avgPx": str(px),
+                                     "oid": inner.get("oid", 0)}}]}}}
+
+    def _resolve_ambiguous_order(self, coin, cloid, err):
+        """After an exception, ask the venue what actually happened.
+
+        Returns the venue's order record if it knows this cloid, else None.
+        An exception from the SDK means the REQUEST failed, which says nothing
+        about whether the ORDER was accepted. Treating the two as the same
+        thing is what C-1 was.
+        """
+        if cloid is None:
+            return None
+        try:
+            got = self.info.query_order_by_cloid(
+                self._user_state_query_address(), cloid)
+        except Exception as e:
+            # Cannot ask. Must not guess either way -- the caller keeps the
+            # reject, and reconcile/venue_sanity remains the backstop.
+            if self.debug:
+                print(f"[LIVE_BACKEND] cloid lookup failed {coin} "
+                      f"{cloid.to_raw()}: {str(e)[:90]}")
+            return None
+        if not isinstance(got, dict):
+            return None
+        status = str(got.get("status") or "")
+        if status in ("unknownOid", "unknown", ""):
+            if self.debug:
+                print(f"[LIVE_BACKEND] {coin} order {cloid.to_raw()} never "
+                      f"reached the venue ({str(err)[:60]}) -- a true reject")
+            return None
+        print(f"[LIVE_BACKEND] !! {coin} request failed ({str(err)[:60]}) but "
+              f"the venue HAS order {cloid.to_raw()} -- adopting it")
+        return got
 
     def execute_entry(
         self,
@@ -208,6 +291,7 @@ class LiveExecutionBackend(ExecutionBackend):
         if limit_px <= 0:
             return self._reject("invalid_rounded_entry_price", ref_price, size_usd, "entry")
 
+        cloid = self._new_cloid()
         try:
             resp = self.exchange.order(
                 coin,
@@ -216,9 +300,14 @@ class LiveExecutionBackend(ExecutionBackend):
                 limit_px,
                 {"limit": {"tif": "Ioc"}},
                 reduce_only=False,
+                cloid=cloid,
             )
         except Exception as e:
-            return self._reject(f"sdk_error:{e}", ref_price, size_usd, "entry")
+            found = self._resolve_ambiguous_order(coin, cloid, e)
+            if found is None:
+                return self._reject(f"sdk_error:{e}", ref_price, size_usd,
+                                    "entry")
+            resp = self._fill_response_from_order(found, sz, limit_px)
 
         result = self._parse_fill(
             resp,
@@ -321,6 +410,7 @@ class LiveExecutionBackend(ExecutionBackend):
             else ref_price * (1 - exit_bps / 10_000),
         )
 
+        cloid = self._new_cloid()
         try:
             resp = self.exchange.order(
                 coin,
@@ -329,9 +419,14 @@ class LiveExecutionBackend(ExecutionBackend):
                 limit_px,
                 {"limit": {"tif": "Ioc"}},
                 reduce_only=True,
+                cloid=cloid,
             )
         except Exception as e:
-            return self._reject(f"sdk_error:{e}", ref_price, size_usd, reason)
+            found = self._resolve_ambiguous_order(coin, cloid, e)
+            if found is None:
+                return self._reject(f"sdk_error:{e}", ref_price, size_usd,
+                                    reason)
+            resp = self._fill_response_from_order(found, sz, limit_px)
 
         result = self._parse_fill(
             resp,

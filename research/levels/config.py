@@ -871,3 +871,35 @@ RETAIN_WAITING_DAYS = _i("LEVELS_RETAIN_WAITING_DAYS", 14)
 # can read any more.
 LOG_ROTATE_MB = _f("LEVELS_LOG_ROTATE_MB", 25.0)
 LOG_KEEP_GENERATIONS = _i("LEVELS_LOG_KEEP_GENERATIONS", 6)
+
+
+# ---- rule 10: what a halt does about positions already open ---------------
+# AUDIT D-1. halt() blocked new entries and checked nothing else, so the
+# drawdown rail could fire with four positions open, stop trading, and leave
+# full exposure resting on venue-side stops that nothing re-verified.
+#
+#   "verify_stops"  (default) confirm every open position still has a
+#                   reduce-only order at the venue, and alert loudly on any
+#                   that does not. Changes no position.
+#   "flatten"       additionally close every open position at market.
+#
+# Default is the conservative one on purpose, and "conservative" here means
+# "changes nothing without being asked", not "does least". Flattening on a
+# halt realises losses the rails did not ask to realise, and the venue stops
+# are usually intact -- so the useful work is DETECTING the case where they
+# are not. A halt that silently flattened on a transient rail breach would
+# itself be the incident.
+HALT_ACTION = os.getenv("LEVELS_HALT_ACTION", "verify_stops").strip().lower()
+
+# What to do with a position found at the venue that this module did not open.
+# AUDIT C-1's other half: the timeout-after-fill case leaves exactly this --
+# a position with no plan and, because protection is placed after the fill,
+# usually no stop either.
+#
+#   "halt"      halt and alert; change nothing.
+#   "auto"      (default) flatten orphans that have NO protective order, and
+#               halt-and-alert on ones that do. An unprotected, unplanned
+#               position is the one case where acting beats asking: there is
+#               no stop to fall back on and no level to reconstruct one from.
+#   "flatten"   flatten every orphan regardless.
+ORPHAN_ACTION = os.getenv("LEVELS_ORPHAN_ACTION", "auto").strip().lower()

@@ -178,8 +178,16 @@ class CallersBranchOnFlat(unittest.TestCase):
         trader close paths went through this; two did not even check."""
         src = open("tools/live_levels_trader.py").read()
         self.assertNotIn('getattr(exit_fill, "filled"', src)
-        self.assertEqual(src.count("backend.flatten("), 3,
-                         "every close path must go through flatten")
+        # Count is a FLOOR, not an equality. The original assertion pinned it
+        # at exactly 3 and then failed when the audit's orphan sweep and
+        # halt-flatten legitimately added two more -- a test that resists
+        # correct change is a test that gets deleted.
+        self.assertGreaterEqual(src.count("backend.flatten("), 3,
+                                "a close path stopped going through flatten")
+        # The property that actually matters: nothing outside the backend
+        # calls execute_exit directly, so no caller can mistake one IOC for
+        # a close.
+        self.assertNotIn("backend.execute_exit(", src)
 
     def test_the_telegram_path_uses_it_too(self):
         src = open("tools/telegram_control.py").read()
