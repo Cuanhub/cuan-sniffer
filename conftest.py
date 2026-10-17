@@ -48,14 +48,17 @@ def isolated_runtime_files(tmp_path, monkeypatch):
     import tools.live_levels_trader as trader
     from research.levels import storage
     from core import meta as core_meta
+    from core import safety as core_safety
 
     monkeypatch.setattr(trader, "STATE_PATH", tmp_path / "_live_state.json")
     monkeypatch.setattr(trader, "TRADE_LOG", tmp_path / "live_trades.csv")
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path / "data")
     # core.meta and core.safety both default their paths off this directory.
-    # A MetaStore() or HaltState() built with no argument in a test would
-    # otherwise read -- and on any write, clobber -- the live files.
+    # A MetaStore(), HaltState() or EquityLog() built with no argument in a
+    # test would otherwise read -- and on any write, clobber -- the live files.
+    # core.safety binds DATA at import, so patching core.meta alone misses it.
     monkeypatch.setattr(core_meta, "DATA", tmp_path / "data")
+    monkeypatch.setattr(core_safety, "DATA", tmp_path / "data")
 
 
 @pytest.fixture(autouse=True)

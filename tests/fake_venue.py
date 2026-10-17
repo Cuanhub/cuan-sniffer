@@ -81,15 +81,35 @@ class FakeHL:
         self.fail_info = 0
         self.fail_order = 0
         self.fail_cancel = 0
+        self.fail_info_always = False
+        # Real venue positions are quantized to the asset's szDecimals, so a
+        # sub-precision residual cannot exist. Modelling that matters: without
+        # it, repeated partial closes converge to dust no order can express and
+        # a flatten loop has nothing to work with.
+        self.sz_decimals = 2
         self.order_fills = True      # does a non-trigger order move the position?
         self.fill_fraction = 1.0
         self.raise_after_fill = False
 
     # ---- Info surface ----------------------------------------------------
     def _maybe_fail_info(self) -> None:
+        if self.fail_info_always:
+            raise Transport("429 Too Many Requests")
         if self.fail_info > 0:
             self.fail_info -= 1
             raise Transport("429 Too Many Requests")
+
+    def _quantize(self, coin: str) -> None:
+        """Positions are held to szDecimals, as the venue holds them."""
+        held = self.pos.get(coin)
+        if held is None:
+            return
+        step = 10 ** -self.sz_decimals
+        q = round(held / step) * step
+        if abs(q) < step / 2:
+            self.pos.pop(coin, None)
+        else:
+            self.pos[coin] = round(q, self.sz_decimals)
 
     def user_state(self, address: str, dex: str = "") -> Dict[str, Any]:
         self._maybe_fail_info()
@@ -165,7 +185,8 @@ class FakeHL:
             else:
                 delta = filled if is_buy else -filled
             self.pos[name] = held + delta
-            if abs(self.pos[name]) <= 1e-12:
+            self._quantize(name)
+            if abs(self.pos.get(name, 0.0)) <= 1e-12:
                 self.pos.pop(name, None)
                 # The venue cancels reduce-only orders when the position
                 # closes. Observed 286 times in the recorded history.
