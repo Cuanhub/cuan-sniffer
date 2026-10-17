@@ -345,45 +345,121 @@ class Confirmation(unittest.TestCase):
         self.assertIn("not open", ctl.handle("/close DOGE", self.st))
 
 
-class NoBlindOrders(unittest.TestCase):
+class ClosingReportsTheVenue(unittest.TestCase):
+    """What /close says has to match what the venue holds.
+
+    The bug this replaces, and WHY THE OLD TESTS PASSED THROUGH IT: close_one
+    read `res.status`, which FillResult does not have -- its fields are
+    filled, fill_price, fill_size_usd, slippage_bps, reject_reason and
+    fill_ratio. getattr fell through to "unknown" on every call and the
+    success branch was unreachable. The fake here RETURNED a `status`
+    attribute, inventing an interface the real class never had, so the test
+    agreed with the broken code instead of catching it.
+
+    On 2026-10-17 a /closeall of four positions printed four identical
+    warnings while three closed only to dust and ZRO did not close at all --
+    $178.70 of live exposure behind a message that read like progress.
+
+    A fake must model the real contract. This one returns what
+    LiveExecutionBackend.flatten returns, and the last test keeps it honest.
+    """
+
     class Backend:
-        def __init__(self, mid=None):
-            self.mid, self.exits = mid, []
+        """Mirrors LiveExecutionBackend.flatten's return shape."""
+
+        def __init__(self, flat=True, closed=180.0, detail="filled 100%"):
+            self.flat, self.closed, self.detail = flat, closed, detail
+            self.calls = []
 
         def get_mid_price(self, coin):
-            return self.mid
+            return 89.0
 
-        def execute_exit(self, **kw):
-            self.exits.append(kw)
-            return type("R", (), {"status": "filled"})()
+        def flatten(self, coin, side="LONG", reason="flatten", attempts=3):
+            self.calls.append({"coin": coin, "side": side, "reason": reason})
+            return {"flat": self.flat, "attempts_used": 1 if self.flat else attempts,
+                    "closed_usd": self.closed, "detail": self.detail}
 
     def st(self):
         return {"owned": {"HYPE": {"entry": 90.0, "size_usd": 180.0}}}
 
-    def test_an_unpriceable_coin_is_not_exited(self):
-        b = self.Backend(mid=None)
+    def test_a_clean_close_is_reported_as_flat(self):
+        b = self.Backend(flat=True)
         out = C.Controller(b).close_one("HYPE", self.st())
-        self.assertIn("Could not price", out)
-        self.assertEqual(b.exits, [])
-
-    def test_a_priced_coin_is_exited_once(self):
-        b = self.Backend(mid=89.0)
-        out = C.Controller(b).close_one("HYPE", self.st())
-        self.assertEqual(len(b.exits), 1)
-        self.assertEqual(b.exits[0]["coin"], "HYPE")
-        self.assertEqual(b.exits[0]["size_usd"], 180.0)
         self.assertIn("✅", out)
+        self.assertIn("flat", out.lower())
+        self.assertEqual(len(b.calls), 1)
+        self.assertEqual(b.calls[0]["coin"], "HYPE")
+
+    def test_a_position_still_open_is_reported_LOUDLY(self):
+        """The case that cost $178.70 of unnoticed exposure."""
+        b = self.Backend(flat=False, closed=0.0,
+                         detail="STILL OPEN: venue size 89.5")
+        out = C.Controller(b).close_one("HYPE", self.st())
+        self.assertIn("🚨", out)
+        self.assertIn("STILL OPEN", out)
+        self.assertNotIn("✅", out)
+
+    def test_a_partial_close_is_not_reported_as_success(self):
+        b = self.Backend(flat=False, closed=90.0,
+                         detail="attempt 1: filled 50% of $180.00")
+        out = C.Controller(b).close_one("HYPE", self.st())
+        self.assertIn("🚨", out)
+        self.assertIn("90.00", out, "the operator should see what DID close")
+
+    def test_a_still_open_report_says_protection_is_intact(self):
+        """Otherwise the operator's next move is unclear."""
+        out = C.Controller(self.Backend(flat=False)).close_one("HYPE", self.st())
+        self.assertIn("stop", out.lower())
 
     def test_no_backend_means_no_close(self):
         self.assertIn("No venue connection",
                       C.Controller(None).close_one("HYPE", self.st()))
 
+    def test_a_coin_not_held_is_not_sent_to_the_venue(self):
+        b = self.Backend()
+        out = C.Controller(b).close_one("DOGE", self.st())
+        self.assertIn("no open position", out.lower())
+        self.assertEqual(b.calls, [], "an unheld coin reached the venue")
+
     def test_a_raising_backend_is_reported_not_swallowed(self):
         class Angry(self.Backend):
-            def execute_exit(self, **kw):
+            def flatten(self, coin, side="LONG", reason="flatten", attempts=3):
                 raise RuntimeError("venue said no")
-        out = C.Controller(Angry(mid=89.0)).close_one("HYPE", self.st())
+        out = C.Controller(Angry()).close_one("HYPE", self.st())
         self.assertIn("venue said no", out)
+        self.assertIn("⚠️", out)
+
+    def test_closeall_reports_each_position_separately(self):
+        b = self.Backend(flat=False, detail="STILL OPEN: venue size 1")
+        st = {"owned": {"HYPE": {"size_usd": 1.0}, "ZRO": {"size_usd": 1.0}}}
+        ctl = C.Controller(b)
+        out = ctl.execute("closeall", "", st)
+        self.assertIn("HYPE", out)
+        self.assertIn("ZRO", out)
+        self.assertEqual(out.count("🚨"), 2,
+                         "a failure on one must not be hidden by the other")
+
+    def test_close_one_does_NOT_read_a_field_FillResult_lacks(self):
+        """The root cause, pinned. FillResult has no `status`, so code that
+        branches on one branches on None forever.
+
+        Scoped to close_one's own source, because the module legitimately
+        contains the string "status" -- it serves a /status command.
+        """
+        from execution_backend import FillResult
+        self.assertFalse(hasattr(FillResult, "status"),
+                         "FillResult grew a status field; revisit this")
+        src = open("tools/telegram_control.py").read()
+        fn = src[src.index("    def close_one("):src.index("    def handle(")]
+        # Everything after the docstring. The docstring NAMES res.status while
+        # explaining the old bug, and matching that would be the third time a
+        # test in this project asserted against prose instead of behaviour.
+        code = fn.split('"""', 2)[2]
+        for bad in ('getattr(res, "status"', "res.status",
+                    'res.get("status")'):
+            self.assertNotIn(bad, code, f"close_one reads {bad}")
+        self.assertIn('res.get("flat")', code,
+                      "close_one must branch on the venue's verdict")
 
 
 class ThereIsNoRawOpen(unittest.TestCase):

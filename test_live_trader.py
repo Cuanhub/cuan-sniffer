@@ -93,6 +93,7 @@ class FakeBackend:
         self.exit_fills = exit_fills
         self.protection_oids = protection_oids
         self.venue = {}          # coin -> notional
+        self.exit_partial = False  # True = order lands, venue still holds size
         self.info = self
 
     # -- venue reads -------------------------------------------------------
@@ -171,6 +172,28 @@ class FakeBackend:
                             reject_reason="exit_rejected")
         self.venue.pop(coin, None)
         return FakeFill(filled=True, fill_price=price, fill_size_usd=size_usd)
+
+    def flatten(self, coin, side="LONG", reason="flatten", attempts=3):
+        """Mirrors LiveExecutionBackend.flatten's contract.
+
+        `exit_partial` models the 2026-10-17 case the real one exists for: the
+        order goes through, the venue still holds size, and the caller must
+        NOT be told it is flat. The old code sent one execute_exit and read
+        `filled`, which is True for a partial, so a half-closed position
+        passed the check and the slot was released anyway.
+        """
+        self.exits.append(coin)
+        notional = self.venue.get(coin, 0.0)
+        if not self.exit_fills:
+            return {"flat": False, "attempts_used": attempts,
+                    "closed_usd": 0.0, "detail": "exit_rejected"}
+        if getattr(self, "exit_partial", False):
+            return {"flat": False, "attempts_used": attempts,
+                    "closed_usd": notional * 0.5,
+                    "detail": f"STILL OPEN: venue size {self.signed}"}
+        self.venue.pop(coin, None)
+        return {"flat": True, "attempts_used": 1, "closed_usd": notional,
+                "detail": "filled 100%"}
 
 
 def episode(coin, entry=100.0, stop=95.0, tp=115.0):

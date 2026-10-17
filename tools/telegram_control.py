@@ -249,34 +249,41 @@ class Controller:
             return None
 
     def close_one(self, coin: str, state: Dict[str, Any]) -> str:
+        """Flatten one position and report what the VENUE says, not what was
+        sent.
+
+        This used to read `res.status`, which FillResult does not have -- so
+        getattr fell through to "unknown" on every call, the success branch
+        could never be taken, and a close that silently half-filled read the
+        same as one that worked. On 2026-10-17 a /closeall of four positions
+        reported four identical warnings while three closed only to dust and
+        ZRO did not close at all, leaving $178.70 of live exposure behind a
+        message that looked like progress. backend.flatten verifies against
+        the venue and retries, and this reports its verdict.
+        """
         info = (state.get("owned") or {}).get(coin)
         if info is None:
             return f"No open position in {coin}."
         if self.backend is None:
             return "No venue connection -- cannot close."
-        size = _f(info.get("size_usd"))
-        mid = None
         try:
-            mid = self.backend.get_mid_price(coin)
-        except Exception:
-            pass
-        if not mid or size <= 0:
-            return f"Could not price {coin} -- not sending a blind exit."
-        try:
-            res = self.backend.execute_exit(coin=coin, side="LONG",
-                                            price=float(mid),
-                                            size_usd=size,
-                                            reason="telegram")
+            res = self.backend.flatten(coin, side="LONG", reason="telegram")
         except Exception as e:
-            return f"{coin} exit raised: {str(e)[:160]}"
-        status = getattr(res, "status", None) or "unknown"
-        ok = str(status).lower() in ("filled", "ok", "success")
-        # The trader reconciles the vanished position on its next pass and is
-        # the thing that records the realised PnL. Saying so here stops the
-        # operator wondering why /status still shows the slot for a few
-        # minutes.
-        return (f"{'✅' if ok else '⚠️'} {coin} exit: {status}. "
-                f"The trader will book the result on its next pass.")
+            return f"⚠️ {coin} exit raised: {str(e)[:160]}"
+        closed = res.get("closed_usd") or 0.0
+        if res.get("flat"):
+            # The trader reconciles the vanished position on its next pass and
+            # is what records the realised PnL, so /status may still show the
+            # slot for a few minutes.
+            return (f"✅ {coin} is flat"
+                    + (f" (${closed:,.2f} closed)" if closed else "")
+                    + ". The trader will book the result on its next pass.")
+        return (f"🚨 {coin} is STILL OPEN after "
+                f"{res.get('attempts_used')} attempts"
+                + (f" -- ${closed:,.2f} did close" if closed else "")
+                + f".\n`{str(res.get('detail'))[:300]}`\n"
+                f"Its stop and take-profit are still in place. Try again, or "
+                f"close it at the venue.")
 
     def handle(self, text: str, state: Dict[str, Any]) -> str:
         cmd, arg = parse(text)

@@ -353,6 +353,65 @@ class LiveExecutionBackend(ExecutionBackend):
 
         return result
 
+    def flatten(self, coin: str, side: str = "LONG", reason: str = "flatten",
+                attempts: int = 3) -> Dict[str, Any]:
+        """Close a position COMPLETELY, checking the venue between attempts.
+
+        execute_exit sends one marketable IOC with bounded slippage. A single
+        call is not a close: partial fills and no-fills are both normal, and
+        on 2026-10-17 a hand-flatten of four positions left three as dust and
+        ZRO entirely untouched at $178.70 of exposure, while every caller had
+        been told the exit was sent. One more pass closed all four.
+
+        So "make me flat" is a loop that verifies, not a single order. Size
+        comes from the VENUE each time rather than from what the caller
+        believes it holds, because the gap between those two is exactly the
+        condition this exists to resolve.
+
+        Returns {flat, attempts_used, closed_usd, detail}. `flat` is the only
+        field a caller should branch on, and a caller that releases a
+        position's slot must branch on it: dropping tracking while the venue
+        still holds size orphans a live position.
+        """
+        coin = coin.upper()
+        closed_usd = 0.0
+        notes = []
+        for attempt in range(1, max(1, attempts) + 1):
+            szi = self._get_venue_signed_size(coin)
+            if szi is None:
+                # Cannot read the venue, so cannot claim flat. Saying "flat"
+                # here is the one answer that would orphan a position.
+                notes.append(f"attempt {attempt}: venue size unreadable")
+                continue
+            remaining = self._signed_size_for_side(side, szi)
+            if remaining is None or abs(float(remaining)) <= LIVE_FLAT_EPSILON_SZ:
+                return {"flat": True, "attempts_used": attempt - 1,
+                        "closed_usd": closed_usd,
+                        "detail": "; ".join(notes) or "already flat"}
+            mid = self.get_mid_price(coin)
+            if not mid or mid <= 0:
+                notes.append(f"attempt {attempt}: no price, not sending blind")
+                continue
+            notional = abs(float(remaining)) * float(mid)
+            res = self.execute_exit(coin=coin, side=side, price=float(mid),
+                                    size_usd=notional, reason=reason)
+            closed_usd += float(getattr(res, "fill_size_usd", 0.0) or 0.0)
+            ratio = getattr(res, "fill_ratio", None)
+            notes.append(
+                f"attempt {attempt}: "
+                + (f"filled {ratio:.0%} of ${notional:.2f}" if ratio is not None
+                   else f"not attempted ({getattr(res, 'reject_reason', '') or 'no reason'})"))
+
+        szi = self._get_venue_signed_size(coin)
+        remaining = (self._signed_size_for_side(side, szi)
+                     if szi is not None else None)
+        flat = (remaining is not None
+                and abs(float(remaining)) <= LIVE_FLAT_EPSILON_SZ)
+        if not flat:
+            notes.append(f"STILL OPEN: venue size {remaining}")
+        return {"flat": flat, "attempts_used": attempts,
+                "closed_usd": closed_usd, "detail": "; ".join(notes)}
+
     def place_native_protection(
         self,
         coin: str,

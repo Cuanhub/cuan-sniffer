@@ -1389,8 +1389,12 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
     if prot.get("status") != "protected":
         print(f"[LEVELS_LIVE] !! protection FAILED on {coin} -- closing immediately; "
               f"an unprotected position is not the trade")
-        exit_fill = backend.execute_exit(coin=coin, side="LONG", price=fill_px,
-                                         size_usd=size_usd, reason="protection_failed")
+        # flatten, not execute_exit: this path already checked the result,
+        # which is why it was the one that behaved -- but `filled` is True for
+        # a PARTIAL fill too, so a half-closed position still passed the check
+        # and still released the slot. flatten verifies against the venue.
+        exit_fill = backend.flatten(coin, side="LONG",
+                                    reason="protection_failed")
 
         # Cancel whatever the venue DID accept. Protection can fail with one
         # leg resting, and a leg that failed verification may not be
@@ -1406,7 +1410,7 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
             except Exception as e:
                 print(f"[LEVELS_LIVE] !! cancel failed {coin} oid={oid}: {str(e)[:80]}")
 
-        if not getattr(exit_fill, "filled", False):
+        if not exit_fill.get("flat"):
             # The close did not go through. The position is open, unprotected,
             # and releasing the slot here would drop the only record this
             # module has of it -- venue_sanity would then meet it as an
@@ -1414,7 +1418,9 @@ def execute_one(backend, ep: Dict[str, Any], equity: float, available: float,
             # the rest of this pass still free to trade. Halt now and KEEP the
             # slot, so reconcile() can retire it once it is genuinely flat.
             halt(state, f"{coin}: protection failed and the emergency exit did "
-                        f"not fill -- position is open and unprotected")
+                        f"not clear the position "
+                        f"({str(exit_fill.get('detail'))[:120]}) -- it is open "
+                        f"and unprotected")
             log_trade({**row, "action": "emergency_exit", "result": "exit_failed",
                        "detail": state["halt_reason"]})
             return Outcome(order_sent=True)
@@ -1797,14 +1803,32 @@ def reconcile_pending(backend, state: Dict[str, Any]) -> None:
                                   f"{prot.get('error','')}")[:400]})
             if prot.get("status") != "protected":
                 print(f"[LEVELS_LIVE] !! protection FAILED on {coin} -- closing")
-                backend.execute_exit(coin=coin, side="LONG", price=entry,
-                                     size_usd=size_usd, reason="protection_failed")
+                # backend.flatten, not a single execute_exit: one marketable
+                # IOC is not a close. This path used to send one and then pop
+                # the position regardless of the outcome, so a partial or
+                # missed fill left a live, unprotected position that this
+                # module had stopped tracking. execute_one's equivalent path
+                # has always checked; these two drifted apart from it.
+                res = backend.flatten(coin, side="LONG",
+                                      reason="protection_failed")
                 for oid in (prot.get("stop_order_id"), prot.get("tp_order_id")):
                     if oid:
                         try:
                             backend.cancel_order(coin=coin, oid=oid)
                         except Exception:
                             pass
+                if not res.get("flat"):
+                    # Keep the slot. Releasing it drops the only record of a
+                    # position that is open and now unprotected.
+                    halt(state, f"{coin}: protection failed and the exit did "
+                                f"not clear the position "
+                                f"({str(res.get('detail'))[:120]}) -- it is "
+                                f"open and unprotected")
+                    log_trade({"ts_utc": now_iso(), "action": "emergency_exit",
+                               "coin": coin, "result": "exit_failed",
+                               "detail": state["halt_reason"]})
+                    save_state(state)
+                    continue
                 note = accrue_close(backend, state, coin, state["owned"].get(coin, {}))
                 state["owned"].pop(coin, None)
                 save_state(state)
@@ -1890,12 +1914,29 @@ def reconcile(backend, state: Dict[str, Any]) -> None:
                 # re-protect -- close it and book the trade.
                 print(f"[LEVELS_LIVE] {coin} residual is below the "
                       f"${MIN_NOTIONAL_USD:g} minimum -- closing it out")
+                res = {"flat": False, "detail": "not attempted"}
                 try:
-                    backend.execute_exit(coin=coin, side="LONG", price=entry,
-                                         size_usd=residual_usd,
-                                         reason="residual_after_partial_close")
+                    res = backend.flatten(
+                        coin, side="LONG",
+                        reason="residual_after_partial_close")
                 except Exception as e:
                     print(f"[LEVELS_LIVE] residual exit failed: {str(e)[:100]}")
+                    res = {"flat": False, "detail": str(e)[:120]}
+                if not res.get("flat"):
+                    # Dust, but dust that is really there. Cancelling the
+                    # protection and dropping the slot would leave it open and
+                    # unstopped with nothing tracking it, so keep both until a
+                    # later pass closes it or the venue shows it gone.
+                    print(f"[LEVELS_LIVE] {coin} residual did NOT close "
+                          f"({str(res.get('detail'))[:120]}) -- keeping the "
+                          f"slot and the protection until it is flat")
+                    log_trade({"ts_utc": now_iso(), "action": "skip",
+                               "coin": coin,
+                               "episode_id": owned[coin].get("episode_id", ""),
+                               "result": "residual_open",
+                               "detail": str(res.get("detail"))[:200]})
+                    save_state(state)
+                    continue
                 for oid in (owned[coin].get("stop_oid"), owned[coin].get("tp_oid")):
                     if oid:
                         try:
