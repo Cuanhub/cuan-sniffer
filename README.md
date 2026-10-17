@@ -44,12 +44,29 @@ research/levels/          logging only -- cannot place an order
   universe.py             symbol selection
   venue_client.py         read-only venue access
 
-tools/live_levels_trader.py   the ONLY path that places orders
-live_execution_backend.py     Hyperliquid order placement and protection
-execution_backend.py          thin execution interface + fill result type
-live_data_guard.py            data freshness and API backoff
+tools/live_levels_trader.py   strategy: what to trade, and when
+tools/protect_loop.py         every 60s: one correct stop on every position
+tools/telegram_control.py     the operator's channel and kill switch
+
+core/venue.py                 the ONLY place that talks to Hyperliquid
+core/execute.py               place an order, then read the venue for the result
+core/protect.py               keep a stop on every position the venue holds
+core/safety.py                flatten_all, the two halt states, the loss limits
+core/streak.py                losing runs and cooldowns, derived from fills
+core/meta.py                  trade metadata only -- never what we hold
 notify.py                     Telegram alerts for halts and failures
 ```
+
+### Two rules the execution core is built on
+
+1. **The venue is the only truth.** `core/venue.py` is read on every decision
+   and remembers nothing. No file in this project records what the account
+   holds, so no file can be wrong about it.
+2. **Order responses are not interpreted.** A fill is a change in the
+   venue's position, measured by reading before and after. The 400 lines of
+   response parsing this replaced read `sz` (the REMAINING size) as the
+   filled size, so a filled order parsed as a reject and 32 recorded
+   zero-fill rejects would have parsed as full fills.
 
 ### The isolation guarantee
 

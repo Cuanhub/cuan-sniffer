@@ -17,8 +17,10 @@ from pathlib import Path
 
 FORBIDDEN_MODULES = {
     "executor", "risk_manager", "protection_manager", "order_tracker",
-    "live_position_monitor", "execution_backend", "execution_backend_factory",
-    "live_execution_backend", "bootstrap", "agent",
+    "live_position_monitor", "execution_backend_factory", "bootstrap", "agent",
+    # core/ places orders. research/ is read-only by design and must never
+    # reach it, the same reason the retired trading modules are listed here.
+    "core.venue", "core.execute", "core.safety", "core.protect",
 }
 
 PACKAGE_DIR = Path(__file__).resolve().parent / "research" / "levels"

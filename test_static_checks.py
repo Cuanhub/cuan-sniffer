@@ -19,15 +19,29 @@ import subprocess
 import sys
 import unittest
 
-MYPY_BUDGET = 10
+# Zero, and it has to stay zero. The 10 this replaces was a budget for
+# live_execution_backend.py, which no longer exists; core/ was written typed
+# from the start and is checked strictly, so there is no debt to budget for.
+MYPY_BUDGET = 0
 
 
 class Mypy(unittest.TestCase):
     def test_the_order_placing_modules_do_not_get_worse(self):
+        """The modules that place every order, checked strictly.
+
+        This used to point at live_execution_backend.py and
+        execution_backend.py. Once those were deleted it kept PASSING while
+        checking nothing -- mypy on a missing file emits no "error:" line, so
+        the count came back 0 and the budget was satisfied vacuously. A green
+        test that tests nothing is worse than a red one, so it now names a
+        directory and asserts the run actually happened.
+        """
         out = subprocess.run(
-            [sys.executable, "-m", "mypy",
-             "live_execution_backend.py", "execution_backend.py"],
+            [sys.executable, "-m", "mypy", "core/"],
             capture_output=True, text=True).stdout
+        self.assertIn("source file", out.lower() + "checked",
+                      f"mypy did not check anything:\n{out}")
+        self.assertNotIn("can't read file", out, f"missing target:\n{out}")
         n = sum(1 for line in out.splitlines() if "error:" in line)
         self.assertLessEqual(
             n, MYPY_BUDGET,
@@ -38,8 +52,10 @@ class Mypy(unittest.TestCase):
 
     def test_the_config_scopes_the_strict_rules_to_the_order_path(self):
         cfg = open("mypy.ini").read()
-        self.assertIn("[mypy-live_execution_backend]", cfg)
+        self.assertIn("[mypy-core.*]", cfg)
         self.assertIn("disallow_untyped_defs = True", cfg)
+        self.assertNotIn("[mypy-live_execution_backend]", cfg,
+                         "mypy.ini still scopes rules to a deleted module")
 
 
 class Pinning(unittest.TestCase):
