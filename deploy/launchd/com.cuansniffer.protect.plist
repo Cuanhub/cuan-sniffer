@@ -1,16 +1,34 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  The fast reconciliation loop. Audit finding B-1 (interim).
+  The protection loop. Replaces the reconcile loop (com.cuansniffer.reconcile),
+  which this plist was derived from -- read the next paragraph, because what
+  this process is allowed to do is NOT what that one was.
 
-  Compares positions and protective orders against the venue every
-  RECONCILE_POLL_SEC (45s), independent of the trader's 450s signal loop, and
-  queues a halt plus an alert on any divergence.
+  Every PROTECT_POLL_SEC (60s), independent of the trader's 450s signal loop,
+  it reads the venue and makes sure each open position carries exactly one
+  reduce-only stop sized to the WHOLE position, replacing one that is missing,
+  mis-sized or on the wrong side of the mark.
 
-  It CANNOT place an order: no LEVELS_LIVE_ARMED, and the module imports
-  nothing that can size or enter a position (a test asserts this). It does not
-  write _live_state.json -- the trader stays that file's only writer, and this
-  process raises the alarm through the same command queue Telegram uses.
+  WHAT IT CAN DO AT THE VENUE. It places reduce-only trigger orders, cancels
+  them, and calls flatten_all -- which cancels every resting order and
+  MARKET-CLOSES every position the venue holds. It does that when a position
+  cannot be given a valid stop after two attempts, on the principle that an
+  unprotected position is not the trade.
+
+  So this process can close a position, including one opened by hand at the
+  venue that it cannot find a stop price for. It cannot OPEN one: nothing it
+  imports can size or enter a position, and a test asserts that. The plist
+  this was derived from asserted the broader claim -- that it could place no
+  order at all -- which was true of the reconcile loop and false of this one.
+
+  There is deliberately no LEVELS_LIVE_ARMED. Protection must work whether or
+  not the trader is armed -- a position with no stop is the one condition that
+  is worse when nobody is trading, because nothing else is looking.
+
+  It writes _trade_meta.json (the plan for a position it adopted) and
+  _halt.json. It does NOT write _live_state.json; the trader stays that
+  file's only writer.
 
   Install:
     cp deploy/launchd/com.cuansniffer.protect.plist ~/Library/LaunchAgents/
@@ -34,8 +52,10 @@
   <key>WorkingDirectory</key>
   <string>/Users/myair/CuanSniffer</string>
 
-  <!-- Deliberately NO LEVELS_LIVE_ARMED. This process must never be able to
-       place an order, however it is invoked. -->
+  <!-- Deliberately NO LEVELS_LIVE_ARMED: protection must work whether or not
+       the trader is armed. This does NOT make the process read-only -- see
+       the header. It places stops and can market-close a position; what it
+       cannot do is open one. -->
 
   <key>RunAtLoad</key>
   <true/>

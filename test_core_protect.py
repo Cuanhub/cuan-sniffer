@@ -6,6 +6,8 @@ position larger than expected, unknown position at startup.
 
 from __future__ import annotations
 
+import unittest
+
 import pytest
 
 from core import execute, protect, safety
@@ -396,3 +398,44 @@ def test_a_bid_stale_by_the_venues_own_clock_is_pulled(store):
     assert len(fake.resting) == 1
     protect.run_once(v, store)
     assert fake.resting == []
+
+
+class TheLoopCannotOpenAPosition(unittest.TestCase):
+    """The guarantee the installed plist claims. Asserted, not asserted-by-prose.
+
+    The plist this one was derived from said "It CANNOT place an order", which
+    was true of the reconcile loop it described and false of this one: the
+    protection loop places stops and can market-close a position. What must
+    stay true is the narrower claim -- it cannot OPEN one.
+    """
+
+    def test_the_loop_module_imports_nothing_that_can_enter(self):
+        import inspect
+        import tools.protect_loop as L
+        src = inspect.getsource(L)
+        for forbidden in ("execute.enter", "rest_bid", "send_limit",
+                          "size_from_stop", "live_levels_trader"):
+            self.assertNotIn(forbidden, src,
+                             f"protect_loop reaches {forbidden}")
+
+    def test_protect_never_sends_a_non_reduce_only_order(self):
+        """Over a full cycle on an unknown position, every order it sends
+        must be reduce-only."""
+        fake = FakeHL(positions={"ZRO": 50.0}, mid=2.0)
+        protect.run_once(build_venue(fake), MetaStore())
+        self.assertTrue(fake.sent, "nothing was sent; the test proves nothing")
+        for o in fake.sent:
+            self.assertTrue(o["reduce_only"],
+                            f"protect sent a non-reduce-only order: {o}")
+
+    def test_the_plist_does_not_repeat_the_false_claim(self):
+        import pathlib
+        txt = pathlib.Path(
+            "deploy/launchd/com.cuansniffer.protect.plist").read_text()
+        self.assertNotIn("must never be able to\n       place an order", txt)
+        self.assertNotIn("It CANNOT place an order", txt)
+        self.assertIn("MARKET-CLOSES", txt,
+                      "the plist must say it can close a position")
+        self.assertIn("cannot OPEN one", txt,
+                      "the plist must state the guarantee that IS true")
+
