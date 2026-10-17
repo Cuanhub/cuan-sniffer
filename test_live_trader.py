@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional
 
 import tools.live_levels_trader as T
 import inspect
+import json
 import tempfile
 
 from core import execute, safety
@@ -955,13 +956,25 @@ class StateFileTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             T.load_state()
 
-    def test_a_halt_survives_a_round_trip(self):
-        T.save_state({"owned": {"AAA": {}}, "halted": True,
-                      "halt_reason": "venue mismatch", "pending": {}})
-        st = T.load_state()
-        self.assertTrue(st["halted"])
-        self.assertEqual(st["halt_reason"], "venue mismatch")
-        self.assertIn("AAA", st["owned"])
+    def test_a_halt_survives_a_restart(self):
+        """The requirement is unchanged; its home moved.
+
+        A halt used to live in the state file, which is why a corrupt or
+        truncated write could clear one. It is its own small file now, so a
+        halt survives a restart independently of anything the strategy
+        writes -- and the strategy's state file cannot clear it.
+        """
+        d = Path(tempfile.mkdtemp())
+        safety.HaltState(d / "halt.json").set(safety.MANUAL, "venue mismatch")
+        reread = safety.HaltState(d / "halt.json").active()   # a new process
+        self.assertIsNotNone(reread)
+        self.assertEqual(reread["reason"], "venue mismatch")
+        self.assertEqual(reread["kind"], "manual")
+
+    def test_the_strategy_state_cannot_express_a_halt(self):
+        T.save_state({"watching": {}, "halted": True, "halt_reason": "nope"})
+        self.assertNotIn("halted", T.load_state(),
+                         "a stale flag here reads like a live halt")
 
     def test_the_write_is_atomic(self):
         # tmp-then-replace, so a reader sees the old file or the new one,
@@ -1078,3 +1091,44 @@ if __name__ == "__main__":
 # on 2026-09-19 a rate limit killed the process outright at startup), and the
 # first draft of this rewrite had dropped it.
 # ---------------------------------------------------------------------------
+
+
+class RetiredStateKeysAreStripped(unittest.TestCase):
+    """A dead key left in the state file is misleading, not harmless.
+
+    `halted: true` sitting in _live_state.json after the halt moved into
+    core.safety reads like a live halt to anyone inspecting the file, and
+    `owned` reads like a position record on a system whose whole point is
+    that it has none.
+    """
+
+    def setUp(self):
+        self._tmp = Path(tempfile.mkdtemp())
+        self._orig = T.STATE_PATH
+        T.STATE_PATH = self._tmp / "state.json"
+
+    def tearDown(self):
+        T.STATE_PATH = self._orig
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_position_and_safety_keys_are_dropped_on_load(self):
+        T.STATE_PATH.write_text(json.dumps({
+            "watching": {"a": 1}, "day": "2026-10-17", "opened_today": 2,
+            "owned": {"HYPE": {"entry": 1.0}}, "pending": {"ZRO": {}},
+            "halted": True, "halt_kind": "manual", "halt_reason": "old",
+            "realised_today": -12.0, "equity_samples": [["t", 1.0]],
+            "equity_peak": 900.0, "loss_streak": 3, "forced": {"X": "t"}}))
+        st = T.load_state()
+        for dead in ("owned", "pending", "halted", "halt_kind", "halt_reason",
+                     "realised_today", "equity_samples", "equity_peak",
+                     "loss_streak", "forced"):
+            self.assertNotIn(dead, st, f"{dead} survived the load")
+        # and the strategy state it legitimately owns is untouched
+        self.assertEqual(st["watching"], {"a": 1})
+        self.assertEqual(st["opened_today"], 2)
+
+    def test_a_corrupt_file_is_still_fatal(self):
+        """Stripping dead keys must not become 'repair whatever is there'."""
+        T.STATE_PATH.write_text('{"watching": ')
+        with self.assertRaises(SystemExit):
+            T.load_state()

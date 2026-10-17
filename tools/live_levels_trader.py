@@ -133,11 +133,33 @@ def iso_to_ms(ts: str) -> Optional[int]:
 # morning and were back within a pass.
 #
 # day_open_equity / _equity_for_day_open*: the per-day drawdown reference,
-# replaced by the rolling equity_samples window.
+# replaced by a rolling window.
+#
+# owned / pending: what the account holds. Read from the venue now. Leaving
+# them in the file is actively misleading -- the whole point is that this
+# file cannot express a position -- so they are stripped on load.
+#
+# halted / halt_reason / halt_kind: core.safety.HaltState owns the halt. A
+# stale `halted: true` in here looks like a live halt and is not one.
+#
+# realised_today / equity_samples / equity_peak / loss_streak: the loss
+# limits read equity and the losing run is derived from fills, so none of
+# these counters exists any more.
 RETIRED_STATE_KEYS = {
     "day_open_equity",
     "_equity_for_day_open",
     "_equity_for_day_open_day",
+    "owned",
+    "pending",
+    "halted",
+    "halt_reason",
+    "halt_kind",
+    "realised_today",
+    "equity_samples",
+    "equity_peak",
+    "loss_streak",
+    "streak_cooldown_until",
+    "forced",
 }
 
 
