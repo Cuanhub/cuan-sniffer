@@ -872,6 +872,12 @@ RETAIN_WAITING_DAYS = _i("LEVELS_RETAIN_WAITING_DAYS", 14)
 LOG_ROTATE_MB = _f("LEVELS_LOG_ROTATE_MB", 25.0)
 LOG_KEEP_GENERATIONS = _i("LEVELS_LOG_KEEP_GENERATIONS", 6)
 
+# The stderr streams rotate on a far smaller cap, because they are normally
+# EMPTY: anything in one is a traceback. 183KB of them accumulated in
+# trader.err.log from a half-edited working tree, referencing lines that no
+# longer existed -- the first thing anyone tailing that file would believe.
+ERR_ROTATE_KB = _f("LEVELS_ERR_ROTATE_KB", 64.0)
+
 
 # ---- rule 10: what a halt does about positions already open ---------------
 # AUDIT D-1. halt() blocked new entries and checked nothing else, so the

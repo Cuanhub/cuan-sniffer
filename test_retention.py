@@ -14,6 +14,8 @@ Nothing is deleted; pruned rows go to a monthly gzip under data/archive/.
 
 import csv
 import gzip
+import pathlib
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -283,3 +285,45 @@ class LogRotation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StderrLogsRotateOnASmallerCap(unittest.TestCase):
+    """A stderr stream is normally empty, so anything in one is a traceback.
+
+    trader.err.log held 183KB of NameErrors from a half-edited working tree,
+    referencing lines that no longer existed -- the first thing anyone
+    tailing that file would have seen and believed. The stdout cap of 25MB
+    would never have touched it.
+    """
+
+    def test_an_err_log_over_the_kb_cap_rotates(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "trader.err.log"
+            p.write_bytes(b"Traceback...\n" * 8000)      # ~104KB
+            res = R.rotate_log(p, apply=True,
+                               min_bytes=R.ERR_ROTATE_KB * 1024)
+            self.assertEqual(res["rotated"], 1)
+            self.assertEqual(p.stat().st_size, 0, "not truncated in place")
+            gz = list((p.parent / "rotated").glob("trader.err.log.*.gz"))
+            self.assertEqual(len(gz), 1, "the content was not preserved")
+
+    def test_an_err_log_under_the_cap_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "trader.err.log"
+            p.write_text("one warning\n")
+            self.assertIsNone(R.rotate_log(p, apply=True,
+                                           min_bytes=R.ERR_ROTATE_KB * 1024))
+
+    def test_the_stdout_cap_would_never_have_caught_it(self):
+        """Why this needed its own cap rather than reusing the existing one."""
+        self.assertLess(R.ERR_ROTATE_KB * 1024,
+                        R.LOG_ROTATE_MB * 1024 * 1024)
+        self.assertLess(183 * 1024, R.LOG_ROTATE_MB * 1024 * 1024,
+                        "183KB is far under the stdout cap, as it was")
+        self.assertGreater(183 * 1024, R.ERR_ROTATE_KB * 1024)
+
+    def test_every_running_job_has_both_streams_covered(self):
+        for job in ("trader", "scanner", "protect", "telegram"):
+            self.assertIn(f"{job}.err.log", R.ERR_LOGS, f"{job} stderr")
+        for job in ("trader", "scanner", "protect", "telegram"):
+            self.assertIn(f"{job}.log", R.ROTATABLE, f"{job} stdout")

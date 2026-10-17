@@ -38,14 +38,18 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from research.levels.config import (                              # noqa: E402
     RETAIN_FOREVER_ACTIONS, RETAIN_DECISION_DAYS, RETAIN_WAITING_DAYS,
-    LOG_ROTATE_MB, LOG_KEEP_GENERATIONS, WATCH_TTL_HOURS,
+    LOG_ROTATE_MB, LOG_KEEP_GENERATIONS, ERR_ROTATE_KB, WATCH_TTL_HOURS,
 )
 
 DATA = pathlib.Path(__file__).resolve().parent.parent / "research/levels/data"
 ARCHIVE = DATA / "archive"
 TRADE_LOG = DATA / "live_trades.csv"
 LOG_DIR = pathlib.Path.home() / "Library/Logs/cuan-sniffer"
-ROTATABLE = ("trader.log", "scanner.log")
+ROTATABLE = ("trader.log", "scanner.log", "protect.log", "telegram.log")
+# The stderr streams rotate too, on ERR_ROTATE_KB rather than LOG_ROTATE_MB.
+# They are normally empty, so anything in one is a traceback.
+ERR_LOGS = ("trader.err.log", "scanner.err.log", "protect.err.log",
+            "telegram.err.log", "retention.err.log")
 DATA_LOGS = ("_fetch_failures.log",)
 
 # A skip that is a WAIT, not a refusal. Keyed on the result enum the trader
@@ -160,8 +164,13 @@ def prune_trade_log(apply: bool, now: Optional[datetime] = None
     return counts, months
 
 
-def rotate_log(path: pathlib.Path, apply: bool) -> Optional[Dict[str, int]]:
+def rotate_log(path: pathlib.Path, apply: bool,
+               min_bytes: Optional[float] = None) -> Optional[Dict[str, int]]:
     """Copy-truncate `path` into a gzip if it is over the size cap.
+
+    `min_bytes` overrides the cap, for the stderr streams: those rotate on
+    64KB rather than 25MB, because a stderr stream with anything in it at all
+    is a stream with a traceback in it.
 
     Copy-truncate, not rename: launchd holds these fds open in append mode,
     so a renamed file leaves the writer appending to an orphaned inode.
@@ -177,7 +186,8 @@ def rotate_log(path: pathlib.Path, apply: bool) -> Optional[Dict[str, int]]:
     if not path.exists():
         return None
     size = path.stat().st_size
-    if size < LOG_ROTATE_MB * 1024 * 1024:
+    cap = (LOG_ROTATE_MB * 1024 * 1024) if min_bytes is None else min_bytes
+    if size < cap:
         return None
     if not apply:
         return {"bytes": size, "rotated": 0}
@@ -229,9 +239,15 @@ def main() -> int:
                   + (f"  (+{counts['caught_up_bytes']}B appended mid-run, "
                      f"carried over)" if counts.get("caught_up_bytes") else ""))
 
-    print(f"\n  logs (rotate over {LOG_ROTATE_MB:g}MB, "
+    print(f"\n  logs (stderr over {ERR_ROTATE_KB:g}KB, stdout over {LOG_ROTATE_MB:g}MB, "
           f"keep {LOG_KEEP_GENERATIONS})")
     any_log = False
+    for name in ERR_LOGS:
+        r = rotate_log(LOG_DIR / name, args.apply,
+                       min_bytes=ERR_ROTATE_KB * 1024)
+        if r:
+            print(f"    {name:28} {r['bytes'] / 1024:>8.1f}KB  "
+                  f"{'rotated' if r['rotated'] else 'would rotate'}")
     for name in ROTATABLE:
         r = rotate_log(LOG_DIR / name, args.apply)
         if r:
