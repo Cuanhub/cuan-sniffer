@@ -40,3 +40,23 @@ the code.
   work, which is the `halt(...); return 1` path in the old main loop.
 - **The telegram control process is live** (pid 41917) and imports the modules
   being replaced. Commits are additive until the last one for this reason.
+
+## Found while building, noted rather than built
+
+- **`execute.close` cannot close a position whose limit price has no
+  representation.** `round_price` refuses rather than substituting (a real fix
+  — the old code substituted the smallest increment), but that means a
+  degenerate mark price makes a position both unprotectable and uncloseable.
+  `flatten_all` reports the failure loudly, which is the honest outcome. A
+  market-order fallback would close it, but that is a new path and not in the
+  plan. Only reachable at mark prices that cannot occur for a real perp
+  (`test_a_stop_that_would_round_across_the_mark_is_refused` uses 1e-9 on BTC).
+- **`flatten_all` cancels resting orders before closing** (rule 5 as written).
+  That briefly removes the stops. If the venue then goes down for the full
+  120s window, the positions are left both open and stopless, where before
+  they at least had stops. The 60s protection loop re-places them on its next
+  cycle, so the exposure is bounded by that, not by the outage. Worth knowing;
+  the alternative ordering has its own problem (a stop firing mid-flatten
+  double-reduces).
+- **A `TP` is best-effort and never flattens.** A missing take-profit costs
+  upside, not safety. Only the stop is a safety invariant.
