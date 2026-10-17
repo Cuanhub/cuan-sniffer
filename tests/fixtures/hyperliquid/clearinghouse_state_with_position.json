@@ -1,0 +1,43 @@
+{
+  "assetPositions": [
+    {
+      "position": {
+        "coin": "ETH",
+        "szi": "0.0335",
+        "entryPx": "2986.3",
+        "positionValue": "100.02765",
+        "unrealizedPnl": "-0.0134",
+        "liquidationPx": "2866.26936529",
+        "marginUsed": "4.967826",
+        "maxLeverage": 50,
+        "leverage": {
+          "type": "isolated",
+          "value": 20,
+          "rawUsd": "-95.059824"
+        },
+        "cumFunding": {
+          "allTime": "514.085417",
+          "sinceChange": "0.0",
+          "sinceOpen": "0.0"
+        },
+        "returnOnEquity": "-0.0026789"
+      },
+      "type": "oneWay"
+    }
+  ],
+  "marginSummary": {
+    "accountValue": "13109.482328",
+    "totalMarginUsed": "4.967826",
+    "totalNtlPos": "100.02765",
+    "totalRawUsd": "13009.454678"
+  },
+  "crossMarginSummary": {
+    "accountValue": "13104.514502",
+    "totalMarginUsed": "0.0",
+    "totalNtlPos": "0.0",
+    "totalRawUsd": "13104.514502"
+  },
+  "crossMaintenanceMarginUsed": "0.0",
+  "withdrawable": "13104.514502",
+  "time": 1708622398623
+}

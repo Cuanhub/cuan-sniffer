@@ -1,0 +1,38 @@
+[
+  {
+    "coin": "NIL",
+    "side": "A",
+    "limitPx": "0.075000",
+    "sz": "1331.0",
+    "oid": 577085593001,
+    "timestamp": 1792167233478,
+    "triggerCondition": "Price below 0.075000",
+    "isTrigger": true,
+    "triggerPx": "0.075000",
+    "children": [],
+    "isPositionTpsl": false,
+    "reduceOnly": true,
+    "orderType": "Stop Market",
+    "origSz": "1331.0",
+    "tif": null,
+    "cloid": null
+  },
+  {
+    "coin": "NIL",
+    "side": "A",
+    "limitPx": "0.095000",
+    "sz": "1331.0",
+    "oid": 577085593002,
+    "timestamp": 1792184602553,
+    "triggerCondition": "Price above 0.095000",
+    "isTrigger": true,
+    "triggerPx": "0.095000",
+    "children": [],
+    "isPositionTpsl": false,
+    "reduceOnly": true,
+    "orderType": "Take Profit Market",
+    "origSz": "1331.0",
+    "tif": null,
+    "cloid": null
+  }
+]

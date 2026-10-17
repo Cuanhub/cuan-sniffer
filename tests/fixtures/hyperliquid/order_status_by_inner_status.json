@@ -1,0 +1,200 @@
+[
+  {
+    "order": {
+      "coin": "LTC",
+      "side": "B",
+      "limitPx": "56.167",
+      "sz": "22.66",
+      "oid": 549652894820,
+      "timestamp": 1789802614061,
+      "triggerCondition": "N/A",
+      "isTrigger": false,
+      "triggerPx": "0.0",
+      "children": [],
+      "isPositionTpsl": false,
+      "reduceOnly": false,
+      "orderType": "Limit",
+      "origSz": "22.66",
+      "tif": "Gtc",
+      "cloid": null
+    },
+    "status": "canceled",
+    "statusTimestamp": 1789816590094
+  },
+  {
+    "order": {
+      "coin": "NIL",
+      "side": "A",
+      "limitPx": "0.082703",
+      "sz": "0.0",
+      "oid": 577179003536,
+      "timestamp": 1792196289315,
+      "triggerCondition": "N/A",
+      "isTrigger": false,
+      "triggerPx": "0.0",
+      "children": [],
+      "isPositionTpsl": false,
+      "reduceOnly": true,
+      "orderType": "Limit",
+      "origSz": "23.0",
+      "tif": "Ioc",
+      "cloid": null
+    },
+    "status": "filled",
+    "statusTimestamp": 1792196289315
+  },
+  {
+    "order": {
+      "coin": "ZRO",
+      "side": "A",
+      "limitPx": "2.0014",
+      "sz": "89.1",
+      "oid": 577178422995,
+      "timestamp": 1792196225978,
+      "triggerCondition": "N/A",
+      "isTrigger": false,
+      "triggerPx": "0.0",
+      "children": [],
+      "isPositionTpsl": false,
+      "reduceOnly": true,
+      "orderType": "Limit",
+      "origSz": "89.1",
+      "tif": "Ioc",
+      "cloid": null
+    },
+    "status": "iocCancelRejected",
+    "statusTimestamp": 1792196225978
+  },
+  {
+    "order": {
+      "coin": "NIL",
+      "side": "A",
+      "limitPx": "0.082703",
+      "sz": "23.0",
+      "oid": 577179003536,
+      "timestamp": 1792196289315,
+      "triggerCondition": "N/A",
+      "isTrigger": false,
+      "triggerPx": "0.0",
+      "children": [],
+      "isPositionTpsl": false,
+      "reduceOnly": true,
+      "orderType": "Limit",
+      "origSz": "23.0",
+      "tif": "Ioc",
+      "cloid": null
+    },
+    "status": "open",
+    "statusTimestamp": 1792196289315
+  },
+  {
+    "order": {
+      "coin": "ENA",
+      "side": "B",
+      "limitPx": "0.16819",
+      "sz": "1907.0",
+      "oid": 548594194662,
+      "timestamp": 1789715281347,
+      "triggerCondition": "N/A",
+      "isTrigger": false,
+      "triggerPx": "0.0",
+      "children": [],
+      "isPositionTpsl": false,
+      "reduceOnly": false,
+      "orderType": "Limit",
+      "origSz": "1907.0",
+      "tif": "Ioc",
+      "cloid": null
+    },
+    "status": "perpMarginRejected",
+    "statusTimestamp": 1789715281347
+  },
+  {
+    "order": {
+      "coin": "NIL",
+      "side": "A",
+      "limitPx": "0.089162",
+      "sz": "1331.0",
+      "oid": 577085593133,
+      "timestamp": 1792184602553,
+      "triggerCondition": "Price above 0.089162",
+      "isTrigger": true,
+      "triggerPx": "0.089162",
+      "children": [],
+      "isPositionTpsl": false,
+      "reduceOnly": true,
+      "orderType": "Take Profit Market",
+      "origSz": "1331.0",
+      "tif": null,
+      "cloid": null
+    },
+    "status": "reduceOnlyCanceled",
+    "statusTimestamp": 1792196289315
+  },
+  {
+    "order": {
+      "coin": "ARB",
+      "side": "B",
+      "limitPx": "0.127",
+      "sz": "2217.3",
+      "oid": 391897055081,
+      "timestamp": 1776824993387,
+      "triggerCondition": "N/A",
+      "isTrigger": false,
+      "triggerPx": "0.0",
+      "children": [],
+      "isPositionTpsl": false,
+      "reduceOnly": true,
+      "orderType": "Limit",
+      "origSz": "2217.3",
+      "tif": "Ioc",
+      "cloid": null
+    },
+    "status": "reduceOnlyRejected",
+    "statusTimestamp": 1776824993387
+  },
+  {
+    "order": {
+      "coin": "ZEC",
+      "side": "A",
+      "limitPx": "1218.4",
+      "sz": "0.0",
+      "oid": 540311303840,
+      "timestamp": 1788962308471,
+      "triggerCondition": "Price above 1353.8",
+      "isTrigger": true,
+      "triggerPx": "1353.8",
+      "children": [],
+      "isPositionTpsl": true,
+      "reduceOnly": true,
+      "orderType": "Take Profit Market",
+      "origSz": "0.0",
+      "tif": null,
+      "cloid": null
+    },
+    "status": "siblingFilledCanceled",
+    "statusTimestamp": 1788967288257
+  },
+  {
+    "order": {
+      "coin": "LINK",
+      "side": "A",
+      "limitPx": "12.175",
+      "sz": "14.4",
+      "oid": 576819950015,
+      "timestamp": 1792167233478,
+      "triggerCondition": "Price below 12.175",
+      "isTrigger": true,
+      "triggerPx": "12.175",
+      "children": [],
+      "isPositionTpsl": false,
+      "reduceOnly": true,
+      "orderType": "Stop Market",
+      "origSz": "14.4",
+      "tif": null,
+      "cloid": null
+    },
+    "status": "triggered",
+    "statusTimestamp": 1792171100020
+  }
+]
