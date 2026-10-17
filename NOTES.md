@@ -72,7 +72,7 @@ the code.
 - **A `TP` is best-effort and never flattens.** A missing take-profit costs
   upside, not safety. Only the stop is a safety invariant.
 
-## Integration status (deliberate stopping point)
+## Integration status (SUPERSEDED -- see "Integration landed" below)
 
 The five `core/` modules and `tools/protect_loop.py` are built, tested and
 mypy-clean. **The old code is still in place and still running.** Nothing has
@@ -190,3 +190,62 @@ no plist, referenced only from docs and config. Working as intended.
 (`halt_kind: "manual"`, reason `"halted from Telegram: DISARMED pending…"`)
 and flat — `owned: {}`, `pending: {}`. So the deletion phase can be done
 without racing a live position.
+
+## Integration landed
+
+The deletion phase is done. `live_execution_backend.py`,
+`execution_backend.py`, `live_data_guard.py` and `tools/reconcile_loop.py`
+are gone, along with 1,043 lines of execution and safety functions inside
+`live_levels_trader.py`. Both callers go through `core/`.
+
+### Running configuration
+
+| job | state |
+|---|---|
+| `com.cuansniffer.trader` | running, **DRY RUN** (`LEVELS_LIVE_ARMED=no` in the installed plist) |
+| `com.cuansniffer.protect` | running, 60s cycle — **newly installed** |
+| `com.cuansniffer.telegram` | running, on the new core |
+| `com.cuansniffer.scanner` | running |
+| `com.cuansniffer.retention` | periodic |
+
+The halt is still `manual` and was not cleared: arming is the operator's.
+
+### What the protect job may do to the account
+
+It is NOT read-only, and the plist it was derived from said it was. It places
+reduce-only stops, cancels them, and calls `flatten_all` — which cancels
+every resting order and market-closes every position the venue holds. It does
+that when a position cannot be given a valid stop after two attempts.
+
+**Consequence worth knowing: a position opened by hand at the venue will have
+a stop placed on it, and will be market-closed if no valid stop price can be
+found for it.** There is no arming gate on this, deliberately — protection
+must work when nobody is trading, because then nothing else is looking. If
+you want to hold a manual position outside the bot's reach, unload this job
+first.
+
+### Two things I caused, recorded for honesty
+
+- A dry `--once` run during the integration drained four stale queued halts
+  and overwrote the halt reason. The original text, `"DISARMED pending C-1
+  and D-1 merge (audit Phase 2)"`, now survives only in git history and in
+  this file.
+- `trader.err.log` holds ~183KB of tracebacks from 18:06, when launchd
+  restarted the trader against a half-edited working tree mid-integration.
+  They reference `backend` at line 751, which no longer exists. Nothing has
+  been written to it since the restart. Left in place per the "delete
+  nothing" stance, but it will mislead anyone reading the tail of that file.
+
+### Line counts, measured
+
+| | total |
+|---|---|
+| before (execution + safety) | 3,720 |
+| after (`core/` + `protect_loop` + glue left in the trader) | 2,199 |
+
+41%, not the 85% the plan projected, and well over the "well under 600"
+target. The target was set when rules 3, 6 and 9 removed resting bids, the
+stand-down and the acting loss limits; restoring all three on evidence added
+roughly 470 code lines. The scope moved, so the target moved with it — that
+should have been re-forecast when the instruction changed, not reported at
+the end.
