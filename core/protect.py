@@ -230,11 +230,35 @@ def run_once(venue: Venue, meta: Optional[MetaStore] = None) -> List[Result]:
         return []
     expire_bids(venue)
     resting = venue.open_orders()
+    # An UNREADABLE order book is not evidence that a bid is gone.
+    #
+    # This read used to be `(resting or [])`, so a 429 on it produced an empty
+    # `bidding` set -- and _forget_closed then deleted the plan for every
+    # resting bid, because nothing appeared to be holding one. The bid was
+    # still at the venue, so it filled later with no metadata, was adopted
+    # with a default MAX_RISK_PCT stop, and got no take-profit at all because
+    # an adopted plan carries planned_tp 0.0.
+    #
+    # It cost real money on 2026-10-18: NEAR's plan was dropped that way, it
+    # took a 3% default stop instead of its 1.1% band stop, and lost $5.44
+    # against a planned $2.02. WLD's plan went the same way and its position
+    # then ran straight through its target with no order to take it. ZEC, the
+    # one position whose plan survived the window, got both its real stop and
+    # its TP and behaved exactly as designed.
+    #
+    # So forgetting is now conditional on having actually READ the book.
+    # Deferring cleanup one cycle costs nothing; forgetting a live plan is
+    # how a planned trade silently becomes an unplanned one.
+    readable = resting is not None
+    if not readable:
+        safety.record_error("open_orders", "venue unreadable -- keeping plans")
     bidding = {o.coin for o in (resting or []) if o.is_entry}
     if not positions:
         print("[PROTECT] flat" + (f", bidding on {sorted(bidding)}"
-                                  if bidding else ""))
-        _forget_closed(store, bidding)
+                                  if bidding else "")
+              + ("" if readable else " (order book unreadable -- plans kept)"))
+        if readable:
+            _forget_closed(store, bidding)
         return []
 
     results: List[Result] = []
@@ -267,7 +291,8 @@ def run_once(venue: Venue, meta: Optional[MetaStore] = None) -> List[Result]:
                 f"The venue holds {pos.size:g}. Retrying next cycle.",
                 key=f"protect_unknown_{coin}", cooldown_sec=1800)
 
-    _forget_closed(store, set(positions) | bidding)
+    if readable:
+        _forget_closed(store, set(positions) | bidding)
     return results
 
 

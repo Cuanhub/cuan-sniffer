@@ -439,3 +439,89 @@ class TheLoopCannotOpenAPosition(unittest.TestCase):
         self.assertIn("cannot OPEN one", txt,
                       "the plist must state the guarantee that IS true")
 
+
+
+# ── an unreadable order book must not delete a live plan ───────────────────
+
+def _unreadable_orders(fake):
+    """Make only frontend_open_orders fail, as a 429 on that call does."""
+    fake.frontend_open_orders = lambda *a, **k: (_ for _ in ()).throw(
+        RuntimeError("429 Too Many Requests"))
+
+
+def test_a_resting_bids_plan_survives_an_unreadable_order_book(store):
+    """The bug that cost $5.44 on 2026-10-18.
+
+    `resting = venue.open_orders()` was read as `(resting or [])`, so a 429
+    on that one call produced an empty `bidding` set -- and _forget_closed
+    then deleted the plan for every resting bid, because nothing appeared to
+    be holding one. The bid was still at the venue. It filled later with no
+    metadata, was adopted with a default MAX_RISK_PCT stop instead of its
+    band stop, and got no take-profit at all, because an adopted plan carries
+    planned_tp 0.0.
+
+    NEAR lost $5.44 that way against a planned $2.02 -- a 3% default stop
+    where the band stop was 1.1% -- and WLD ran through its target with no
+    order to take it.
+    """
+    fake = FakeHL(positions={}, mid=100.0)          # flat, bid resting
+    store.put("HYPE", planned(stop=90.0, tp=120.0))
+    _unreadable_orders(fake)
+    protect.run_once(build_venue(fake), store)
+    kept = store.get("HYPE")
+    assert kept is not None, "the plan was deleted on an unreadable read"
+    assert kept.planned_stop == 90.0
+    assert kept.planned_tp == 120.0
+
+
+def test_a_held_positions_plan_also_survives_it(store):
+    """Same hazard on the non-flat branch, which forgets against
+    `set(positions) | bidding`."""
+    fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    store.put("HYPE", planned(stop=90.0, tp=120.0))
+    store.put("ZRO", planned(stop=5.0, tp=9.0))     # a bid elsewhere
+    _unreadable_orders(fake)
+    protect.run_once(build_venue(fake), store)
+    assert store.get("ZRO") is not None, "another coin's plan was deleted"
+    assert store.get("ZRO").planned_tp == 9.0
+
+
+def test_the_unreadable_read_is_recorded_not_silent(store):
+    """It used to be the one failure that produced no error at all, which is
+    why it ran for a day unnoticed."""
+    fake = FakeHL(positions={}, mid=100.0)
+    store.put("HYPE", planned(stop=90.0, tp=120.0))
+    _unreadable_orders(fake)
+    safety.reset_errors()
+    protect.run_once(build_venue(fake), store)
+    # record_error has no public reader; the rail's own list is the record.
+    assert safety._errors, "no error was recorded"
+    assert any("open_orders" in src for _, src in safety._errors), \
+        safety._errors
+
+
+def test_a_readable_book_still_forgets_a_bid_that_really_went(store):
+    """The cleanup must still work, or metadata grows without bound."""
+    fake = FakeHL(positions={}, mid=100.0)          # flat, no orders at all
+    store.put("HYPE", planned(stop=90.0, tp=120.0))
+    protect.run_once(build_venue(fake), store)
+    assert store.get("HYPE") is None, "a genuinely closed plan was kept"
+
+
+def test_a_plan_that_survives_gets_its_real_stop_and_its_tp(store):
+    """End to end: the plan is kept through an unreadable cycle, and the next
+    readable cycle gives the position its PLANNED stop and a take-profit --
+    not the 3% default and no TP."""
+    fake = FakeHL(positions={}, mid=100.0)
+    store.put("HYPE", planned(stop=90.0, tp=120.0))
+    _unreadable_orders(fake)
+    protect.run_once(build_venue(fake), store)      # bid resting, book 429s
+
+    fake2 = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    protect.run_once(build_venue(fake2), store)     # the bid filled
+    trigs = [o for o in fake2.resting if o.get("isTrigger") or
+             o.get("triggerPx")]
+    assert trigs, f"no trigger orders placed: {fake2.resting}"
+    pxs = sorted(float(o.get("triggerPx") or 0) for o in trigs)
+    assert any(abs(x - 90.0) < 1e-6 for x in pxs), f"no planned stop: {pxs}"
+    assert any(abs(x - 120.0) < 1e-6 for x in pxs), f"no take-profit: {pxs}"
