@@ -199,7 +199,13 @@ def get_updates(offset: int = 0, timeout: int = POLL_TIMEOUT_SEC):
         user = str(((msg.get("from") or {}).get("id")) or "")
         if text:
             out.append({"update_id": uid, "chat_id": chat,
-                        "user_id": user, "text": text})
+                        "user_id": user, "text": text,
+                        # Telegram's own send time, so a caller can refuse a
+                        # command older than it is willing to obey. Anything
+                        # unacknowledged is RE-DELIVERED, so an instance that
+                        # starts at offset 0 replays the whole backlog -- see
+                        # the staleness check in tools/telegram_control.py.
+                        "at": int(msg.get("date") or 0)})
     return out, nxt, True
 
 

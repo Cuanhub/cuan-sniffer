@@ -16,6 +16,7 @@ Shape of the design, because the tests only make sense against it:
 import json
 import os
 import pathlib
+import sys
 import time
 import unittest
 from unittest import mock
@@ -719,3 +720,176 @@ class RepeatedCommandsCollapse(unittest.TestCase):
             done = T.drain_control_queue({}, v, h)
         self.assertEqual(len(done), 1)
         self.assertIn("9", h.active()["reason"])
+
+
+class AQueuedHaltDoesNotFlatten(unittest.TestCase):
+    """The regression that cost a live position on 2026-10-17.
+
+    `/halt`'s own reply says "blocks new entries only -- open positions keep
+    their stops. Use /closeall to flatten." It flattened anyway: every queued
+    halt used to run with backend=None (REVIEW.md finding 4), so the flatten
+    inside safety.halt was a silent no-op and the promise held by accident.
+    Passing the venue in to fix the protection check armed a flatten that had
+    never once fired, and it market-closed ARB.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()) / "q.json"
+        self._t = T.CONTROL_QUEUE
+        T.CONTROL_QUEUE = self.tmp
+
+    def tearDown(self):
+        T.CONTROL_QUEUE = self._t
+
+    def _drain(self, cmd, arg=""):
+        self.tmp.write_text(json.dumps([{"cmd": cmd, "arg": arg}]))
+        execute.SETTLE_SEC = 0.0
+        safety.FLATTEN_PAUSE_SEC = 0.0
+        fake = FakeHL(positions={"ARB": 974.2}, mid=0.18539)
+        h = _halt()
+        with mock.patch.object(T, "save_state"), \
+                mock.patch.object(T.notify, "send"):
+            done = T.drain_control_queue({}, build_venue(fake), h)
+        return fake, h, done
+
+    def test_the_position_survives_the_halt(self):
+        fake, h, done = self._drain("halt", "requested from Telegram")
+        self.assertIsNotNone(h.active(), "the halt must still be applied")
+        self.assertEqual(h.active()["kind"], "manual")
+        self.assertEqual(fake.pos.get("ARB"), 974.2,
+                         "a /halt market-closed the position it promised to "
+                         "leave alone")
+        self.assertTrue(done)
+
+    def test_the_halt_places_and_cancels_nothing(self):
+        """Not just "the position is still open" -- nothing was sent at all.
+        A close that failed would also leave the position open."""
+        fake, _, _ = self._drain("halt", "requested from Telegram")
+        self.assertEqual(fake.sent, [], f"orders were sent: {fake.sent}")
+        self.assertEqual(fake.cancelled, [],
+                         f"orders were cancelled: {fake.cancelled}")
+
+    def test_a_pause_leaves_the_position_alone_too(self):
+        """It already did. Pinned so the two branches cannot drift apart."""
+        fake, h, _ = self._drain("pause", "2")
+        self.assertEqual(fake.pos.get("ARB"), 974.2)
+        self.assertEqual(h.active()["kind"], "auto")
+
+    def test_the_reply_the_operator_reads_still_matches_the_behaviour(self):
+        """The bug was a promise the code stopped keeping, so the promise is
+        part of the test. If someone restores the flatten, this fails next to
+        the assertion above and says which of the two is wrong."""
+        with mock.patch.object(C, "QUEUE", self.tmp):
+            reply = C.Controller(None).handle("/halt", {"owned": {}})
+        self.assertIn("new entries only", reply)
+        self.assertIn("keep their stops", reply)
+        self.assertIn("closeall", reply)
+
+    def test_the_equity_rails_still_flatten(self):
+        """Flattening is not gone, it is only where it is asked for. A rail
+        is breached ON exposure, so its halt must remove it."""
+        execute.SETTLE_SEC = 0.0
+        safety.FLATTEN_PAUSE_SEC = 0.0
+        fake = FakeHL(positions={"ARB": 974.2}, mid=0.18539)
+        with mock.patch.object(safety.notify, "send"):
+            safety.halt(build_venue(fake), _halt(), "drawdown rail",
+                        kind=safety.AUTO)
+        self.assertEqual(fake.pos.get("ARB", 0.0), 0.0,
+                         "an AUTO rail halt must flatten")
+
+
+class AReplayedCommandIsRefused(unittest.TestCase):
+    """Telegram re-delivers anything unacknowledged, so an instance that
+    starts at offset 0 replays the whole backlog. That is how a `/halt` sent
+    hours earlier during a disarm was re-enqueued at 14:17:11Z on 2026-10-17
+    -- while two processes fought over the same bot token (409 Conflict,
+    warned about three times in that same log) and left it unacknowledged.
+
+    A replay is identical to a fresh command by content, so age is the only
+    thing that can tell them apart.
+    """
+
+    def setUp(self):
+        self._env = dict(os.environ)
+        os.environ["TELEGRAM_BOT_TOKEN"] = "t"
+        os.environ["TELEGRAM_CHAT_ID"] = "42"
+        self.dir = Path(tempfile.mkdtemp())
+        self._q, self._o = C.QUEUE, C.OFFSET
+        C.QUEUE = self.dir / "q.json"
+        C.OFFSET = self.dir / "off.json"
+
+    def tearDown(self):
+        C.QUEUE, C.OFFSET = self._q, self._o
+        os.environ.clear()
+        os.environ.update(self._env)
+
+    def _poll(self, age_sec, text="/halt"):
+        """Run one pass of the real poll loop over one update."""
+        upd = [{"update_id": 1, "chat_id": "42", "user_id": "7",
+                "text": text, "at": int(time.time() - age_sec)}]
+        sent = []
+        with mock.patch.object(C.notify, "get_updates",
+                               return_value=(upd, 2, True)), \
+                mock.patch.object(C.notify, "send",
+                                  side_effect=lambda m, **k: sent.append(m)), \
+                mock.patch.object(sys, "argv",
+                                  ["telegram_control", "--once",
+                                   "--no-venue"]):
+            C.main()
+        queued = (json.loads(C.QUEUE.read_text())
+                  if C.QUEUE.exists() else [])
+        return queued, sent
+
+    def test_a_fresh_command_is_obeyed(self):
+        queued, _ = self._poll(age_sec=5)
+        self.assertEqual([q["cmd"] for q in queued], ["halt"])
+
+    def test_a_replayed_command_is_not_queued(self):
+        queued, _ = self._poll(age_sec=C.COMMAND_MAX_AGE_SEC + 60)
+        self.assertEqual(queued, [],
+                         "a stale /halt reached the queue and would halt and "
+                         "-- before the fix -- flatten")
+
+    def test_the_operator_is_told_it_was_dropped(self):
+        """Silently swallowing a command is its own trap: the operator would
+        believe the bot was halted when it was not."""
+        _, sent = self._poll(age_sec=C.COMMAND_MAX_AGE_SEC + 60)
+        self.assertTrue(any("stale" in m.lower() for m in sent), sent)
+
+    def test_the_stale_command_is_acknowledged_so_it_cannot_return(self):
+        """Dropping it without advancing the offset would replay it for
+        ever, which is worse than obeying it once."""
+        self._poll(age_sec=C.COMMAND_MAX_AGE_SEC + 60)
+        self.assertEqual(json.loads(C.OFFSET.read_text())["offset"], 2)
+
+    def test_an_update_with_no_date_is_still_obeyed(self):
+        """Old Telegram payloads and the recorded fixtures carry no `date`.
+        Refusing those would break the channel to fix a replay."""
+        upd = [{"update_id": 1, "chat_id": "42", "user_id": "7",
+                "text": "/halt"}]
+        with mock.patch.object(C.notify, "get_updates",
+                               return_value=(upd, 2, True)), \
+                mock.patch.object(C.notify, "send"), \
+                mock.patch.object(sys, "argv",
+                                  ["telegram_control", "--once",
+                                   "--no-venue"]):
+            C.main()
+        self.assertEqual(
+            [q["cmd"] for q in json.loads(C.QUEUE.read_text())], ["halt"])
+
+    def test_the_window_outlasts_a_confirmation(self):
+        """A token the operator is given 2 minutes to return must not be
+        killable by the staleness check instead."""
+        self.assertGreater(C.COMMAND_MAX_AGE_SEC, C.CONFIRM_TTL_SEC * 2)
+
+    def test_get_updates_carries_the_send_time(self):
+        """The check is only as good as the field it reads."""
+        body = {"ok": True, "result": [
+            {"update_id": 5, "message": {"text": "/halt", "date": 1760000000,
+                                         "chat": {"id": 42},
+                                         "from": {"id": 7}}}]}
+        with mock.patch.object(notify, "_transport",
+                               return_value=FakeResp(body)):
+            out, nxt, ok = notify.get_updates(0)
+        self.assertTrue(ok)
+        self.assertEqual(out[0]["at"], 1760000000)

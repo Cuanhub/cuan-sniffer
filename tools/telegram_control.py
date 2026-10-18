@@ -68,6 +68,24 @@ OFFSET = DATA / "_control_offset.json"
 # one the operator may have forgotten the context of.
 CONFIRM_TTL_SEC = 120
 
+# How old a command may be and still be obeyed.
+#
+# Telegram RE-DELIVERS any update that was never acknowledged, so an instance
+# that starts at offset 0 replays the entire backlog. On 2026-10-17 that is
+# exactly what happened: a `/halt` the operator had sent hours earlier during
+# a disarm was replayed, re-enqueued at 14:17:11Z, and a minute later closed a
+# live ARB position. Two processes were polling this same bot token -- `409
+# Conflict: terminated by other getUpdates request`, which this module already
+# warns about three times in that log -- and that is what left the backlog
+# unacknowledged in the first place.
+#
+# A replay is indistinguishable from a fresh command by content, so content is
+# the wrong thing to check. Age is the thing: an operator who meant a command
+# ten minutes ago still means it; one who sent it yesterday does not.
+# Comfortably longer than CONFIRM_TTL_SEC so no confirmation flow can expire
+# on this instead.
+COMMAND_MAX_AGE_SEC = 600
+
 RISKY = {"resume", "close", "closeall"}
 
 
@@ -482,6 +500,21 @@ def main() -> int:
                 print(f"[CONTROL] ignored message from chat "
                       f"{u['chat_id']} user {u['user_id']}: "
                       f"{u['text'][:60]!r}")
+                continue
+            # Refuse a replayed command before it can act. Acknowledged
+            # either way: `offset` advances past it below, which is what
+            # stops it coming round again.
+            sent_at = float(u.get("at") or 0)
+            age = time.time() - sent_at
+            if sent_at and age > COMMAND_MAX_AGE_SEC:
+                print(f"[CONTROL] IGNORED {u['text'][:40]!r} -- sent "
+                      f"{age / 60:.0f} min ago, older than "
+                      f"{COMMAND_MAX_AGE_SEC // 60} min (replayed backlog?)")
+                notify.send(
+                    f"⏳ Ignored a stale command (`{u['text'][:40]}`, sent "
+                    f"{age / 60:.0f} min ago). Telegram re-delivers "
+                    "unacknowledged messages; send it again if you meant it.",
+                    key="stale_command", cooldown_sec=3600)
                 continue
             state = read_json(STATE, {})
             print(f"[CONTROL] {u['text'][:80]!r}")

@@ -1676,10 +1676,28 @@ def drain_control_queue(state: Dict[str, Any], venue,
             if venue is None:
                 done.append("halt requested but no venue -- NOT applied")
                 continue
+            # flatten=False, because this halt must mean what the
+            # operator was told it means. `/halt`'s own reply says "blocks
+            # new entries only -- open positions keep their stops. Use
+            # /closeall to flatten", and HELP says "stop opening anything".
+            #
+            # It flattened anyway, and the regression is traceable: every
+            # queued halt used to run with backend=None (REVIEW.md finding
+            # 4), so safety.halt's flatten was a silent no-op and the
+            # promise held by accident. Passing the venue in to fix the
+            # protection check ARMED a flatten that had never once fired --
+            # and on 2026-10-17 it market-closed a live ARB position off a
+            # /halt Telegram had REPLAYED from an unacknowledged backlog.
+            #
+            # `/pause` already got this right one branch below. Flattening
+            # stays where it is asked for by name: /closeall, /close, and
+            # the equity rails in core.safety, whose halts DO flatten
+            # because exposure is the thing they are breached on.
             safety.halt(venue, halt_state,
                         f"halted from Telegram: {arg}" if arg
-                        else "halted from Telegram", kind=safety.MANUAL)
-            done.append("halted by request")
+                        else "halted from Telegram", kind=safety.MANUAL,
+                        flatten=False)
+            done.append("halted by request (positions keep their stops)")
         elif cmd == "resume":
             halt_state.clear()
             keys = state.get("alert_keys")
