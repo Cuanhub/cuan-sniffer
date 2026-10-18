@@ -128,7 +128,10 @@ class WiredAtBothFills(unittest.TestCase):
         would put setups we did not take into the set used to judge the ones
         we did."""
         import inspect
-        place = inspect.getsource(T.rest_one_bid)
+        # place_resting_bid, not rest_one_bid: the placement moved there
+        # when the pass started using it too, so a bid from the loop and
+        # a bid from --limit-entry are the same order.
+        place = inspect.getsource(T.place_resting_bid)
         fill = inspect.getsource(T.persist_filled_bids)
         self.assertNotIn("persist_traded_episode", place)
         self.assertIn("persist_traded_episode", fill)

@@ -64,6 +64,8 @@ from research.levels.trigger import (                                 # noqa: E4
     fetch_1h, level_has_held, trigger_window,
 )
 from research.levels.levels import log_sigma, sigma_distance          # noqa: E402
+from research.levels import zone_pass                                 # noqa: E402
+from research.levels import zones                                     # noqa: E402
 
 # Rails come from research/levels/config.py -- one definition each, tagged with
 # whether they rest on a measurement or on my guess.
@@ -824,28 +826,37 @@ def main():
             eq = venue.equity()
             if eq is not None:
                 equity, available = eq.usdc_total, eq.available
-        # Created here, not after the scan, so build_intents can hand the 1h
-        # bars it already fetched straight into it. Still one dict per pass:
-        # the trigger asks what price did in the last two hours, so bars must
-        # never carry across passes.
+        # The 1h bars the scan already fetched, handed straight on so the
+        # entry checks make no second request. One dict per pass: what the
+        # bar-break check asks is what price did in THIS hour.
         bars_cache: Dict[str, Any] = {}
-        # Filled by build_intents from the one contexts call it already makes,
-        # then read by the basis veto at entry. No extra request.
+        # Read by the basis veto at entry. One contexts call per pass.
         ctx_cache: Dict[str, Any] = {}
-        intents, rejected = build_intents(ro, universe, watching,
-                                          bars_out=bars_cache,
-                                          tf_cache=tf_cache,
-                                          ctx_out=ctx_cache)
+        mids: Dict[str, float] = {}
+        try:
+            cx = ro.get_perp_contexts()
+            ctx_cache.update(cx)
+            mids = {k: v["mid_px"] for k, v in cx.items() if v.get("mid_px")}
+        except Exception as e:
+            # A veto that cannot read its input must abstain, not refuse, and
+            # the scan falls back to each series' own last close for price.
+            print(f"[LEVELS_LIVE] context fetch failed ({str(e)[:80]}) -- "
+                  f"basis veto inactive this pass")
+        intents, rejected, found = zone_pass.plans_by_coin(
+            ro, universe, min_rr=MIN_RR, bars_out=bars_cache, mids=mids)
         save_state(state)
-        n_watched = sum(1 for e in intents if e.get("_watched"))
-        print(f"\n[LEVELS_LIVE] {len(intents)} setup(s) cleared the quality bar "
-              f"({n_watched} of them on the watchlist as price came back), "
-              f"{len(rejected)} rejected")
-        print(f"[LEVELS_LIVE] watching {len(watching)} level(s) for up to "
-              f"{WATCH_TTL_HOURS}h"
-              + (f"; {expired} expired this pass" if expired else ""))
+        # The candidate table, every pass, before anything is sent. The
+        # operator asked for it and the reason is in the measurement: no
+        # selection rule reproduced his own band choice better than 9 of 12,
+        # so showing only the winner would hide what it was chosen over.
+        print()
+        print(zone_pass.render_candidates(found, MIN_RR))
+        n_now = sum(1 for e in intents if e.get("zone_immediate"))
+        print(f"\n[LEVELS_LIVE] {len(intents)} band(s) tradeable "
+              f"({n_now} with price in the band, {len(intents) - n_now} "
+              f"waiting on a bid), {len(rejected)} rejected")
         for c, lp, why in rejected[:8]:
-            print(f"    reject {c:10} level={lp} -- {why}")
+            print(f"    reject {c:10} band_low={lp} -- {why}")
         if intents:
             print(f"\n{'coin':10} {'entry':>12} {'stop':>12} {'tp':>12} {'stop%':>7} "
                   f"{'size$':>9} {'risk$':>7} {'rr':>5}  flags")
@@ -906,9 +917,28 @@ def main():
                 print(f"[LEVELS_LIVE] entry spacing: {_gap:.0f}m until another "
                       f"position may open, stopping this pass")
                 break
-            outcome = execute_one(venue, meta, ep, equity, available, armed,
-                                  state, ctx_cache=ctx_cache,
-                                  bars_cache=bars_cache, watchboard=watchboard)
+            # In the band, or waiting for it. Two different orders, and the
+            # difference is the whole strategy: price inside the band is the
+            # setup and there is nothing to wait for, while price above the
+            # band gets a bid AT the band rather than a market order here.
+            #
+            # That second branch is what the 2026-10-17 failure needed. ARB
+            # was bought at market 0.18482 while its band was 0.1705-0.175;
+            # a bid at the band price cannot fill above the band.
+            if ep.get("zone_immediate"):
+                outcome = execute_one(venue, meta, ep, equity, available,
+                                      armed, state, ctx_cache=ctx_cache,
+                                      bars_cache=bars_cache,
+                                      watchboard=watchboard)
+            else:
+                rc = place_resting_bid(venue, meta, ep, equity, available,
+                                       state)
+                # A bid is a commitment, not a fill. Nothing to protect yet --
+                # the protection loop stops whatever it fills, and expire_bids
+                # pulls it after BID_TTL_HOURS if it never does.
+                if rc == 0:
+                    continue
+                outcome = Outcome()
             # Protect what just opened, immediately -- not on the next 60s
             # cycle. An entry and its stop belong together, and the gap
             # between them is the only window in which this system holds an
@@ -1293,7 +1323,31 @@ def persist_filled_bids(venue, meta: "MetaStore") -> List[str]:
 def rest_one_bid(venue, meta, client, universe, coin: str, level: str,
                  equity: float, available: float,
                  state: Optional[Dict[str, Any]] = None) -> int:
-    """Rest a GTC bid at one level's planned entry, then exit.
+    """`--limit-entry COIN LEVEL`: rest a bid on one band, by hand.
+
+    Finds the band whose LOW is `level` among the coin's live plans, then
+    hands it to place_resting_bid -- the same function the pass uses, so a
+    bid placed by hand and a bid placed by the loop are the same order with
+    the same metadata and the same expiry.
+    """
+    intents, _, _ = zone_pass.plans_by_coin(client, [{"symbol": coin}],
+                                            min_rr=MIN_RR)
+    want = f"{float(level):.10g}"
+    ep = next((e for e in intents
+               if f"{float(e.get('level_price') or 0):.10g}" == want), None)
+    if ep is None:
+        have = ", ".join(f"{float(e['level_price']):.6g}" for e in intents)
+        print(f"[LEVELS_LIVE] no live band on {coin} with low {level}"
+              + (f" -- bands in reach: {have}" if have else
+                 " -- no band in reach with a target"))
+        return 1
+    return place_resting_bid(venue, meta, ep, equity, available, state)
+
+
+def place_resting_bid(venue, meta, ep: Dict[str, Any], equity: float,
+                      available: float,
+                      state: Optional[Dict[str, Any]] = None) -> int:
+    """Rest a GTC bid at this plan's entry, then exit. 0 on success.
 
     The plan goes into metadata and the order goes to the venue. Nothing else
     is recorded: the bid is visible in open_orders, carries the venue's own
@@ -1301,15 +1355,14 @@ def rest_one_bid(venue, meta, client, universe, coin: str, level: str,
     The old version kept an oid and a plan in state["pending"], and a partial
     fill popped that record while the remainder stayed live -- REVIEW.md
     finding 6.
+
+    This is the normal path now, not the exception. A band price has not
+    reached yet is the common case -- on a live 45-coin scan 21 of 23 plans
+    were bids waiting -- and a bid at the band price is also what makes the
+    2026-10-17 failure impossible: the order's price IS a band price, so it
+    cannot fill above the band the way a market order did.
     """
-    cands, _ = build_intents(client, [coin], None)
-    want = f"{float(level):.10g}"
-    ep = next((e for e in cands
-               if f"{float(e.get('level_price') or 0):.10g}" == want), None)
-    if ep is None:
-        print(f"[LEVELS_LIVE] no live candidate for {coin} at {level} -- "
-              f"the scanner has to see the level before a bid can rest on it")
-        return 1
+    coin = str(ep["coin"])
 
     def g(k, d=0.0):
         try:
@@ -1366,6 +1419,29 @@ def rest_one_bid(venue, meta, client, universe, coin: str, level: str,
     return 0
 
 
+def _plan_from(ep: Dict[str, Any]) -> "zones.Plan":
+    """Rebuild the Plan from the episode dict, for the zone review flags.
+
+    The episode is what crosses the boundary into execution -- it is what the
+    log and the meta store hold, and it survives a restart where an in-memory
+    Plan would not. Carrying the object alongside it would give two sources of
+    truth for the same trade, which is the class of bug this rebuild removed.
+    """
+    def f(k, d=0.0):
+        try:
+            return float(ep.get(k) or d)
+        except (TypeError, ValueError):
+            return d
+    coin = str(ep.get("coin") or "")
+    band = zones.Zone(coin=coin, lo=f("zone_lo"), hi=f("zone_hi"),
+                      base_i=int(f("zone_base_i")), bos_i=int(f("zone_base_i")))
+    target = zones.Zone(coin=coin, lo=f("target_lo"), hi=f("target_hi"),
+                        base_i=0, bos_i=0, kind=zones.SUPPLY)
+    return zones.Plan(zone=band, target=target, entry=f("suggested_entry"),
+                      stop=f("suggested_stop"), tp=f("suggested_tp"),
+                      immediate=bool(ep.get("zone_immediate")))
+
+
 def execute_one(venue, meta, ep: Dict[str, Any], equity: float,
                 available: float, armed: bool, state: Dict[str, Any],
                 bars_cache: Optional[Dict[str, Any]] = None,
@@ -1379,12 +1455,38 @@ def execute_one(venue, meta, ep: Dict[str, Any], equity: float,
             return d
     coin = ep["coin"]
     entry, stop, tp = g("suggested_entry"), g("suggested_stop"), g("suggested_tp")
+    # A band carries its own trigger: price being INSIDE it is the setup, and
+    # there is nothing left to wait for. The level trigger asked a different
+    # question -- has price tapped this price and then held above it for some
+    # hours -- which a band answers by construction, because an entry inside
+    # the band is only reachable when price is in the band.
+    #
+    # The checks below it are NOT skipped. entry_is_actionable is generic and
+    # it is the one that matters most here: it re-derives the geometry from
+    # the live price and refuses an entry that has drifted off the plan, which
+    # is the guard the UNI fill at 8.8125 against a planned 7.50 defeated.
+    is_zone = str(ep.get("level_origin", "")) == "demand_zone"
+    bars1h: Optional[List[Dict[str, Any]]] = None
+    if armed and is_zone:
+        bars1h = (bars_cache or {}).get(coin)
+        for flag in zone_pass.review_flags(
+                _plan_from(ep),
+                size_from_stop(equity, entry, stop, available,
+                               venue_max_leverage=None)["size_usd"],
+                equity, bars=bars1h):
+            print(f"[LEVELS_LIVE] [REVIEW] {coin}: {flag}")
+            log_trade({"ts_utc": now_iso(), "action": "review", "coin": coin,
+                       "episode_id": ep.get("episode_id", ""),
+                       "level_price": g("level_price"), "result": "flagged",
+                       "detail": flag})
+        print(f"[LEVELS_LIVE] IN BAND {coin} "
+              f"{g('zone_lo'):.6g}-{g('zone_hi'):.6g} -- entry {entry:.6g}")
 
     # The trigger: has this level actually held? Checked before anything is
     # sent, and only when armed, because it costs an API call per candidate.
     # Arrival alone is not a setup -- every "maybe" the user gave was a level
     # price was sitting on at that moment.
-    if armed:
+    if armed and not is_zone:
         try:
             bars1h = cached_1h(coin, bars_cache)
         except Exception as e:
@@ -1443,7 +1545,7 @@ def execute_one(venue, meta, ep: Dict[str, Any], equity: float,
     if armed:
         ref, why = entry_is_actionable(venue, coin, entry, stop, tp,
                                        level=g("level_price"),
-                                       bars_1h=bars1h if armed else None,
+                                       bars_1h=bars1h,
                                        ctx=(ctx_cache or {}).get(coin.upper()),
                                        ep=ep)
         if ref is None:

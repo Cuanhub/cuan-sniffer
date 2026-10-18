@@ -103,7 +103,7 @@ class WiredEverywhereItMatters(unittest.TestCase):
         it fills."""
         import inspect
         self.assertIn("spacing_remaining(state)",
-                      inspect.getsource(T.rest_one_bid))
+                      inspect.getsource(T.place_resting_bid))
 
     def test_placing_a_bid_stamps_the_clock(self):
         """Stamped at PLACEMENT, not on fill.
@@ -115,11 +115,12 @@ class WiredEverywhereItMatters(unittest.TestCase):
         watching.
         """
         import inspect
-        self.assertIn("mark_entry(state)", inspect.getsource(T.rest_one_bid))
+        self.assertIn("mark_entry(state)",
+                      inspect.getsource(T.place_resting_bid))
 
     def test_stamping_happens_once_per_path(self):
         import inspect
-        for fn in (T.execute_one, T.rest_one_bid):
+        for fn in (T.execute_one, T.place_resting_bid):
             self.assertEqual(inspect.getsource(fn).count("mark_entry(state)"), 1,
                              f"{fn.__name__} stamps more than once")
 
