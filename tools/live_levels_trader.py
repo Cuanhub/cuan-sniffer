@@ -1615,6 +1615,40 @@ def roll_day(state: Dict[str, Any]) -> bool:
 CONTROL_QUEUE = STATE_PATH.parent / "_control_queue.json"
 
 
+# How old a queued command may be and still be applied.
+#
+# The controller already refuses to ENQUEUE a replayed Telegram update, but
+# that cannot help a command which is already in the queue -- from before
+# that check existed, or from while the trader was down. On 2026-10-18 a
+# `halt` enqueued at 00:14:19Z was still waiting to fire hours later, which
+# is the same hazard arriving by a different door.
+#
+# Deliberately more generous than the controller's own window: a queued
+# command is one the operator has already been told applies "on the trader's
+# next pass", and a pass is 450s. This only has to be shorter than the gap
+# that makes a command no longer mean what it said.
+CONTROL_COMMAND_MAX_AGE_SEC = 1800
+
+
+def _command_age_sec(item: Dict[str, Any]) -> float:
+    """How long ago a queued command was written. 0.0 if it does not say.
+
+    An entry with no `at` is obeyed. The field was added after the queue
+    format was, and refusing to act on a command because it predates the
+    timestamp would be a worse failure than the one this guards against.
+    """
+    raw = str(item.get("at") or "")
+    if not raw:
+        return 0.0
+    try:
+        when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - when).total_seconds())
+
+
 def drain_control_queue(state: Dict[str, Any], venue,
                         halt_state: "safety.HaltState") -> List[str]:
     """Apply queued Telegram commands. Returns what was done, for the log.
@@ -1650,8 +1684,12 @@ def drain_control_queue(state: Dict[str, Any], venue,
     collapsed: Dict[str, Dict[str, Any]] = {}
     order: List[str] = []
     skipped = 0
+    stale = 0
     for item in raw:
         if not isinstance(item, dict):
+            continue
+        if _command_age_sec(item) > CONTROL_COMMAND_MAX_AGE_SEC:
+            stale += 1
             continue
         verb = str(item.get("cmd") or "").lower()
         if verb in collapsed:
@@ -1659,6 +1697,9 @@ def drain_control_queue(state: Dict[str, Any], venue,
         else:
             order.append(verb)
         collapsed[verb] = item
+    if stale:
+        print(f"[LEVELS_LIVE] control: dropped {stale} command(s) older "
+              f"than {CONTROL_COMMAND_MAX_AGE_SEC // 60} min")
     if skipped:
         print(f"[LEVELS_LIVE] control: collapsed {skipped} repeated "
               f"command(s); acting on {order}")

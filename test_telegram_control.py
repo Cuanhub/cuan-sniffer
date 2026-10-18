@@ -19,6 +19,7 @@ import pathlib
 import sys
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import notify
@@ -893,3 +894,84 @@ class AReplayedCommandIsRefused(unittest.TestCase):
             out, nxt, ok = notify.get_updates(0)
         self.assertTrue(ok)
         self.assertEqual(out[0]["at"], 1760000000)
+
+
+class AStaleQueuedCommandIsDropped(unittest.TestCase):
+    """The controller refuses to ENQUEUE a replayed update, which cannot help
+    a command already sitting in the queue -- written before that check
+    existed, or while the trader was down. On 2026-10-18 a `halt` enqueued at
+    00:14:19Z was still waiting to fire, which is the same hazard arriving by
+    a different door.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()) / "q.json"
+        self._t = T.CONTROL_QUEUE
+        T.CONTROL_QUEUE = self.tmp
+
+    def tearDown(self):
+        T.CONTROL_QUEUE = self._t
+
+    @staticmethod
+    def _stamp(age_sec):
+        when = (datetime.now(timezone.utc)
+                - timedelta(seconds=age_sec))
+        return when.isoformat().replace("+00:00", "Z")
+
+    def _drain(self, *items):
+        self.tmp.write_text(json.dumps(list(items)))
+        h = _halt()
+        with mock.patch.object(T, "save_state"), \
+                mock.patch.object(T.notify, "send"):
+            done = T.drain_control_queue({}, _venue(), h)
+        return done, h
+
+    def test_a_fresh_queued_command_is_applied(self):
+        done, h = self._drain({"cmd": "halt", "arg": "x",
+                               "at": self._stamp(30)})
+        self.assertTrue(done)
+        self.assertIsNotNone(h.active())
+
+    def test_a_stale_queued_command_is_not_applied(self):
+        done, h = self._drain(
+            {"cmd": "halt", "arg": "x",
+             "at": self._stamp(T.CONTROL_COMMAND_MAX_AGE_SEC + 60)})
+        self.assertEqual(done, [])
+        self.assertIsNone(h.active(), "a stale queued halt was applied")
+
+    def test_the_queue_is_still_cleared_so_it_cannot_retry(self):
+        self._drain({"cmd": "halt", "arg": "x",
+                     "at": self._stamp(T.CONTROL_COMMAND_MAX_AGE_SEC + 60)})
+        self.assertEqual(json.loads(self.tmp.read_text()), [])
+
+    def test_a_command_with_no_timestamp_is_still_applied(self):
+        """The `at` field postdates the queue format, and refusing a command
+        for predating a timestamp is worse than the problem it guards."""
+        done, h = self._drain({"cmd": "halt", "arg": "x"})
+        self.assertTrue(done)
+        self.assertIsNotNone(h.active())
+
+    def test_an_unparseable_timestamp_is_treated_as_fresh(self):
+        done, _ = self._drain({"cmd": "halt", "arg": "x", "at": "whenever"})
+        self.assertTrue(done, "a bad timestamp must not silently drop a halt")
+
+    def test_a_stale_command_does_not_block_a_fresh_one_beside_it(self):
+        done, h = self._drain(
+            {"cmd": "pause", "arg": "2",
+             "at": self._stamp(T.CONTROL_COMMAND_MAX_AGE_SEC + 60)},
+            {"cmd": "halt", "arg": "fresh", "at": self._stamp(10)})
+        self.assertEqual(len(done), 1, done)
+        self.assertIn("fresh", h.active()["reason"])
+
+    def test_the_drain_window_is_looser_than_the_controllers(self):
+        """A queued command is one the operator was told applies "on the
+        trader's next pass", and a pass is 450s -- so this side must tolerate
+        more delay than the side that reads Telegram's own send time."""
+        self.assertGreater(T.CONTROL_COMMAND_MAX_AGE_SEC,
+                           C.COMMAND_MAX_AGE_SEC)
+
+    def test_age_of_the_real_recorded_entry(self):
+        """The exact entry that was waiting in the live queue."""
+        age = T._command_age_sec({"at": "2026-10-18T00:14:19.752034Z"})
+        self.assertGreater(age, 0.0)
+        self.assertEqual(T._command_age_sec({}), 0.0)

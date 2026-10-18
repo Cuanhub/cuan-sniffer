@@ -44,14 +44,29 @@ def isolated_runtime_files(tmp_path, monkeypatch):
     found in the 2026-10-16 audit. Any module that writes into the data
     directory has to be redirected here, not just the ones that were doing it
     at the time.
+
+    It then MISSED tools.telegram_control's QUEUE, and that one cost money.
+    `test_every_advertised_command_is_handled` walks the help text and calls
+    every command it finds, `/halt` among them, straight into the real
+    handler -- which appended a genuine halt to the live control queue. On
+    2026-10-17 the trader drained it about 50 seconds later and market-closed
+    an open ARB position. The operator was told the position had been closed
+    "from Telegram" and knew he had not touched Telegram.
+
+    Three instances of one mistake is a pattern, so there is now a structural
+    guard as well as this list: test_no_test_can_reach_live_control_state.py
+    walks these modules for any Path still inside the real data directory and
+    fails, which catches the next module without anyone remembering to.
     """
     import tools.live_levels_trader as trader
+    import tools.telegram_control as control
     from research.levels import storage
     from core import meta as core_meta
     from core import safety as core_safety
 
     monkeypatch.setattr(trader, "STATE_PATH", tmp_path / "_live_state.json")
     monkeypatch.setattr(trader, "TRADE_LOG", tmp_path / "live_trades.csv")
+    monkeypatch.setattr(trader, "CONTROL_QUEUE", tmp_path / "_control_queue.json")
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path / "data")
     # core.meta and core.safety both default their paths off this directory.
     # A MetaStore(), HaltState() or EquityLog() built with no argument in a
@@ -59,6 +74,23 @@ def isolated_runtime_files(tmp_path, monkeypatch):
     # core.safety binds DATA at import, so patching core.meta alone misses it.
     monkeypatch.setattr(core_meta, "DATA", tmp_path / "data")
     monkeypatch.setattr(core_safety, "DATA", tmp_path / "data")
+    # The control queue is an INSTRUCTION to the live trader, not a record of
+    # it, which is what made this the expensive one: a stray write here does
+    # not corrupt history, it acts.
+    monkeypatch.setattr(control, "DATA", tmp_path / "data")
+    monkeypatch.setattr(control, "STATE", tmp_path / "_live_state.json")
+    monkeypatch.setattr(control, "QUEUE", tmp_path / "_control_queue.json")
+    monkeypatch.setattr(control, "OFFSET", tmp_path / "_control_offset.json")
+    # Found by that structural guard on its first run, not by a failure:
+    # retention ROTATES and archives live_trades.csv, so a test reaching it
+    # would move the real audit trail aside rather than merely append to it.
+    import tools.retention as retention
+    import tools.screen_context as screen_context
+    monkeypatch.setattr(retention, "DATA", tmp_path / "data")
+    monkeypatch.setattr(retention, "ARCHIVE", tmp_path / "data" / "archive")
+    monkeypatch.setattr(retention, "TRADE_LOG",
+                        tmp_path / "data" / "live_trades.csv")
+    monkeypatch.setattr(screen_context, "DATA", tmp_path / "data")
 
 
 @pytest.fixture(autouse=True)
