@@ -398,11 +398,17 @@ class ClosingReportsTheVenue(unittest.TestCase):
         self.fake = FakeHL(positions={"HYPE": 2.0}, mid=90.0, **kw)
         return build_venue(self.fake)
 
-    def test_a_clean_close_is_reported_as_flat(self):
+    def test_a_clean_close_is_confirmed_against_the_venue(self):
+        """It used to assert the word "flat", and that was the bug's
+        fingerprint: `/close COIN` reported ACCOUNT-wide state because it
+        called flatten_all, which closes everything. A single-coin command
+        now names the coin it closed and what is still held, which is only
+        the same sentence when nothing else was open."""
         v = self.venue()
         out = C.Controller(v).close_one("HYPE", {})
         self.assertIn("✅", out)
-        self.assertIn("flat", out.lower())
+        self.assertIn("HYPE", out)
+        self.assertIn("closed", out.lower())
         self.assertEqual(self.fake.pos, {})
 
     def test_a_position_still_open_is_reported_LOUDLY(self):
@@ -975,3 +981,74 @@ class AStaleQueuedCommandIsDropped(unittest.TestCase):
         age = T._command_age_sec({"at": "2026-10-18T00:14:19.752034Z"})
         self.assertGreater(age, 0.0)
         self.assertEqual(T._command_age_sec({}), 0.0)
+
+
+class CloseOneClosesOne(unittest.TestCase):
+    """`/close COIN` must close that coin and nothing else.
+
+    It called safety.flatten_all, which takes no coin and closes EVERY
+    position while cancelling EVERY resting order -- so `/close WLD` would
+    have flattened the whole account, while HELP promised "market-close one
+    position". Found on 2026-10-19 about to be used on exactly that command,
+    with SOL held and two entry bids resting.
+    """
+
+    def setUp(self):
+        execute.SETTLE_SEC = 0.0
+        safety.FLATTEN_PAUSE_SEC = 0.0
+        self.fake = FakeHL(positions={"WLD": 385.3, "SOL": 1.76}, mid=0.48)
+        self.fake.resting = [
+            {"coin": "XMR", "oid": 1, "sz": "0.324", "limitPx": "548.5",
+             "side": "B", "isTrigger": False, "reduceOnly": False,
+             "timestamp": self.fake.now_ms},
+        ]
+        self.v = build_venue(self.fake)
+
+    def ctl(self):
+        return C.Controller(self.v)
+
+    def test_the_named_coin_is_closed(self):
+        out = self.ctl().close_one("WLD", {})
+        self.assertNotIn("WLD", self.fake.pos, out)
+        self.assertIn("closed", out.lower())
+
+    def test_the_other_position_is_left_alone(self):
+        """The whole bug, as one assertion."""
+        self.ctl().close_one("WLD", {})
+        self.assertEqual(self.fake.pos.get("SOL"), 1.76,
+                         "closing WLD also closed SOL")
+
+    def test_resting_bids_elsewhere_are_not_cancelled(self):
+        """flatten_all cancels every resting order, which would have pulled
+        entry bids on coins the operator never named."""
+        self.ctl().close_one("WLD", {})
+        self.assertEqual(self.fake.cancelled, [],
+                         f"orders were cancelled: {self.fake.cancelled}")
+
+    def test_the_reply_names_what_is_still_held(self):
+        out = self.ctl().close_one("WLD", {})
+        self.assertIn("SOL", out)
+
+    def test_a_coin_that_is_not_open_is_reported_not_sent(self):
+        out = self.ctl().close_one("DOGE", {})
+        self.assertIn("not open", out.lower())
+        self.assertEqual(self.fake.sent, [], "an order was sent anyway")
+
+    def test_an_unreadable_venue_sends_nothing(self):
+        self.fake.fail_info_always = True
+        out = self.ctl().close_one("WLD", {})
+        self.assertIn("could not read", out.lower())
+        self.assertEqual(self.fake.sent, [])
+
+    def test_a_close_that_does_not_flatten_says_so(self):
+        """It must not claim success off a sent order. A partial exit leaves
+        the position open and the operator has to know."""
+        self.fake.order_fills = False
+        out = self.ctl().close_one("WLD", {})
+        self.assertIn("STILL OPEN", out)
+        self.assertIn("WLD", self.fake.pos)
+
+    def test_closeall_is_still_flatten_all(self):
+        """The scoped fix must not weaken the kill switch."""
+        out = self.ctl().close_all()
+        self.assertEqual(self.fake.pos, {}, out)

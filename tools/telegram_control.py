@@ -287,20 +287,40 @@ class Controller:
         """
         if self.backend is None:
             return "No venue connection -- cannot close."
-        from core import safety
+        from core import execute
         held = self.backend.positions(urgent=True)
         if held is None:
             return "⚠️ Could not read the venue. Nothing sent; try again."
         if coin not in held:
             return f"{coin} is not open at the venue."
-        res = safety.flatten_all(self.backend, reason=f"telegram /close {coin}")
-        if res.flat:
-            return (f"✅ Flat"
-                    + (f" (closed `{res.closed}`)" if res.closed else "")
-                    + ".")
-        return (f"🚨 STILL OPEN after {res.seconds:.0f}s\n"
-                f"`{res.still_open}`\n`{str(res.detail)[:300]}`\n"
-                f"Close it at the venue.")
+
+        # execute.close, NOT safety.flatten_all. flatten_all takes no coin and
+        # closes EVERY position while cancelling EVERY resting order, so
+        # `/close WLD` used to flatten the whole account -- while HELP promised
+        # "market-close one position". Found on 2026-10-19 about to be used on
+        # exactly that command, with SOL held and two bids resting.
+        #
+        # execute.close takes side and size from the venue, so it cannot add to
+        # a position and works on one this process never opened. /closeall is
+        # still flatten_all, because that is what it says it is.
+        others = sorted(c for c in held if c != coin)
+        out = execute.close(self.backend, coin)
+        after = self.backend.positions(urgent=True)
+        if after is None:
+            return (f"⚠️ Sent an exit for {coin} but could not read the venue "
+                    f"back. Check it: `/positions`.")
+        if coin in after:
+            left = after[coin]
+            return (f"🚨 {coin} STILL OPEN: {left.size:g} left"
+                    + (f" ({out.note})" if out.note else "")
+                    + ".\nSend `/close "
+                    f"{coin}` again, or `/closeall` to flatten everything.")
+        kept = [c for c in others if c in after]
+        return (f"✅ {coin} closed"
+                + (f" ({out.filled_size:g} @ `{out.avg_px:.6g}`)"
+                   if out.avg_px else "")
+                + (f"\nStill held: `{', '.join(kept)}`" if kept
+                   else "\nNothing else held."))
 
     def close_all(self) -> str:
         """The kill switch. Everything the VENUE holds, not what state lists."""
