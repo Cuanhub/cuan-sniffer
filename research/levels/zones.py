@@ -3,12 +3,15 @@
 One idea, and the whole module is that idea:
 
     A demand zone is the base candle of an impulse that CLOSED ABOVE a prior
-    swing high. The band runs from that candle's LOW to its CLOSE. It dies
-    when price closes back below the low.
+    swing high. The band runs from that candle's LOW to its CLOSE.
 
-Everything else follows. The low is where the zone is invalidated, so it is
-also where the stop belongs. The band has a top and a bottom, so an entry can
-sit INSIDE it rather than above it.
+That is the whole definition. There is deliberately no expiry -- see
+"Why a zone does not die" below, which is the one thing about this module
+most likely to look like a missing feature.
+
+The low is where the band ends, so it is also where the stop belongs. The
+band has a top and a bottom, so an entry can sit INSIDE it rather than
+above it.
 
 Why this replaces levels.py's scoring
 -------------------------------------
@@ -35,8 +38,36 @@ The width agreeing to 0.01pp is what says this found the same object rather
 than something nearby. Pivot window is insensitive -- 2 and 3 are identical,
 4 and 5 marginally worse -- so there is no fragile knob here.
 
+Why a zone does not die
+-----------------------
+The first cut dropped any band price had since CLOSED below, on the reasoning
+that a broken level is not a level. That rule was the single thing standing
+between this module and the operator's own charts: it found 9 of his 16 bands.
+Without it the detector finds 16 of 16, inside 2.5% on every edge and 0.97%
+mean edge error -- and detection was never the problem.
+
+Seven of his sixteen bands had closed below their low and he kept all seven.
+The depths say the rule is not merely mistimed but wrong in kind:
+
+    ETH 0.72%   VVV 1.18%   WLD 2.06%   AERO 3.09%
+    MON 3.58%   NEAR 3.78%  APT 8.47%
+
+He still marks APT as a buy band after price closed 8.47% under its low. No
+tolerance threshold reproduces that; only having no threshold does. (A 3%
+cutoff was measured and reached 12 of 16, and it also contradicts the 0.25%
+stop buffer, which says a quarter of a percent below the low is already out.)
+
+So bands persist, and what keeps a dead one from becoming a trade is not a
+detection filter:
+  - `live_zones` only offers bands price can presently reach, so a band price
+    has collapsed through is out of scope until price returns to it;
+  - the stop sits just under the band low, which is what the operator said it
+    is for. A band that fails again fails for one stop.
+
 tests/fixtures/zones/ holds those bands and the bars, and
-test_zones.py keeps the definition pinned to them.
+test_zones.py keeps the definition pinned to them -- including a test that
+asserts a band price closed under is STILL returned, so this cannot be
+quietly reinstated as a bug fix.
 """
 
 from __future__ import annotations
@@ -70,6 +101,10 @@ ZONE_MAX_WIDTH_PCT = float(os.getenv("LEVELS_ZONE_MAX_WIDTH_PCT", "8.0"))
 # 800 bars of 1h is ~33 days. Raising this is cheap; a zone older than the
 # window is simply invisible, and no guard can recover it.
 ZONE_MIN_BARS = int(os.getenv("LEVELS_ZONE_MIN_BARS", "800"))
+# How far below price a band can sit and still be this pass's business. Not a
+# quality judgement -- a band further away is not worse, it is just not
+# reachable yet, and the watchlist is where it waits.
+ZONE_REACH_PCT = float(os.getenv("LEVELS_ZONE_REACH_PCT", "5.0"))
 
 
 @dataclass(frozen=True)
@@ -117,13 +152,16 @@ class Zone:
 
 def demand_zones(bars: List[Dict[str, Any]], coin: str = "",
                  window: int = ZONE_PIVOT_WINDOW,
-                 alive_only: bool = True,
                  min_bars: Optional[int] = None) -> List[Zone]:
     """Every demand zone in `bars`, oldest first.
 
-    `alive_only` drops zones price has since closed below. A zone that has
-    been broken is not a level that failed -- it is not a zone any more, and
-    keeping it is how a dead band becomes a trade.
+    All of them. There is no aliveness filter and that is not an omission:
+    dropping bands price had closed below found 9 of the operator's 16, and
+    keeping them finds 16 of 16. He himself keeps a band price closed 8.47%
+    under. See "Why a zone does not die" in the module docstring, and
+    `test_a_band_price_closed_under_is_still_a_band`.
+
+    Reachability is `live_zones`'s job, not this function's.
     """
     floor = ZONE_MIN_BARS if min_bars is None else min_bars
     if len(bars) < max(floor, window * 2 + 2):
@@ -141,17 +179,42 @@ def demand_zones(bars: List[Dict[str, Any]], coin: str = "",
         z = Zone(coin=coin.upper(), lo=lo, hi=hi, base_i=base, bos_i=bos)
         if not ZONE_MIN_WIDTH_PCT <= z.width_pct <= ZONE_MAX_WIDTH_PCT:
             continue
-        if alive_only and _closed_below(bars, bos, lo):
-            continue
         out.append(z)
     out.sort(key=lambda z: z.base_i)
     return _merge_nested(_dedupe(out))
 
 
-def nearest_below(zones: List[Zone], px: float) -> Optional[Zone]:
-    """The highest live zone at or below `px` -- the one price is falling into."""
-    below = [z for z in zones if z.lo <= px]
-    return max(below, key=lambda z: z.hi) if below else None
+def live_zones(zones: List[Zone], px: float,
+               max_above_pct: float = ZONE_REACH_PCT) -> List[Zone]:
+    """Every band price could reasonably reach, nearest first.
+
+    No choosing. A coin with three live bands under it offers three candidate
+    trades, each with its own entry, stop and -- once a target is attached --
+    its own reward/risk. Which one is worth taking is a question the rr gate
+    can answer from numbers; which one is NEAREST is not the same question,
+    and answering the second while pretending to answer the first is what put
+    money 5.6% above the band it meant to buy.
+
+    This replaced a `nearest_below` that returned the single highest band
+    under price. Scored against the sixteen bands the operator drew by hand,
+    that rule agreed with ten -- and it is biased by construction, because
+    price approaches support from above, so the nearest base is always the
+    shallowest one. It is deleted rather than deprecated: a function with a
+    warning in its docstring is still a function somebody can call.
+
+    A band price is already inside comes first; the rest follow by distance.
+    Bands more than `max_above_pct` below price are dropped -- not because
+    they are wrong, but because price has to travel too far for them to be
+    this pass's business.
+    """
+    out = [z for z in zones
+           if z.contains(px) or (z.hi < px <= z.hi * (1 + max_above_pct / 100.0))
+           or z.lo <= px <= z.hi]
+    reach = [z for z in zones
+             if z.hi <= px and (px - z.hi) / z.hi * 100.0 <= max_above_pct]
+    seen = {id(z) for z in out}
+    out += [z for z in reach if id(z) not in seen]
+    return sorted(out, key=lambda z: (not z.contains(px), abs(px - z.hi)))
 
 
 def _first_close_above(bars: List[Dict[str, Any]], start: int,
@@ -166,10 +229,6 @@ def _first_close_above(bars: List[Dict[str, Any]], start: int,
         if bars[j]["c"] > level:
             return j
     return None
-
-
-def _closed_below(bars: List[Dict[str, Any]], frm: int, lo: float) -> bool:
-    return any(b["c"] < lo for b in bars[frm:])
 
 
 def _merge_nested(zones: List[Zone]) -> List[Zone]:
