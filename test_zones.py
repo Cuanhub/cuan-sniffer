@@ -22,6 +22,17 @@ BARS = json.loads((FIX / "bars_1h.json").read_text())
 BANDS = {k: tuple(v) for k, v in
          json.loads((FIX / "operator_bands.json").read_text()).items()}
 
+# The one band ZONE_MIN_WIDTH_PCT costs, named rather than quietly tolerated.
+# VVV's base candle gives a 0.54% band and the floor is 0.8%, so the nearest
+# thing found is 2.87% off his edges -- outside SAME_BAND_PCT. The floor is
+# what it is because it scores better overall: on his eight hand verdicts it
+# takes "never offer an entry above the band he drew" from 6 of 8 to 7 of 8,
+# and it is what removes the ARB trade he objected to (ARB's only bands are
+# 0.7% and 0.6% wide). One band of detection for that is the trade made here,
+# and test_the_width_floor_costs_exactly_one_band pins the price.
+NOT_FOUND_AT_THIS_WIDTH_FLOOR = {"VVV"}
+FITTED = [c for c in sorted(BANDS) if c not in NOT_FOUND_AT_THIS_WIDTH_FLOOR]
+
 # How far an edge may sit from the one he drew and still be the same band.
 # His own edges are read off a chart by eye, so demanding better than this
 # would be fitting to the thickness of his cursor.
@@ -58,7 +69,7 @@ def candidates(coin, **kw):
 
 # ── the fit to the operator's own bands ────────────────────────────────────
 
-@pytest.mark.parametrize("coin", sorted(BANDS))
+@pytest.mark.parametrize("coin", FITTED)
 def test_every_operator_band_is_found(coin):
     assert his_band(coin) is not None, (
         f"{coin}: nothing within {SAME_BAND_PCT}% of {BANDS[coin]}")
@@ -69,7 +80,8 @@ def test_the_edge_error_does_not_regress():
     was fitted to, so it held up out of sample. A looser bound here would let
     the definition drift away from the charts one commit at a time."""
     errs = []
-    for coin, (lo, hi) in BANDS.items():
+    for coin in FITTED:
+        lo, hi = BANDS[coin]
         z = his_band(coin)
         errs += [abs(z.lo - lo) / lo * 100, abs(z.hi - hi) / hi * 100]
     got = statistics.mean(errs)
@@ -85,8 +97,9 @@ def test_the_band_widths_match_his():
     chart. A detector drifting WIDER would be inventing band it cannot
     justify, and the stop sits under the low, so width is risk.
     """
-    mine = statistics.mean(his_band(c).width_pct for c in BANDS)
-    his = statistics.mean((h - l) / l * 100 for l, h in BANDS.values())
+    mine = statistics.mean(his_band(c).width_pct for c in FITTED)
+    his = statistics.mean((BANDS[c][1] - BANDS[c][0]) / BANDS[c][0] * 100
+                          for c in FITTED)
     assert mine < his, f"mine {mine:.2f}% is not narrower than his {his:.2f}%"
     assert his - mine < 0.8, f"mine {mine:.2f}% vs his {his:.2f}%"
 
@@ -107,11 +120,12 @@ def test_his_band_is_among_the_candidates_wherever_it_is_reachable():
     trade at all.
     """
     offered = []
-    for coin, (lo, hi) in BANDS.items():
+    for coin in FITTED:
+        lo, hi = BANDS[coin]
         if any(_edge_err(z, lo, hi) <= SAME_BAND_PCT
                for z in candidates(coin)):
             offered.append(coin)
-    assert len(offered) >= 12, f"only {len(offered)}/16 offered: {offered}"
+    assert len(offered) >= 11, f"only {len(offered)}/{len(FITTED)}: {offered}"
 
 
 @pytest.mark.parametrize("coin", ["AERO", "MON"])
@@ -156,7 +170,8 @@ def test_close_beats_high_as_the_band_top():
     """
     def err_with(top_is_high: bool):
         out = []
-        for coin, (lo, hi) in BANDS.items():
+        for coin in FITTED:
+            lo, hi = BANDS[coin]
             z = his_band(coin)
             top = BARS[coin][z.base_i]["h"] if top_is_high else z.hi
             out += [abs(z.lo - lo) / lo * 100, abs(top - hi) / hi * 100]
@@ -187,7 +202,7 @@ def test_the_entry_that_was_taken_would_be_refused():
 def test_entry_sits_in_the_upper_half_not_at_the_low():
     """The operator's rule and his reason: an entry at the band low risks
     missing the band entirely when price only penetrates part of it."""
-    for coin in BANDS:
+    for coin in FITTED:
         z = his_band(coin)
         e = z.entry_px()
         assert z.contains(e)
@@ -235,7 +250,7 @@ def test_the_stop_sits_just_under_the_band_low():
 
 
 def test_the_risk_per_trade_is_the_band_plus_the_buffer():
-    for coin in BANDS:
+    for coin in FITTED:
         z = his_band(coin)
         risk = (z.entry_px() - z.stop_px()) / z.entry_px() * 100
         assert 0.1 < risk < 6.0, f"{coin} risk {risk:.2f}%"
@@ -294,7 +309,8 @@ def test_removing_the_aliveness_filter_is_what_found_his_bands():
     of the sixteen bands he drew is detected, and seven of them had closed
     below their low."""
     missed = []
-    for coin, (lo, hi) in BANDS.items():
+    for coin in FITTED:
+        lo, hi = BANDS[coin]
         zs = demand_zones(BARS[coin], coin=coin)
         err = min((max(abs(z.lo - lo) / lo, abs(z.hi - hi) / hi) * 100
                    for z in zs), default=1e9)
@@ -303,13 +319,14 @@ def test_removing_the_aliveness_filter_is_what_found_his_bands():
     assert not missed, f"bands no longer found: {missed}"
 
     breached = 0
-    for coin, (lo, hi) in BANDS.items():
+    for coin in FITTED:
+        lo, hi = BANDS[coin]
         zs = demand_zones(BARS[coin], coin=coin)
         z = min(zs, key=lambda z: max(abs(z.lo - lo) / lo,
                                       abs(z.hi - hi) / hi))
         if any(b["c"] < z.lo for b in BARS[coin][z.bos_i:]):
             breached += 1
-    assert breached >= 7, (
+    assert breached >= 6, (
         f"only {breached} bands had closed below their low; the fixture no "
         "longer demonstrates why the filter was removed")
 
@@ -348,7 +365,7 @@ def test_there_is_no_way_to_ask_for_just_the_nearest_band():
 def test_the_pivot_window_is_not_a_fragile_knob():
     """2 and 3 were identical in the fit; if that stops being true the
     definition has become sensitive to a parameter nobody measured."""
-    for coin in sorted(BANDS):
+    for coin in FITTED:
         a = his_band(coin, window=2)
         b = his_band(coin, window=3)
         assert a is not None and b is not None
@@ -372,7 +389,7 @@ def test_short_history_returns_nothing_rather_than_a_band_that_fits_in_it():
 
 
 def test_the_bands_are_stable_once_there_is_enough_history():
-    for coin in sorted(BANDS):
+    for coin in FITTED:
         lo, hi = BANDS[coin]
         short = demand_zones(BARS[coin][-800:], coin)
         a = min(short, key=lambda z: _edge_err(z, lo, hi), default=None)
@@ -399,7 +416,7 @@ def test_separate_bands_are_not_merged():
 def test_no_live_band_is_thinner_than_anything_the_operator_drew():
     """His narrowest is SUI at 1.59%. A 0.30% band yields a 0.40% stop, which
     noise takes out before the idea is tested."""
-    for coin in sorted(BANDS):
+    for coin in FITTED:
         z = his_band(coin)
         risk = (z.entry_px() - z.stop_px()) / z.entry_px() * 100
         assert risk > 0.5, f"{coin} risk only {risk:.2f}%"
@@ -585,3 +602,25 @@ def test_reward_risk_is_not_used_as_a_gate_here():
     assert "MIN_RR" not in src.replace("MIN_RR of", "").replace("MIN_RR 2.0", "")
     assert any(p.rr < 1.0 for c in BANDS for p in plans(c)), (
         "no low-rr plan survives, so something here is gating on rr")
+
+
+def test_the_width_floor_costs_exactly_one_band():
+    """ZONE_MIN_WIDTH_PCT is 0.8% and that is not free -- it is the one
+    deliberate loss in the fit, so it is counted rather than tolerated.
+
+    Why it is worth it: a band thinner than this yields a stop under 1% away,
+    which noise takes out before the idea is tested, and the thinnest bands
+    also carry the HIGHEST reward/risk (a distant target over a tiny risk).
+    It is also what removes the trade the operator objected to -- ARB's only
+    two bands are 0.7% and 0.6% wide, so at this floor ARB has no plan. On his
+    eight hand verdicts the floor takes "never offer an entry above the band
+    he drew" from 6 of 8 to 7 of 8.
+    """
+    assert Z.ZONE_MIN_WIDTH_PCT == 0.8
+    lost = [c for c in sorted(BANDS)
+            if his_band(c) is None]
+    assert lost == sorted(NOT_FOUND_AT_THIS_WIDTH_FLOOR), lost
+    # and the ARB bands really are under the floor
+    arb = demand_zones(BARS["ARB"], "ARB")
+    assert all(z.width_pct >= Z.ZONE_MIN_WIDTH_PCT for z in arb)
+    assert Z.plans_for(BARS["ARB"], BARS["ARB"][-1]["c"], coin="ARB") == []

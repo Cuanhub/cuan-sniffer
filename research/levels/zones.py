@@ -87,7 +87,20 @@ ZONE_PIVOT_WINDOW = int(os.getenv("LEVELS_ZONE_PIVOT_WINDOW", "3"))
 ZONE_STOP_BUFFER_PCT = float(os.getenv("LEVELS_ZONE_STOP_BUFFER_PCT", "0.25"))
 # Bands narrower than this are a single tight candle rather than a base worth
 # trading; wider than this and the stop is too far for the position to size.
-ZONE_MIN_WIDTH_PCT = float(os.getenv("LEVELS_ZONE_MIN_WIDTH_PCT", "0.3"))
+#
+# 0.8% was measured, not chosen. A band this thin yields a stop under 1% away,
+# which noise takes out before the idea is tested, and the thinnest bands also
+# score the HIGHEST reward/risk -- a distant target over a tiny risk -- so they
+# would dominate anything that ranked on rr. The operator's own narrowest drawn
+# band is 1.36%, so this still sits below anything he marks.
+#
+# It is also what refuses the trade he objected to. ARB's only two bands are
+# 0.7% and 0.6% wide, so an 0.8% floor removes both and there is no ARB plan at
+# all -- which is his call. Scored on his eight hand verdicts ("never offer an
+# entry above the band he drew") this takes 6 of 8 to 7 of 8 while keeping 3 of
+# his 4 takes. The cost is one band of detection: VVV's 0.54% band is no longer
+# found, 15 of his 16 rather than 16.
+ZONE_MIN_WIDTH_PCT = float(os.getenv("LEVELS_ZONE_MIN_WIDTH_PCT", "0.8"))
 ZONE_MAX_WIDTH_PCT = float(os.getenv("LEVELS_ZONE_MAX_WIDTH_PCT", "8.0"))
 # A zone's base can be far back, and the detector only sees the bars it is
 # given. Measured on the operator's seven: six bases sat 50-61 bars back, but
