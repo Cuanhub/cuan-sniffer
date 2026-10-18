@@ -200,11 +200,22 @@ def test_price_already_inside_the_band_is_the_entry():
     assert z.entry_px(px_now=101.6) == 101.6
 
 
-def test_price_below_the_midpoint_still_enters_at_the_midpoint():
-    """Deeper than the midpoint is a better price, not a worse one -- but the
-    resting bid sits at the midpoint, so that is what gets filled."""
+def test_price_below_the_midpoint_enters_at_price_not_the_midpoint():
+    """This test used to assert the midpoint, and that was wrong.
+
+    A midpoint bid placed while price sits in the LOWER half of the band is
+    priced above the market: it crosses the spread and fills as a taker, at a
+    worse price than the one asked for. Deeper than the midpoint is a better
+    fill, not a worse one, so there is nothing to wait for.
+
+    The midpoint survives for the case it was meant for -- price ABOVE the
+    band, where the bid has to rest somewhere and the middle is far enough in
+    to fill on a partial penetration. See
+    test_price_in_the_lower_half_enters_there_not_at_the_midpoint.
+    """
     z = Zone("X", lo=100.0, hi=104.0, base_i=0, bos_i=1)
-    assert z.entry_px(px_now=100.5) == z.mid
+    assert z.entry_px(px_now=100.5) == 100.5
+    assert z.entry_px(px_now=110.0) == z.mid
 
 
 def test_price_above_the_band_waits_at_the_midpoint():
@@ -392,3 +403,185 @@ def test_no_live_band_is_thinner_than_anything_the_operator_drew():
         z = his_band(coin)
         risk = (z.entry_px() - z.stop_px()) / z.entry_px() * 100
         assert risk > 0.5, f"{coin} risk only {risk:.2f}%"
+
+
+# ── supply bands, which exist only to be targets ───────────────────────────
+
+def test_a_supply_band_is_the_mirror_of_a_demand_band():
+    """Impulse DOWN that closes below a prior swing low; the band runs from
+    the base candle's close up to its high."""
+    seq = ([(10, 11, 9, 10)] * 4 + [(10, 11, 8, 9)]            # swing low 8
+           + [(9, 12, 9, 11.4)] * 4                            # base high 12
+           + [(11, 11, 6, 7)] * 4)                             # closes below 8
+    zs = Z.supply_zones(bars(seq), "X", min_bars=0)
+    assert zs, "a clean downward break should leave a supply band"
+    z = zs[0]
+    assert z.kind == Z.SUPPLY
+    assert (z.lo, z.hi) == (11.4, 12.0), (z.lo, z.hi)
+
+
+def test_a_wick_under_the_swing_low_is_not_a_break():
+    seq = ([(10, 11, 9, 10)] * 4 + [(10, 11, 8, 9)]
+           + [(9, 12, 9, 11.4)] * 4
+           + [(11, 11, 6, 8.5)] * 4)      # wicks to 6, closes 8.5 (>8)
+    assert Z.supply_zones(bars(seq), "X", min_bars=0) == []
+
+
+def test_demand_and_supply_do_not_contaminate_each_other():
+    for coin in sorted(BANDS):
+        assert all(z.kind == Z.DEMAND for z in demand_zones(BARS[coin], coin))
+        assert all(z.kind == Z.SUPPLY
+                   for z in Z.supply_zones(BARS[coin], coin))
+
+
+def test_the_target_is_the_near_edge_of_the_band_not_its_middle():
+    """The band is where sellers are, so the trade takes profit arriving at
+    it rather than hoping to cut through it."""
+    sup = [Zone("X", 110.0, 112.0, 1, 2, Z.SUPPLY),
+           Zone("X", 120.0, 122.0, 3, 4, Z.SUPPLY)]
+    t = Z.target_above(sup, 100.0)
+    assert t is not None and t.lo == 110.0
+
+
+def test_a_band_price_is_already_above_is_not_a_target():
+    """Consumed resistance is not resistance."""
+    sup = [Zone("X", 90.0, 95.0, 1, 2, Z.SUPPLY),
+           Zone("X", 110.0, 112.0, 3, 4, Z.SUPPLY)]
+    assert Z.target_above(sup, 100.0).lo == 110.0
+    assert Z.target_above([sup[0]], 100.0) is None
+
+
+def test_every_operator_band_has_a_target_above_it():
+    """Without one there is no tp and no reward/risk, so a band with nothing
+    overhead is not a tradeable plan however good the band is."""
+    missing = [c for c in sorted(BANDS)
+               if Z.target_above(Z.supply_zones(BARS[c], c),
+                                 BANDS[c][1]) is None]
+    assert not missing, f"no target above the band for {missing}"
+
+
+def test_supply_bands_are_not_claimed_to_be_fitted():
+    """The operator drew demand bands only. This module must say so where
+    someone would otherwise assume supply had the same evidence behind it."""
+    doc = Z.supply_zones.__doc__ or ""
+    assert "NOT FITTED" in doc
+    assert "never entered" in doc.lower() or "never sold" in doc.lower()
+
+
+# ── plans: a band, its target, and the guarantee that matters ──────────────
+
+def plans(coin, **kw):
+    bars = BARS[coin]
+    return Z.plans_for(bars, bars[-1]["c"], coin=coin, **kw)
+
+
+def test_an_entry_is_never_above_its_own_band():
+    """The whole failure, as an invariant rather than a filter.
+
+    On 2026-10-17 the trader bought ARB at 0.18482 at market while the band
+    was 0.1705-0.175 -- 5.6% below. An entry that is always a band price
+    makes that arithmetically impossible, which no amount of scoring can.
+    """
+    for coin in sorted(BANDS):
+        for p in plans(coin):
+            assert p.zone.lo <= p.entry <= p.zone.hi, (
+                f"{coin} entry {p.entry} outside band "
+                f"{p.zone.lo}-{p.zone.hi}")
+
+
+def test_an_entry_is_never_above_the_market():
+    """A buy priced above the market is a taker order at a worse price than
+    the one asked for. A resting bid must rest."""
+    for coin in sorted(BANDS):
+        px = BARS[coin][-1]["c"]
+        for p in plans(coin):
+            assert p.entry <= px, f"{coin} bid {p.entry} above market {px}"
+
+
+def test_price_in_the_lower_half_enters_there_not_at_the_midpoint():
+    """A midpoint bid would be ABOVE the market in that case. The earlier
+    entry_px returned the midpoint whenever price was below it."""
+    z = Zone("X", lo=100.0, hi=104.0, base_i=0, bos_i=1)
+    assert z.entry_px(px_now=100.5) == 100.5
+    assert z.entry_px(px_now=103.0) == 103.0
+    assert z.entry_px(px_now=110.0) == z.mid      # above the band: rest at mid
+
+
+def test_the_stop_is_always_under_the_band():
+    for coin in sorted(BANDS):
+        for p in plans(coin):
+            assert p.stop < p.zone.lo
+            assert p.stop > 0
+
+
+def test_every_plan_has_a_target_above_the_market():
+    """Resistance price has already traded through is not resistance. Taking
+    the nearest supply band above the ENTRY gave WLD rr 0.08 -- a bid at
+    0.46969 against a target of 0.4705 while price was already 0.49138."""
+    for coin in sorted(BANDS):
+        px = BARS[coin][-1]["c"]
+        for p in plans(coin):
+            assert p.tp > px, f"{coin} target {p.tp} is below market {px}"
+            assert p.tp > p.entry
+
+
+def test_the_target_fix_shows_up_as_reward_risk():
+    """Pinned as a number so the regression is visible, not just the rule."""
+    rrs = [pl[0].rr for c in sorted(BANDS) if (pl := plans(c))]
+    assert statistics.median(rrs) > 2.0, f"median rr {statistics.median(rrs):.2f}"
+
+
+def test_plans_are_ordered_by_recency_not_reward_risk():
+    """Ordering by rr systematically picks the DEEPEST band in reach, because
+    a deeper entry sits further below the same target -- the mirror of the
+    shallow bias nearest_below had. Recency agrees with the operator's own
+    band on 9 of 12 against 6 of 12 for the deepest."""
+    for coin in sorted(BANDS):
+        ps = plans(coin)
+        bases = [p.zone.base_i for p in ps]
+        assert bases == sorted(bases, reverse=True), coin
+
+
+def test_only_recent_bands_are_tradeable():
+    """Detection keeps every band for ever; trading does not. Without this
+    the median is 23 bands per coin, about 1% apart, so price is inside one
+    essentially always and "inside a band" stops meaning anything."""
+    for coin in sorted(BANDS):
+        n = len(BARS[coin])
+        for p in plans(coin):
+            assert n - p.zone.base_i <= Z.ZONE_RECENT_BARS, coin
+    # and the window is what cuts the density
+    wide = sum(len(demand_zones(BARS[c], c)) for c in BANDS)
+    narrow = sum(len(plans(c)) for c in BANDS)
+    assert narrow * 3 < wide, f"{narrow} plans vs {wide} bands"
+
+
+def test_a_band_above_the_market_is_not_a_plan():
+    """Price below the band low means the band was lost, not approached."""
+    bars = [{"o": 10, "h": 11, "l": 9, "c": 10}] * 4 + \
+           [{"o": 10, "h": 12, "l": 9, "c": 11}] + \
+           [{"o": 11, "h": 11, "l": 8, "c": 8.6}] * 4 + \
+           [{"o": 9, "h": 14, "l": 9, "c": 13}] * 4
+    assert Z.plans_for(bars, 5.0, "X", recent_bars=0, min_bars=0) == []
+
+
+def test_a_band_with_nothing_overhead_is_not_a_plan():
+    """No target means no tp and no reward/risk, however good the band."""
+    seq = ([(10, 11, 9, 10)] * 4 + [(10, 12, 9, 11)]
+           + [(11, 11, 8, 8.6)] * 4
+           + [(9, 40, 9, 39)] * 6)          # runs away; no supply above
+    bs = bars(seq)
+    assert demand_zones(bs, "X", min_bars=0), "the band must still exist"
+    assert Z.plans_for(bs, 39.0, "X", recent_bars=0, min_bars=0) == []
+
+
+def test_reward_risk_is_not_used_as_a_gate_here():
+    """Band position predicted all eight of the operator's hand verdicts;
+    reward/risk predicted the opposite of them. Of his sixteen bands only
+    four clear MIN_RR 2.0 and he said SKIP to three of those four, while
+    HYPE 0.78 and FARTCOIN 0.93 are both takes. So the floor belongs to the
+    trader's config, not to this module."""
+    src = pathlib.Path("research/levels/zones.py").read_text()
+    assert "MIN_RR" not in src.replace("MIN_RR of", "").replace("MIN_RR 2.0", "")
+    assert any(p.rr < 1.0 for c in BANDS for p in plans(c)), (
+        "no low-rr plan survives, so something here is gating on rr")

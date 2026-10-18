@@ -105,16 +105,40 @@ ZONE_MIN_BARS = int(os.getenv("LEVELS_ZONE_MIN_BARS", "800"))
 # quality judgement -- a band further away is not worse, it is just not
 # reachable yet, and the watchlist is where it waits.
 ZONE_REACH_PCT = float(os.getenv("LEVELS_ZONE_REACH_PCT", "5.0"))
+# How far back a band's base may sit and still be a candidate to TRADE.
+#
+# Detection keeps every band for ever (see "Why a zone does not die"), which
+# leaves a median of 23 per coin over 60 days of 1h bars -- bands roughly 1%
+# apart, so price is inside one essentially always and "inside a band" stops
+# meaning anything. The operator draws one or two per chart.
+#
+# What separates the sixteen he drew from the other ~22 was measured: his sit
+# at the 94th percentile of recency (11 of 16 in the top quartile) and the 8th
+# percentile of touch count. Age is the single feature that separates them, so
+# it is the single knob here. At 240 bars (10 days of 1h) the median drops
+# from 23 bands to 4 and every band of his that price can still reach
+# survives -- the four it loses were already out of reach.
+ZONE_RECENT_BARS = int(os.getenv("LEVELS_ZONE_RECENT_BARS", "240"))
+
+
+DEMAND = "demand"
+SUPPLY = "supply"
 
 
 @dataclass(frozen=True)
 class Zone:
-    """One demand band. `lo` and `hi` are the whole of it."""
+    """One band. `lo` and `hi` are the whole of it.
+
+    `kind` says which side it is. A DEMAND band is a place to buy and carries
+    `entry_px`/`stop_px`; a SUPPLY band is only ever read as a target here, so
+    it has no entry of its own -- see `supply_zones`.
+    """
     coin: str
     lo: float
     hi: float
     base_i: int          # bar the band is built on
-    bos_i: int           # bar whose close broke the prior swing high
+    bos_i: int           # bar whose close broke the prior swing level
+    kind: str = DEMAND
 
     @property
     def mid(self) -> float:
@@ -128,15 +152,29 @@ class Zone:
         return self.lo <= px <= self.hi
 
     def entry_px(self, px_now: Optional[float] = None) -> float:
-        """Where to buy.
+        """Where to buy. Never above the band, and never above the market.
 
-        Inside the band, middle-to-upper. The operator's rule, and his reason
-        for it: entering at the band low risks missing the band entirely when
-        price only penetrates part of it. The midpoint is the default, and if
-        price is already inside the band above the midpoint there is nothing
-        to wait for -- that IS the entry.
+        The operator's rule: "entry can be executed anywhere inside the band,
+        middle to upper would be ok to make sure we dont miss the band
+        fully". So:
+
+          price INSIDE the band  -> that price. Already in the band, and a
+            price in the lower half is a better fill than the midpoint, not a
+            worse one. Taking it also keeps the order from ever being priced
+            above the market, which a midpoint bid would be whenever price
+            sits in the lower half.
+          price ABOVE the band   -> the midpoint, as a resting bid. Middle
+            rather than the low so a partial penetration still fills, which
+            is the reason he gave; middle rather than the high because the
+            high is the worst price in the band.
+
+        What this CANNOT return is a price above `hi`. That is the whole
+        point: on 2026-10-17 the trader bought ARB at 0.18482 at market while
+        the band was 0.1705-0.175, 5.6% below. An entry that is always a band
+        price makes that arithmetically impossible, which is a stronger
+        guarantee than any filter that merely scores the setup.
         """
-        if px_now is not None and self.mid <= px_now <= self.hi:
+        if px_now is not None and self.lo <= px_now <= self.hi:
             return px_now
         return self.mid
 
@@ -148,6 +186,110 @@ class Zone:
         support, no structural guess.
         """
         return self.lo * (1.0 - buffer_pct / 100.0)
+
+
+@dataclass(frozen=True)
+class Plan:
+    """One concrete trade: a demand band to buy, and the supply band above it.
+
+    Everything comes from the two bands. There is no scoring step and nothing
+    to tune: the entry is a band price, the stop is just under the band low
+    because that is what invalidates it, and the target is the near edge of
+    the first supply band overhead.
+    """
+    zone: Zone
+    target: Zone
+    entry: float
+    stop: float
+    tp: float
+    immediate: bool      # price is in the band now, rather than above it
+
+    @property
+    def coin(self) -> str:
+        return self.zone.coin
+
+    @property
+    def risk_pct(self) -> float:
+        return ((self.entry - self.stop) / self.entry * 100.0
+                if self.entry > 0 else 0.0)
+
+    @property
+    def rr(self) -> float:
+        risk = self.entry - self.stop
+        return (self.tp - self.entry) / risk if risk > 0 else 0.0
+
+
+def plans_for(bars: List[Dict[str, Any]], px: float, coin: str = "",
+              window: int = ZONE_PIVOT_WINDOW,
+              recent_bars: Optional[int] = None,
+              min_bars: Optional[int] = None) -> List[Plan]:
+    """Tradeable plans for one coin, most recent band first.
+
+    Three things decide a plan, and none of them is a score:
+
+      1. the band must be RECENT (ZONE_RECENT_BARS). Age is the one feature
+         measured to separate the bands the operator draws from the ~22 others
+         per coin -- his sit at the 94th percentile of recency.
+      2. price must be able to REACH it (`live_zones`): inside the band, or
+         above it by no more than ZONE_REACH_PCT. A band above price is not a
+         buy, and a band far below is not this pass's business.
+      3. there must be a TARGET above the entry, or there is no tp and no
+         reward/risk and so no plan, however good the band.
+
+    Ordered by the band's own recency, NOT by reward/risk. Ordering by rr was
+    tried and it systematically picks the DEEPEST band in reach, because a
+    deeper entry sits further below the same target -- the mirror of the
+    shallow-band bias that `nearest_below` had. Recency is the ordering the
+    evidence supports: among the bands price can reach, picking the most
+    recent agrees with the operator's own choice on 9 of 12, against 6 of 12
+    for the deepest and 4 of 12 for the nearest.
+
+    What this does NOT claim
+    ------------------------
+    It does not reproduce his take/skip calls. Scored on the eight he judged
+    by hand -- "never offer an entry above the band he drew" -- no setting of
+    the recency window or the width floor beat 5 of 8, so no setting is
+    presented as if it had. Which genuine band to prefer is a judgement those
+    eight labels cannot settle.
+
+    The protection is structural instead of statistical: every entry here is a
+    price INSIDE a real band, with its stop under that band's low. The failure
+    on 2026-10-17 was an entry 5.6% ABOVE the band at market, and `entry_px`
+    cannot return such a price.
+    """
+    px = float(px)
+    if px <= 0:
+        return []
+    horizon = ZONE_RECENT_BARS if recent_bars is None else recent_bars
+    zs = demand_zones(bars, coin=coin, window=window, min_bars=min_bars)
+    n = len(bars)
+    if horizon > 0:
+        zs = [z for z in zs if (n - z.base_i) <= horizon]
+    demand = live_zones(zs, px)
+    if not demand:
+        return []
+    supply = supply_zones(bars, coin=coin, window=window, min_bars=min_bars)
+    out: List[Plan] = []
+    for z in demand:
+        if px < z.lo:
+            continue                   # band is above price: not a buy
+        entry = z.entry_px(px_now=px)
+        stop = z.stop_px()
+        if not entry > stop > 0:
+            continue
+        # Measured from the MARKET, not from the entry. A supply band below
+        # the current price has already been traded through, so it is not
+        # resistance any more -- and taking it as the target crushes the
+        # reward on exactly the trades worth having. WLD scored rr 0.08 that
+        # way: a bid at 0.46969 against a "target" of 0.4705 while price was
+        # 0.49138, already above it.
+        t = target_above(supply, max(entry, px))
+        if t is None:
+            continue                   # nothing overhead: no target, no plan
+        out.append(Plan(zone=z, target=t, entry=entry, stop=stop, tp=t.lo,
+                        immediate=z.contains(px)))
+    out.sort(key=lambda pl: -pl.zone.base_i)
+    return out
 
 
 def demand_zones(bars: List[Dict[str, Any]], coin: str = "",
@@ -182,6 +324,64 @@ def demand_zones(bars: List[Dict[str, Any]], coin: str = "",
         out.append(z)
     out.sort(key=lambda z: z.base_i)
     return _merge_nested(_dedupe(out))
+
+
+def supply_zones(bars: List[Dict[str, Any]], coin: str = "",
+                 window: int = ZONE_PIVOT_WINDOW,
+                 min_bars: Optional[int] = None) -> List[Zone]:
+    """Every supply band in `bars`, oldest first. The mirror of demand.
+
+    A supply zone is the base candle of an impulse that CLOSED BELOW a prior
+    swing LOW. The band runs from that candle's CLOSE up to its HIGH -- the
+    reflection of demand's low-to-close.
+
+    NOT FITTED, and that is deliberate rather than an omission: the operator
+    drew demand bands only, so there is nothing to fit supply against. What
+    makes it safe to use anyway is how narrow its job is. A supply band is
+    never entered. It is read once, as the target above a demand band, and it
+    only has to be roughly where resistance is for the reward/risk number to
+    mean something. An entry band has to be right to the edge because money
+    is placed on its low; a target band that is 1% out moves rr by about a
+    tenth.
+
+    If supply bands ever become something to SELL, they need the same
+    treatment demand got -- bands the operator drew, and a fit measured
+    against them -- and this docstring is the warning that no such evidence
+    exists yet.
+    """
+    floor = ZONE_MIN_BARS if min_bars is None else min_bars
+    if len(bars) < max(floor, window * 2 + 2):
+        return []
+    _, lows = find_pivots(bars, window)
+    out: List[Zone] = []
+    for lo_i, lo_px in lows:
+        bos = _first_close_below(bars, lo_i + 1, lo_px)
+        if bos is None:
+            continue
+        base = max(range(lo_i, bos + 1), key=lambda k: bars[k]["h"])
+        lo, hi = float(bars[base]["c"]), float(bars[base]["h"])
+        if hi <= lo:
+            continue                       # base closed at its high: no band
+        z = Zone(coin=coin.upper(), lo=lo, hi=hi, base_i=base, bos_i=bos,
+                 kind=SUPPLY)
+        if not ZONE_MIN_WIDTH_PCT <= z.width_pct <= ZONE_MAX_WIDTH_PCT:
+            continue
+        out.append(z)
+    out.sort(key=lambda z: z.base_i)
+    return _merge_nested(_dedupe(out))
+
+
+def target_above(supplies: List[Zone], px: float) -> Optional[Zone]:
+    """The nearest supply band wholly above `px`, or None.
+
+    Its LOW is the target, not its middle: the band is where sellers are, so
+    the trade takes profit as price arrives at the near edge rather than
+    hoping to cut through it. Nearest rather than best, because a target
+    further away is not more likely to be reached -- the first band overhead
+    is the one that decides whether the move gets there at all.
+    """
+    above = [z for z in supplies if z.lo > px]
+    return min(above, key=lambda z: z.lo) if above else None
 
 
 def live_zones(zones: List[Zone], px: float,
@@ -227,6 +427,19 @@ def _first_close_above(bars: List[Dict[str, Any]], start: int,
     """
     for j in range(start, len(bars)):
         if bars[j]["c"] > level:
+            return j
+    return None
+
+
+def _first_close_below(bars: List[Dict[str, Any]], start: int,
+                       level: float) -> Optional[int]:
+    """Break of structure, downward: the first bar to CLOSE below `level`.
+
+    The close, not the wick, for the same reason as `_first_close_above`: a
+    wick under a swing low is a sweep, not a break.
+    """
+    for j in range(start, len(bars)):
+        if bars[j]["c"] < level:
             return j
     return None
 
