@@ -15,6 +15,7 @@ The point of a ratchet is that it cannot get worse while someone works it
 down. Lower the number when you fix some; never raise it.
 """
 
+import pathlib
 import subprocess
 import sys
 import unittest
@@ -75,6 +76,61 @@ class Pinning(unittest.TestCase):
         self.assertEqual(out, "",
                          "the archive is tracked again; a live process will "
                          "dirty the working tree (audit F-4)")
+
+
+class EnvExampleMatchesTheCode(unittest.TestCase):
+    """.env.example must offer only knobs that exist.
+
+    It declared 121 variables and the code read 4 of them. The other 117 came
+    from an earlier system -- regime scoring, factor buckets, partial
+    take-profits, an SMC engine -- so setting one configured nothing. That is
+    worse than not offering it: it reads as a supported control.
+    """
+
+    @staticmethod
+    def declared():
+        import re
+        return [l.split("=")[0]
+                for l in open(".env.example").read().splitlines()
+                if re.match(r"^[A-Z][A-Z0-9_]*=", l)]
+
+    @staticmethod
+    def source():
+        src = ""
+        for f in pathlib.Path(".").rglob("*.py"):
+            if ".venv" in str(f) or "scratchpad" in str(f):
+                continue
+            src += f.read_text()
+        return src
+
+    def test_every_declared_variable_is_read_somewhere(self):
+        src = self.source()
+        dead = [d for d in self.declared() if d not in src]
+        self.assertEqual(dead, [], f"declared but never read: {dead}")
+
+    def test_the_credentials_are_offered(self):
+        """A setup that cannot find these does not trade at all."""
+        d = self.declared()
+        for k in ("HL_ACCOUNT_ADDRESS", "HL_SECRET_KEY", "HL_TESTNET",
+                  "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+                  "LEVELS_LIVE_ARMED"):
+            self.assertIn(k, d, f"{k} is not in .env.example")
+
+    def test_testnet_defaults_to_false_in_the_example_but_true_in_code(self):
+        """The example is for a real account, so it says false explicitly --
+        while the CODE defaults to true, so a missing .env cannot put real
+        money on a live venue by omission."""
+        self.assertIn("HL_TESTNET=false", open(".env.example").read())
+        from core import venue
+        import inspect
+        self.assertIn('"HL_TESTNET", "true"', inspect.getsource(venue))
+
+    def test_the_band_knobs_are_offered_since_they_are_the_strategy(self):
+        d = self.declared()
+        for k in ("LEVELS_ZONE_RECENT_BARS", "LEVELS_ZONE_MIN_WIDTH_PCT",
+                  "LEVELS_ZONE_REACH_PCT", "LEVELS_ZONE_STOP_BUFFER_PCT",
+                  "LEVELS_MIN_RR"):
+            self.assertIn(k, d, f"{k} is the strategy and is not offered")
 
 
 if __name__ == "__main__":
