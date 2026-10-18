@@ -42,9 +42,9 @@ import json
 import os
 import signal
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from dataclasses import dataclass
 
@@ -57,13 +57,9 @@ from core import execute, protect, safety, streak                     # noqa: E4
 from core.meta import MetaStore, TradeMeta                            # noqa: E402
 from core.venue import Venue                                          # noqa: E402
 from research.levels import storage                                   # noqa: E402
-from research.levels.call import find_candidates as _find_candidates  # noqa: E402
 from research.levels.venue_client import HyperliquidReadOnlyClient    # noqa: E402
 from research.levels.universe import select_universe                 # noqa: E402
-from research.levels.trigger import (                                 # noqa: E402
-    fetch_1h, level_has_held, trigger_window,
-)
-from research.levels.levels import log_sigma, sigma_distance          # noqa: E402
+from research.levels.trigger import fetch_1h                          # noqa: E402
 from research.levels import zone_pass                                 # noqa: E402
 from research.levels import zones                                     # noqa: E402
 
@@ -72,15 +68,12 @@ from research.levels import zones                                     # noqa: E4
 from research.levels.config import (                                  # noqa: E402
     MAX_CONCURRENT, MAX_NEW_PER_DAY, MAX_LEVERAGE,
     MIN_RR, MIN_NOTIONAL_USD, POLL_SEC,
-    TRADE_MIN_NEAR_SIGMA, TRADE_MIN_BARS_SINCE_TOUCH, TRADE_MIN_OVERHEAD_SIGMA,
-    MAX_ENTRY_DRIFT_PCT, WATCH_TTL_HOURS, NEAR_ALERT_SIGMA, FLAT_LEVERAGE,
+    MAX_ENTRY_DRIFT_PCT, FLAT_LEVERAGE,
     ENTRY_MAX_BREAK_FRAC, ENTRY_MAX_BASIS_BPS, ENTRY_MAX_PULL_OVER_RUN,
     COIN_REENTRY_COOLDOWN_HOURS,
     ENTRY_SPACING_MINUTES,
     MARGIN_PCT_PER_TRADE,
-    NEAR_ALERT_COOLDOWN_SEC, TRIGGER_MAX_ABOVE_SIGMA, LIMIT_ENTRY_TTL_HOURS,
-    TRIGGER_HOLD_HOURS, TRIGGER_HOLD_HOURS_SWING,
-    FLIP_CAPPED_BARS_MIN, FLIP_CAPPED_RECENT_BARS,
+    LIMIT_ENTRY_TTL_HOURS,
 )
 from research.levels.config import summary as config_summary          # noqa: E402
 
@@ -148,6 +141,13 @@ def iso_to_ms(ts: str) -> Optional[int]:
 # limits read equity and the losing run is derived from fills, so none of
 # these counters exists any more.
 RETIRED_STATE_KEYS = {
+    # The watchlist went with the level scan. A band is either in reach this
+    # pass or it is not, and a band price has not reached yet has a RESTING
+    # BID on it rather than a watchlist entry -- the venue holds that, with
+    # its own timestamp and its own expiry, so there is nothing for this file
+    # to remember. Retired rather than merely unused so an old state file does
+    # not carry 976 stale entries forward in silence.
+    "watching",
     "day_open_equity",
     "_equity_for_day_open",
     "_equity_for_day_open_day",
@@ -200,7 +200,7 @@ def load_state() -> Dict[str, Any]:
     # read from the venue, and the halt and the loss limits live in
     # core.safety. See core.meta for why this file can no longer express a
     # position -- it is REVIEW.md findings 5, 6, 8, 9 and 11 in one line.
-    return {"watching": {}, "opened_today": 0, "day": ""}
+    return {"opened_today": 0, "day": ""}
 
 
 def save_state(s: Dict[str, Any]) -> None:
@@ -260,61 +260,6 @@ def log_trade(row: Dict[str, Any]) -> None:
         if is_new:
             w.writeheader()
         w.writerow({k: row.get(k, "") for k in cols})
-
-
-def passes_quality(ep: Dict[str, Any], watched: bool = False) -> Optional[str]:
-    """Returns a rejection reason, or None if the setup clears the bar.
-
-    `watched` means this level already cleared the full bar on an earlier pass
-    and is being re-checked as price comes back to it. Depth and rest are then
-    skipped, because they are ADMISSION criteria and cannot survive the thing
-    they are admitting the level for.
-
-    Both measure distance from the level -- depth wants price >=5 sigma above
-    it, rest wants the level untested for >=9 bars -- and the entry trigger
-    requires the opposite of each: price within 2 sigma, touched inside 12
-    hours. Checking them again at entry is asking a level to be far away at
-    the moment it is being bought for being near. That conjunction is empty,
-    and it took the trader to 3041 consecutive "not_triggered" decisions with
-    the trigger never firing once. This docstring already said they were "one
-    underlying factor": price far from a level has necessarily not tested it
-    lately.
-
-    Target, headroom and reward/risk are NOT skipped. Those stay true, and
-    stay meaningful, with price sitting on the level -- on 2026-09-18 the RR
-    floor correctly refused all three USELESS triggers at rr 0.45-0.63.
-
-    Derived from 18 of the user's own take/skip calls, not invented. Scored on
-    those labels this combination keeps 8 of 11 takes and admits 0 of 5 skips.
-
-    What it does NOT check is as important. hold_rate and level_touches were
-    the original filters and both point the wrong way: hold_rate passes 4 of 5
-    skips against 5 of 11 takes, and takes average FEWER tests than skips
-    (10.7 vs 12.2). Filtering on them cost takes and bought nothing.
-
-    Depth, rest and headroom are likely one underlying factor rather than
-    three independent ones -- price far from a level has necessarily not
-    tested it lately and has more room above. They are checked separately so a
-    larger sample can tell them apart.
-    """
-    def f(k, d=0.0):
-        try:
-            return float(ep.get(k) or d)
-        except (TypeError, ValueError):
-            return d
-    if not watched:
-        if f("near_sigma") < TRADE_MIN_NEAR_SIGMA:
-            return f"depth {f('near_sigma'):.2f}s < {TRADE_MIN_NEAR_SIGMA}s (price too close to the level)"
-        if f("level_bars_since_last_touch") < TRADE_MIN_BARS_SINCE_TOUCH:
-            return (f"last tested {int(f('level_bars_since_last_touch'))}b "
-                    f"< {TRADE_MIN_BARS_SINCE_TOUCH}b (still sitting on it)")
-    if not str(ep.get("overhead_sigma", "")).strip():
-        return "no resistance mapped above -- no target"
-    if f("overhead_sigma") < TRADE_MIN_OVERHEAD_SIGMA:
-        return f"headroom {f('overhead_sigma'):.2f}s < {TRADE_MIN_OVERHEAD_SIGMA}s (resistance overhead)"
-    if f("suggested_rr") < MIN_RR:
-        return f"rr {f('suggested_rr'):.2f} < {MIN_RR}"
-    return None
 
 
 def size_from_stop(equity: float, entry: float, stop: float,
@@ -386,22 +331,6 @@ class Outcome:
         return self.opened
 
 
-def watch_key(ep: Dict[str, Any]) -> str:
-    return f"{str(ep.get('coin','')).upper()}|{ep.get('level_price','')}"
-
-
-def prune_watchlist(watching: Dict[str, Any]) -> int:
-    """Drop levels watched longer than WATCH_TTL_HOURS. Returns the count."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=WATCH_TTL_HOURS)
-    dropped = 0
-    for key in list(watching):
-        at = iso_to_ms(watching[key].get("admitted_at", ""))
-        if at is None or at < cutoff.timestamp() * 1000:
-            watching.pop(key, None)
-            dropped += 1
-    return dropped
-
-
 def cooldown_remaining(state: Dict[str, Any], coin: str) -> float:
     """Hours left before `coin` may be traded again, 0.0 when it is free.
 
@@ -457,134 +386,6 @@ def prune_cooldowns(state: Dict[str, Any]) -> int:
     return len(cooled)
 
 
-def seed_watchlist_from_log(watching: Dict[str, Any]) -> int:
-    """Admit levels the trade log shows already cleared the full bar.
-
-    The watchlist is new, so it starts empty, and a level only becomes
-    eligible once it has been seen while price was still far above it. That
-    would leave the levels price has ALREADY come back to -- the ones closest
-    to triggering -- ineligible until they drift far away and return again.
-
-    Those admissions did happen and were recorded: a dry_run/planned row is
-    written only for a setup that cleared the quality bar, so the log is an
-    accurate register of what qualified and when. This replays the ones inside
-    the TTL. Returns the number added.
-    """
-    import csv as _csv
-    if not TRADE_LOG.exists():
-        return 0
-    cutoff = (datetime.now(timezone.utc)
-              - timedelta(hours=WATCH_TTL_HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    added = 0
-    try:
-        with open(TRADE_LOG, newline="") as fh:
-            for r in _csv.DictReader(fh):
-                if r.get("action") != "dry_run" or r.get("result") != "planned":
-                    continue
-                if (r.get("ts_utc") or "") < cutoff:
-                    continue
-                key = f"{str(r.get('coin','')).upper()}|{r.get('level_price','')}"
-                if key in watching:
-                    continue
-                watching[key] = {"coin": r.get("coin"),
-                                 "level_price": r.get("level_price"),
-                                 "admitted_at": r.get("ts_utc"),
-                                 "seeded": True}
-                added += 1
-    except (OSError, _csv.Error) as e:
-        print(f"[LEVELS_LIVE] watchlist seed failed: {str(e)[:100]}")
-        return added
-    return added
-
-
-def build_intents(client, universe, watching: Optional[Dict[str, Any]] = None,
-                  bars_out: Optional[Dict[str, Any]] = None,
-                  tf_cache: Optional[Dict[Any, Any]] = None,
-                  ctx_out: Optional[Dict[str, Any]] = None
-                  ) -> Tuple[List[Dict[str, Any]], List[Any]]:
-    """Scan for setups and keep the ones clearing the quality bar. No side
-    effects, no venue writes -- this half only reads and computes.
-
-    A level clearing the FULL bar is admitted to `watching` and stays eligible
-    for WATCH_TTL_HOURS. While it is watched it only has to clear the entry
-    criteria -- target, headroom, reward/risk -- because depth and rest were
-    already answered at admission and cannot be true again once price has come
-    back to the level. Without that, the quality bar and the entry trigger
-    contradict each other and nothing can ever be bought (see passes_quality).
-
-    Uses the SAME candidate source as the call sheet the user labels. That
-    matters more than it looks: the trader previously used scanner.scan_coin,
-    which is 4h-only and onset-only, while the user labels candidates from
-    call.find_candidates, which scans 4h and 1h and includes flipped
-    resistances. Eight of their eleven takes are 1h setups, so the trader
-    could not see most of what it was being tuned on, and any filter fitted to
-    those labels was being applied to a different population than it was
-    measured on.
-    """
-    watching = {} if watching is None else watching
-    intents, rejected = [], []
-    # The scan already pulls a 1h series per coin. Collecting it here and
-    # trimming it to the trigger's window is what lets execute_one skip
-    # re-fetching the identical bars -- 30 of the pass's ~93 venue calls.
-    # Trimmed rather than passed whole because level_has_held derives sigma
-    # from the series LENGTH; see trigger.TRIGGER_1H_HOURS.
-    raw_1h: Dict[str, Any] = {}
-    # One mids request refreshes the forming 4h bar for the whole universe, so
-    # the 4h series can be reused between passes without the price everything
-    # is measured against going stale with it. Thirty candle calls become one.
-    # get_perp_contexts rather than get_all_mids: it carries mark AND oracle
-    # alongside the mid, so the basis veto costs no extra request. Still one
-    # call per pass.
-    mids: Dict[str, float] = {}
-    try:
-        cx = client.get_perp_contexts()
-        if ctx_out is not None:
-            ctx_out.update(cx)
-        mids = {k: v["mid_px"] for k, v in cx.items() if v.get("mid_px")}
-    except Exception as e:
-        # No mids means no safe reuse of the 4h series: fall through with an
-        # empty cache reference so every series is refetched, which is the old
-        # behaviour rather than a stale one. The basis veto then has nothing to
-        # read and abstains, which is the right direction for a veto.
-        print(f"[LEVELS_LIVE] context fetch failed ({str(e)[:80]}) -- "
-              f"refetching candle series this pass, basis veto inactive")
-        tf_cache = None
-    for ep in _find_candidates(client, universe, bars_out=raw_1h,
-                               tf_cache=tf_cache, mids=mids):
-        key = watch_key(ep)
-        strict = passes_quality(ep, watched=False)
-        if strict is None:
-            # Clears the full bar, so the clock restarts. The TTL means "48h
-            # since this last qualified", not "48h since we first noticed it":
-            # a level price is still far above goes on qualifying pass after
-            # pass, and letting it age out underneath that would drop it for
-            # no reason. The window that matters starts when price closes in
-            # and the level stops clearing on its own.
-            entry = watching.get(key) or {"coin": ep.get("coin"),
-                                          "level_price": ep.get("level_price")}
-            entry["admitted_at"] = now_iso()
-            watching[key] = entry
-            intents.append(ep)
-            continue
-        if key in watching:
-            relaxed = passes_quality(ep, watched=True)
-            if relaxed is None:
-                intents.append({**ep, "_watched": True})
-                continue
-            rejected.append((ep.get("coin"), ep.get("level_price"),
-                             f"watched, but {relaxed}"))
-            continue
-        rejected.append((ep.get("coin"), ep.get("level_price"), strict))
-    if bars_out is not None:
-        # Only coins with a live intent: trimming the rest would be work for
-        # bars nothing is going to read this pass.
-        wanted = {str(e.get("coin", "")) for e in intents}
-        for coin, bars in raw_1h.items():
-            if coin in wanted:
-                bars_out[coin] = trigger_window(bars)
-    return intents, rejected
-
-
 def describe(ep: Dict[str, Any], equity: float,
              available: Optional[float] = None) -> Dict[str, Any]:
     """Turn a setup into the concrete order that would be sent, with the size
@@ -622,10 +423,6 @@ def main():
                          "LEVELS_LIMIT_ENTRY_TTL_HOURS if it never fills.")
     ap.add_argument("--clear-standdown", action="store_true",
                     help="lift the loss-streak stand-down and reset the run")
-    ap.add_argument("--seed-watchlist", action="store_true",
-                    help="admit levels the trade log shows already cleared the "
-                         "quality bar, then exit. Run once after the watchlist "
-                         "is introduced; it is empty otherwise.")
     args = ap.parse_args()
 
     signal.signal(signal.SIGTERM, _sig)
@@ -636,15 +433,6 @@ def main():
     roll_day(state)
     if args.status:
         print(json.dumps(state, indent=2))
-        return 0
-    if args.seed_watchlist:
-        watching = state.setdefault("watching", {})
-        before = len(watching)
-        added = seed_watchlist_from_log(watching)
-        prune_watchlist(watching)
-        save_state(state)
-        print(f"[LEVELS_LIVE] watchlist seeded: {before} -> {len(watching)} "
-              f"({added} admitted from the trade log)")
         return 0
     halt_state = safety.HaltState()
     eqlog = safety.EquityLog()
@@ -792,21 +580,11 @@ def main():
 
             # Bookkeeping runs BEFORE the preflight early-return, not after it.
             # preflight continues the loop whenever it refuses a pass, so with
-            # these below it they stopped running exactly when the trader was
-            # busiest: four positions held for most of 2026-10-02/03 meant the
-            # cap refused every pass, and in that window 110 of 976 watched
-            # levels aged past the 48h TTL without being dropped -- the oldest
-            # 60.4h. That is not cosmetic. build_intents gives a watched level
-            # passes_quality(watched=True), which skips the depth and rest
-            # admission gates, so a level the TTL had retired stayed eligible.
-            #
             # Same shape as the day rollover, the asset-meta load and the
             # universe refresh: something that must happen every cycle, placed
             # where it only happens on some.
-            watching = state.setdefault("watching", {})
-            expired = prune_watchlist(watching)
             on_cooldown = prune_cooldowns(state)
-            if expired or on_cooldown:
+            if on_cooldown:
                 save_state(state)
             if on_cooldown:
                 print("[LEVELS_LIVE] cooling off: "
@@ -949,29 +727,12 @@ def main():
                 if not r.protected:
                     print(f"[LEVELS_LIVE] !! post-entry protection {r.coin}: "
                           f"{r.action} -- {r.detail[:120]}")
-        # Levels price has nearly reached. The board exists for looking at on
-        # purpose; this is only so a zone cannot be reached unnoticed while
-        # nobody is looking. Rate limited, and capped at five -- alerting on
-        # everything eligible would be ~140 lines a pass, which is a mailing
-        # list, not a signal.
-        near = sorted((w for w in watchboard if w["above"] <= NEAR_ALERT_SIGMA),
-                      key=lambda w: w["above"])[:5]
-        if near:
-            lines = "\n".join(
-                f"`{w['coin']}` {float(w['level']):.6g} -- {w['above']:.1f}s above "
-                f"(fires <={TRIGGER_MAX_ABOVE_SIGMA}), entry `{float(w['entry']):.6g}`, "
-                f"stop `{float(w['stop']):.6g}`, rr {float(w['rr'] or 0):.2f}"
-                for w in near)
-            sent = notify.send(f"🔵 *Approaching buy zones* ({len(near)} of "
-                               f"{len(watchboard)} watched)\n{lines}",
-                               key="approaching", cooldown_sec=NEAR_ALERT_COOLDOWN_SEC)
-            print(f"[LEVELS_LIVE] {len(near)} level(s) within {NEAR_ALERT_SIGMA} sigma"
-                  f" -- digest {'sent' if sent else 'suppressed (cooldown)'}; "
-                  f"nearest {near[0]['coin']} at {near[0]['above']:.1f}s")
-        else:
-            closest = min((w["above"] for w in watchboard), default=None)
-            print(f"[LEVELS_LIVE] nothing within {NEAR_ALERT_SIGMA} sigma"
-                  + (f"; nearest is {closest:.1f}s" if closest is not None else ""))
+        # The near-level digest is gone with the watchlist. A band price has
+        # not reached yet is not a near miss waiting to be announced -- it has
+        # a RESTING BID on it, and that bid sends its own alert when it is
+        # placed and its own fill when it is hit. Announcing the same band a
+        # second time as "approaching" was one message per pass for a thing
+        # already committed to.
         if args.once:
             return 0
         for _ in range(POLL_SEC):
@@ -1025,69 +786,6 @@ def preflight(venue, state: Dict[str, Any], halt: "safety.HaltState",
     if eq.usdc_total <= 0:
         return f"equity {eq.usdc_total}"
     return None
-
-
-def review_flags(ep: Dict[str, Any], size_usd: float, equity: float) -> List[str]:
-    """Reasons a human should look at this trade, even though it passed.
-
-    Passing the filters is not the same as being a normal trade. These are the
-    cases where the rails allow something the user may not want, and they are
-    surfaced rather than blocked because the filters are fitted to 18 labels
-    and the edges of that fit are exactly where it should be questioned.
-    """
-    def f(k, d=0.0):
-        try:
-            return float(ep.get(k) or d)
-        except (TypeError, ValueError):
-            return d
-    out = []
-    if equity > 0 and size_usd > equity * 1.5:
-        out.append(f"notional ${size_usd:,.0f} is {size_usd/equity:.1f}x equity")
-    entry, stop = f("suggested_entry"), f("suggested_stop")
-    if entry > 0 and stop > 0:
-        sd = (entry - stop) / entry * 100
-        if sd < 1.5:
-            out.append(f"stop only {sd:.2f}% away -- a gap through it loses more than the risk")
-    if f("suggested_rr") < MIN_RR * 1.1:
-        out.append(f"reward/risk {f('suggested_rr'):.2f} is at the {MIN_RR} floor")
-    if f("near_sigma") < TRADE_MIN_NEAR_SIGMA * 1.1:
-        out.append(f"depth {f('near_sigma'):.2f}s is at the {TRADE_MIN_NEAR_SIGMA}s floor")
-    if f("level_hold_rate") < 0.70:
-        out.append(f"level held only {f('level_hold_rate')*100:.0f}% of its {int(f('level_touches'))} tests")
-    if ep.get("level_origin") == "flipped_resistance":
-        out.append("flipped resistance -- only 1 of the 18 labels was this kind")
-    # Time spent capping price, which level_origin misses entirely.
-    cap = f("capped_bars")
-    since = f("bars_since_capped", -1)
-    if behaves_like_flip(ep) and str(ep.get("level_origin", "")) != "flipped_resistance":
-        out.append(f"was resistance until recently -- capped price {int(cap)}/120 bars, "
-                   f"last {int(since)} bars ago; price is still flipping it, so it "
-                   f"must clear the {TRIGGER_HOLD_HOURS}h channel hold")
-    return out
-
-
-def behaves_like_flip(ep: Dict[str, Any]) -> bool:
-    """True when a level is still acting as resistance, however it was labelled.
-
-    level_origin marks only what the resistance detector happened to find, so a
-    level can be scored swing_low while plainly still capping price -- and a
-    swing_low is asked for the easy 1h hold rather than the 2h channel hold a
-    flip has to prove. ARB 0.186655 was bought on 2026-10-13 having capped
-    price for 66 of the last 120 bars, most recently 6 bars earlier, on a 1h
-    hold. SOL 101.72 was the same shape at 95 of 120 bars, last 12 bars ago.
-
-    Used by review_flags AND by the hold decision, from one definition, so the
-    advisory line and the rule can never disagree about what a flip is.
-    """
-    def f(k, d=0.0):
-        try:
-            return float(ep.get(k) or d)
-        except (TypeError, ValueError):
-            return d
-    if str(ep.get("level_origin", "")) == "flipped_resistance":
-        return True
-    since = f("bars_since_capped", -1)
-    return f("capped_bars") >= FLIP_CAPPED_BARS_MIN and 0 <= since <= FLIP_CAPPED_RECENT_BARS
 
 
 def persist_traded_episode(ep: Dict[str, Any]) -> bool:
@@ -1456,18 +1154,20 @@ def execute_one(venue, meta, ep: Dict[str, Any], equity: float,
     coin = ep["coin"]
     entry, stop, tp = g("suggested_entry"), g("suggested_stop"), g("suggested_tp")
     # A band carries its own trigger: price being INSIDE it is the setup, and
-    # there is nothing left to wait for. The level trigger asked a different
-    # question -- has price tapped this price and then held above it for some
-    # hours -- which a band answers by construction, because an entry inside
-    # the band is only reachable when price is in the band.
+    # there is nothing left to wait for. The level trigger that used to stand
+    # here asked a different question -- has price tapped this price and then
+    # held above it for some hours -- which a band answers by construction,
+    # because an entry inside the band is only reachable when price is in the
+    # band. It is deleted rather than bypassed; with the pass trading bands it
+    # had no reachable caller, and dead code on the entry path is the kind
+    # that gets re-enabled by accident.
     #
-    # The checks below it are NOT skipped. entry_is_actionable is generic and
-    # it is the one that matters most here: it re-derives the geometry from
-    # the live price and refuses an entry that has drifted off the plan, which
-    # is the guard the UNI fill at 8.8125 against a planned 7.50 defeated.
-    is_zone = str(ep.get("level_origin", "")) == "demand_zone"
+    # The checks below are NOT skipped. entry_is_actionable is generic and it
+    # is the one that matters most here: it re-derives the geometry from the
+    # live price and refuses an entry that has drifted off the plan, which is
+    # the guard the UNI fill at 8.8125 against a planned 7.50 defeated.
     bars1h: Optional[List[Dict[str, Any]]] = None
-    if armed and is_zone:
+    if armed:
         bars1h = (bars_cache or {}).get(coin)
         for flag in zone_pass.review_flags(
                 _plan_from(ep),
@@ -1481,63 +1181,6 @@ def execute_one(venue, meta, ep: Dict[str, Any], equity: float,
                        "detail": flag})
         print(f"[LEVELS_LIVE] IN BAND {coin} "
               f"{g('zone_lo'):.6g}-{g('zone_hi'):.6g} -- entry {entry:.6g}")
-
-    # The trigger: has this level actually held? Checked before anything is
-    # sent, and only when armed, because it costs an API call per candidate.
-    # Arrival alone is not a setup -- every "maybe" the user gave was a level
-    # price was sitting on at that moment.
-    if armed and not is_zone:
-        try:
-            bars1h = cached_1h(coin, bars_cache)
-        except Exception as e:
-            # Recorded, not just printed. Every other way a candidate is
-            # dropped writes a row, so a setup lost to a rate limit was the
-            # one outcome invisible to live_trades.csv -- and the gap between
-            # what the gate saw and what it did is the measurement this whole
-            # package exists to make.
-            detail = f"1h fetch failed: {str(e)[:200]}"
-            print(f"[LEVELS_LIVE] skip {coin}: {detail}")
-            log_trade({"ts_utc": now_iso(), "action": "skip", "coin": coin,
-                       "episode_id": ep.get("episode_id", ""),
-                       "level_price": g("level_price"),
-                       "result": "fetch_failed", "detail": detail})
-            return Outcome()
-        # A flipped resistance has to prove the flip by holding a channel;
-        # ordinary support taps and sends, and asking it to sit for two hours
-        # is asking it to behave like the thing it is not.
-        # Asks how the level BEHAVES, not only how it was labelled. A level
-        # still capping price gets the channel hold even when level_origin
-        # called it a swing low.
-        is_flip = behaves_like_flip(ep)
-        hold_h = TRIGGER_HOLD_HOURS if is_flip else TRIGGER_HOLD_HOURS_SWING
-        fired, why = level_has_held(bars1h, g("level_price"), hold_hours=hold_h)
-        if not fired:
-            log_trade({"ts_utc": now_iso(), "action": "skip", "coin": coin,
-                       "episode_id": ep.get("episode_id", ""), "level_price": g("level_price"),
-                       "result": "not_triggered", "detail": why})
-            print(f"[LEVELS_LIVE] wait {coin} @ {g('level_price'):.6g}: {why}")
-            # Record how far off it is, so the pass can report the ones that
-            # are nearly there. Recomputed from the bars already in hand
-            # rather than parsed back out of `why`.
-            if watchboard is not None:
-                _closed = bars1h[:-1]
-                _sig = log_sigma(_closed, len(_closed) - 1) if len(_closed) > 6 else 0.0
-                if _sig > 0:
-                    watchboard.append({
-                        "coin": coin, "level": g("level_price"),
-                        "above": sigma_distance(_closed[-1]["c"], g("level_price"), _sig),
-                        "why": why, "entry": entry, "stop": stop, "tp": tp,
-                        "rr": g("suggested_rr")})
-            return Outcome()
-        print(f"[LEVELS_LIVE] TRIGGER {coin} @ {g('level_price'):.6g}: {why} "
-              f"[{'flip, ' + str(hold_h) + 'h channel hold' if is_flip else 'swing low, tap and reclaim'}]")
-        for flag in review_flags(ep, size_from_stop(equity, entry, stop, available,
-                                                    venue_max_leverage=None)["size_usd"], equity):
-            print(f"[LEVELS_LIVE] [REVIEW] {coin}: {flag}")
-            log_trade({"ts_utc": now_iso(), "action": "review", "coin": coin,
-                       "episode_id": ep.get("episode_id", ""),
-                       "level_price": g("level_price"), "result": "flagged",
-                       "detail": flag})
 
     # Size from the LIVE price, not the planned one. Sizing off the plan while
     # filling at market is exactly what made the UNI position carry 3.5x its

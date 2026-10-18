@@ -822,13 +822,23 @@ ONSET_MATCH_SIGMA = _f("LEVELS_ONSET_MATCH_SIGMA", 0.5)
 
 
 def summary() -> str:
+    """One line describing the gates that actually run.
+
+    The trade half used to read `depth>=5.0s rested>=9b headroom>=3.0s`, and
+    it kept printing that after the pass moved to bands -- thresholds nothing
+    applied any more, on the line the operator reads to know what the bot is
+    doing. The scanner's logging gate is unchanged and still described; it
+    records episodes and is a separate question from what gets traded.
+    """
+    from research.levels import zones as _z
     return (f"gate(log): run>={RUN_SIGMA_MIN}s pull>={PULL_SIGMA_MIN}s "
             f"retests>={MIN_RETESTS} near<={GATE_MAX_NEAR_SIGMA}s | "
-            f"trade(buy): depth>={TRADE_MIN_NEAR_SIGMA}s "
-            f"rested>={TRADE_MIN_BARS_SINCE_TOUCH}b "
-            f"headroom>={TRADE_MIN_OVERHEAD_SIGMA}s rr>={MIN_RR} | "
-            f"entry +{ENTRY_BUFFER_SIGMA}s stop -{STOP_SIGMA_BELOW}s "
-            f"risk {RISK_PCT_PER_TRADE}%")
+            f"trade(buy): band {_z.ZONE_MIN_WIDTH_PCT}-"
+            f"{_z.ZONE_MAX_WIDTH_PCT}% wide, base within "
+            f"{_z.ZONE_RECENT_BARS}b, within {_z.ZONE_REACH_PCT}% of price, "
+            f"target above, rr>={MIN_RR} | "
+            f"entry inside the band, stop {_z.ZONE_STOP_BUFFER_PCT}% under "
+            f"its low")
 
 
 # ---- rule 9: how long each kind of record is kept --------------------------

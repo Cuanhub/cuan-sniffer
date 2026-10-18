@@ -350,10 +350,6 @@ class ArmedPathTest(unittest.TestCase):
         self.assertTrue(any("could not be protected" in s for s in self.sent))
 
     # -- what the caller is told ------------------------------------------
-    def test_a_skipped_candidate_reports_no_order(self):
-        T._RO_CLIENT = FakeCandles(held=False)
-        self.assertFalse(self.fire().order_sent)
-
     def test_a_filled_entry_reports_an_order(self):
         self.assertTrue(self.fire().order_sent)
 
@@ -384,26 +380,7 @@ class ArmedPathTest(unittest.TestCase):
         self.assertIn("HYPE", blob)
         self.assertTrue(any("OPENED" in s or "stop" in s for s in self.sent))
 
-    def test_fetch_failure_is_recorded_not_just_printed(self):
-        class Boom:
-            def get_candles(self, *a, **k):
-                raise RuntimeError("rate limited")
-
-        T._RO_CLIENT = Boom()
-        self.fire()
-        rows = T.TRADE_LOG.read_text() if T.TRADE_LOG.exists() else ""
-        self.assertIn("fetch_failed", rows,
-                      "a candidate lost to a rate limit must leave a row")
-
     # -- the watchboard ---------------------------------------------------
-    def test_a_near_miss_is_recorded_on_the_watchboard(self):
-        T._RO_CLIENT = FakeCandles(held=False)
-        board = []
-        T.execute_one(self.venue, self.meta, episode("HYPE"), 1000.0, 1000.0,
-                      True, self.state, watchboard=board)
-        self.assertTrue(board, "a near miss must reach the board")
-        self.assertEqual(board[0]["coin"], "HYPE")
-
     def test_a_fired_trigger_is_not_on_the_watchboard(self):
         board = []
         T.execute_one(self.venue, self.meta, episode("HYPE"), 1000.0, 1000.0,
@@ -411,22 +388,6 @@ class ArmedPathTest(unittest.TestCase):
         self.assertEqual(board, [], "a trade that fired is not a near miss")
 
     # -- bar caching ------------------------------------------------------
-    def test_1h_bars_are_fetched_once_per_coin_per_pass(self):
-        calls = []
-        inner = FakeCandles()
-
-        class Counting:
-            def get_candles(self, coin, interval, start, end):
-                calls.append(coin)
-                return inner.get_candles(coin, interval, start, end)
-
-        T._RO_CLIENT = Counting()
-        cache = {}
-        for _ in range(3):
-            T.execute_one(self.venue, self.meta, episode("HYPE"), 1000.0,
-                          1000.0, True, self.state, bars_cache=cache)
-        self.assertEqual(len(calls), 1, f"fetched {len(calls)} times")
-
     def test_no_cache_still_fetches(self):
         self.assertTrue(self.fire().order_sent)
 
@@ -503,96 +464,6 @@ class EntryDriftTest(unittest.TestCase):
                                msg="size must come from the LIVE price")
 
 
-class TriggerTest(unittest.TestCase):
-    """The user's rule: price came down to the level and has held above it for
-    two hours. Arrival alone is not enough -- every setup they marked "maybe"
-    was one price was sitting on at that moment."""
-
-    def setUp(self):
-        self._tmp = Path("/tmp/_test_trigger")
-        if self._tmp.exists():
-            shutil.rmtree(self._tmp)
-        self._tmp.mkdir(parents=True)
-        self._o = (T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT)
-        T.STATE_PATH = self._tmp / "s.json"
-        T.TRADE_LOG = self._tmp / "t.csv"
-        self.state = {"opened_today": 0, "day": "d"}
-        self.meta = MetaStore(self._tmp / "meta.json")
-
-    def tearDown(self):
-        T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT = self._o
-        if self._tmp.exists():
-            shutil.rmtree(self._tmp)
-
-    @staticmethod
-    def orders_sent(venue):
-        """Entry orders the venue was asked for -- triggers are protection."""
-        return [o for o in venue.exchange.sent if "trigger" not in o["type"]]
-
-    def test_fires_after_the_level_has_held(self):
-        T._RO_CLIENT = FakeCandles(held=True, touched=True)
-        b = _venue(mid=100.0)
-        self.assertTrue(T.execute_one(b, self.meta, episode("AAA"), 1000.0, 1000.0, True, self.state))
-
-    def test_waits_while_the_level_is_breaking(self):
-        T._RO_CLIENT = FakeCandles(held=False, touched=True)
-        b = _venue(mid=100.0)
-        self.assertFalse(T.execute_one(b, self.meta, episode("AAA"), 1000.0, 1000.0, True, self.state))
-        self.assertEqual([o for o in b.exchange.sent
-                          if "trigger" not in o["type"]], [],
-                         "must not buy a level that is closing below itself")
-
-    def test_waits_when_price_never_reached_the_level(self):
-        T._RO_CLIENT = FakeCandles(held=True, touched=False)
-        b = _venue(mid=100.0)
-        self.assertFalse(T.execute_one(b, self.meta, episode("AAA"), 1000.0, 1000.0, True, self.state))
-
-    def test_hold_ignores_the_still_forming_bar(self):
-        """A live candle is not a hold. Counting it would let a wick that is
-        about to be filled stand in for two hours of support."""
-        from research.levels.trigger import level_has_held
-        lv = 100.0
-        # 1.002 keeps the last closed bar inside TRIGGER_MAX_ABOVE_SIGMA;
-        # this test is about the forming bar, not about the ceiling.
-        bars = [{"t": i * 3600_000, "o": lv * 1.002, "h": lv * 1.006,
-                 "l": lv * 0.999 if i == 30 else lv * 1.001,
-                 "c": lv * (1.002 + 0.004 * ((i % 5) - 2))} for i in range(40)]
-        bars[-1]["c"] = lv * 0.90        # forming bar collapsing -- must be ignored
-        fired, _ = level_has_held(bars, lv)
-        self.assertTrue(fired)
-        bars[-2]["c"] = lv * 0.90        # a CLOSED bar below the level must block
-        self.assertFalse(level_has_held(bars, lv)[0])
-
-
-class ReviewFlagTest(unittest.TestCase):
-    """Trades that pass the rails but a human should still look at. These are
-    surfaced, never blocked -- the filters are fitted to 18 labels and their
-    edges are exactly where they should be questioned."""
-
-    def test_flags_notional_far_above_equity(self):
-        ep = episode("BNB", 741.0, 733.0, 757.0)
-        flags = T.review_flags(ep, 2118.0, 768.0)
-        self.assertTrue(any("equity" in f for f in flags), flags)
-
-    def test_flags_a_stop_tight_enough_to_gap_through(self):
-        ep = episode("BNB", 741.457, 733.386, 757.75)   # 1.09% stop
-        self.assertTrue(any("gap" in f for f in T.review_flags(ep, 100.0, 768.0)))
-
-    def test_flags_a_level_with_a_poor_hold_record(self):
-        ep = episode("AAA") | {"level_hold_rate": 0.55, "level_touches": 9}
-        self.assertTrue(any("held only" in f for f in T.review_flags(ep, 100.0, 768.0)))
-
-    def test_flags_the_flipped_resistance_category(self):
-        ep = episode("AAA") | {"level_origin": "flipped_resistance"}
-        self.assertTrue(any("flipped" in f for f in T.review_flags(ep, 100.0, 768.0)))
-
-    def test_a_clean_trade_raises_nothing(self):
-        ep = episode("AAA", 100.0, 90.0, 140.0) | {
-            "level_hold_rate": 0.95, "level_touches": 12,
-            "near_sigma": 8.0, "suggested_rr": 4.0, "level_origin": "swing_low"}
-        self.assertEqual(T.review_flags(ep, 300.0, 768.0), [])
-
-
 class DailyCapTest(unittest.TestCase):
     """MAX_NEW_PER_DAY was 0, and 0 means the rail does not exist.
 
@@ -629,122 +500,6 @@ def gated(coin="AAA", level=100.0, near=7.0, rest=20, overhead=7.0, rr=3.0):
             "suggested_entry": level, "suggested_stop": level * 0.95,
             "suggested_tp": level * 1.15, "level_hold_rate": 1.0,
             "level_touches": 10, "level_origin": "swing_low"}
-
-
-class WatchlistTest(unittest.TestCase):
-    """The quality bar and the entry trigger describe the same level at two
-    different moments, and contradict each other at one.
-
-    Depth wants price >=5 sigma ABOVE the level; the trigger wants it within
-    2 sigma. Rest wants the level untested for >=9 bars; the trigger wants it
-    touched inside 12 hours. Checked together on one candidate in one pass
-    they are an empty set, and the trader proved it: 3041 consecutive
-    not_triggered decisions, the trigger never once firing.
-    """
-
-    def test_depth_and_rest_are_admission_only(self):
-        shallow = gated(near=0.5, rest=1)
-        self.assertIsNotNone(T.passes_quality(shallow, watched=False))
-        self.assertIsNone(T.passes_quality(shallow, watched=True))
-
-    def test_entry_criteria_still_apply_while_watched(self):
-        # These stay true and stay meaningful with price sitting on the level.
-        # The rr floor correctly refused all three USELESS triggers at 0.45-0.63.
-        self.assertIsNotNone(T.passes_quality(gated(near=0.5, rr=0.45), watched=True))
-        self.assertIsNotNone(T.passes_quality(gated(near=0.5, overhead=1.0), watched=True))
-        self.assertIsNotNone(T.passes_quality(gated(near=0.5, overhead=""), watched=True))
-
-    def test_price_returning_to_an_admitted_level_still_qualifies(self):
-        orig = T._find_candidates
-        watching = {}
-        try:
-            # pass 1: price far above -- clears the full bar, gets admitted
-            T._find_candidates = lambda c, u, **kw: [gated(near=7.0, rest=20)]
-            intents, _ = T.build_intents(None, None, watching)
-            self.assertEqual(len(intents), 1)
-            self.assertIn("AAA|100.0", watching)
-
-            # pass 2: price has come back to the level -- depth and rest now
-            # fail, which is exactly what being ready to enter looks like
-            T._find_candidates = lambda c, u, **kw: [gated(near=0.4, rest=1)]
-            intents, rejected = T.build_intents(None, None, watching)
-            self.assertEqual(len(intents), 1, "a watched level must survive the pullback")
-            self.assertTrue(intents[0]["_watched"])
-            self.assertEqual(rejected, [])
-        finally:
-            T._find_candidates = orig
-
-    def test_requalifying_restarts_the_ttl_clock(self):
-        # A level price is still far above keeps qualifying pass after pass.
-        # Ageing it out underneath that would drop it for no reason; the
-        # window that matters starts when it stops clearing on its own.
-        from datetime import datetime, timedelta, timezone
-        stale = (datetime.now(timezone.utc)
-                 - timedelta(hours=T.WATCH_TTL_HOURS - 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        watching = {"AAA|100.0": {"coin": "AAA", "level_price": 100.0,
-                                  "admitted_at": stale}}
-        orig = T._find_candidates
-        try:
-            T._find_candidates = lambda c, u, **kw: [gated(near=7.0, rest=20)]
-            T.build_intents(None, None, watching)
-        finally:
-            T._find_candidates = orig
-        self.assertNotEqual(watching["AAA|100.0"]["admitted_at"], stale,
-                            "re-qualifying must restart the clock")
-        self.assertEqual(T.prune_watchlist(watching), 0)
-
-    def test_an_unadmitted_shallow_level_is_still_rejected(self):
-        orig = T._find_candidates
-        try:
-            T._find_candidates = lambda c, u, **kw: [gated(near=0.4, rest=1)]
-            intents, rejected = T.build_intents(None, None, {})
-            self.assertEqual(intents, [])
-            self.assertIn("depth", rejected[0][2])
-        finally:
-            T._find_candidates = orig
-
-    def test_watchlist_expires(self):
-        from datetime import datetime, timedelta, timezone
-        stale = (datetime.now(timezone.utc)
-                 - timedelta(hours=T.WATCH_TTL_HOURS + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        watching = {"AAA|100.0": {"admitted_at": stale},
-                    "BBB|200.0": {"admitted_at": T.now_iso()}}
-        self.assertEqual(T.prune_watchlist(watching), 1)
-        self.assertNotIn("AAA|100.0", watching)
-        self.assertIn("BBB|200.0", watching)
-
-    def test_seeding_replays_admissions_from_the_trade_log(self):
-        # A dry_run/planned row is written only for a setup that cleared the
-        # full bar, so the log is an accurate register of what qualified.
-        from datetime import datetime, timedelta, timezone
-        old_ts = (datetime.now(timezone.utc)
-                  - timedelta(hours=T.WATCH_TTL_HOURS + 2)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        T.log_trade({"ts_utc": T.now_iso(), "action": "dry_run", "coin": "AAA",
-                     "level_price": "100.0", "result": "planned"})
-        T.log_trade({"ts_utc": T.now_iso(), "action": "skip", "coin": "BBB",
-                     "level_price": "200.0", "result": "not_triggered"})
-        T.log_trade({"ts_utc": old_ts, "action": "dry_run", "coin": "CCC",
-                     "level_price": "300.0", "result": "planned"})
-        watching = {}
-        added = T.seed_watchlist_from_log(watching)
-        self.assertEqual(added, 1)
-        self.assertIn("AAA|100.0", watching)
-        self.assertNotIn("BBB|200.0", watching, "a skip is not an admission")
-        self.assertNotIn("CCC|300.0", watching, "outside the TTL")
-
-    def test_seeding_is_idempotent(self):
-        T.log_trade({"ts_utc": T.now_iso(), "action": "dry_run", "coin": "AAA",
-                     "level_price": "100.0", "result": "planned"})
-        watching = {}
-        self.assertEqual(T.seed_watchlist_from_log(watching), 1)
-        self.assertEqual(T.seed_watchlist_from_log(watching), 0)
-
-    def test_seeding_without_a_log_is_harmless(self):
-        self.assertEqual(T.seed_watchlist_from_log({}), 0)
-
-    def test_unparseable_admission_time_expires(self):
-        watching = {"AAA|100.0": {"admitted_at": "garbage"}}
-        self.assertEqual(T.prune_watchlist(watching), 1)
 
 
 class OutcomeTest(unittest.TestCase):
@@ -802,40 +557,6 @@ class BackendStartTest(unittest.TestCase):
             self.assertIsNone(T.start_venue(dead, sleep=lambda s: None))
         finally:
             T._stop = False
-
-
-class HoldRuleSelectionTest(unittest.TestCase):
-    """execute_one must pick the hold rule from the level's origin."""
-
-    def test_the_two_rules_are_different(self):
-        self.assertNotEqual(T.TRIGGER_HOLD_HOURS, T.TRIGGER_HOLD_HOURS_SWING)
-        self.assertLess(T.TRIGGER_HOLD_HOURS_SWING, T.TRIGGER_HOLD_HOURS)
-
-    def test_origin_selects_the_hold_window(self):
-        seen = []
-        orig = T.level_has_held
-        T.level_has_held = lambda bars, lvl, hold_hours=None, **kw: (
-            seen.append(hold_hours), (False, "not_triggered"))[1]
-        tmp = Path("/tmp/_test_holdrule")
-        if tmp.exists():
-            shutil.rmtree(tmp)
-        tmp.mkdir(parents=True)
-        orig_paths = (T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT)
-        T.STATE_PATH, T.TRADE_LOG = tmp / "s.json", tmp / "t.csv"
-        T._RO_CLIENT = FakeCandles()
-        st = {"owned": {}, "pending": {}, "opened_today": 0, "day": "d",
-              "realised_today": 0.0, "halted": False, "halt_reason": ""}
-        try:
-            for origin, expected in (("flipped_resistance", T.TRIGGER_HOLD_HOURS),
-                                     ("swing_low", T.TRIGGER_HOLD_HOURS_SWING)):
-                ep = dict(episode("AAA"), level_origin=origin)
-                T.execute_one(_venue(), MetaStore(Path(tempfile.mkdtemp()) / "m.json"),
-                      ep, 1000.0, 1000.0, True, st)
-                self.assertEqual(seen[-1], expected, origin)
-        finally:
-            T.level_has_held = orig
-            T.STATE_PATH, T.TRADE_LOG, T._RO_CLIENT = orig_paths
-            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class DayRolloverTest(unittest.TestCase):
@@ -941,7 +662,10 @@ class StateFileTest(unittest.TestCase):
         self.assertNotIn("owned", st, "a fresh state must not claim to know "
                                       "what the account holds")
         self.assertNotIn("pending", st)
-        self.assertEqual(st["watching"], {})
+        # No watchlist: it went with the level scan. A band is in reach
+        # this pass or it is not, and one price has not reached has a resting
+        # bid at the venue rather than an entry in this file.
+        self.assertNotIn("watching", st)
         # The halt is not in here either: it lives in core.safety, so a
         # corrupt or missing state file cannot clear one.
         self.assertNotIn("halted", st)
@@ -1046,7 +770,8 @@ class ModuleShapeTest(unittest.TestCase):
         src = Path("tools/live_levels_trader.py").read_text()
         guard = src.index('if __name__ == "__main__"')
         for fn in ("execute_one", "preflight", "rest_one_bid", "start_venue",
-                   "build_intents", "size_from_stop", "drain_control_queue"):
+                   "place_resting_bid", "size_from_stop",
+                   "drain_control_queue"):
             self.assertLess(src.index(f"def {fn}("), guard,
                             f"{fn} is defined after the __main__ guard")
 
@@ -1124,7 +849,7 @@ class RetiredStateKeysAreStripped(unittest.TestCase):
                      "loss_streak", "forced"):
             self.assertNotIn(dead, st, f"{dead} survived the load")
         # and the strategy state it legitimately owns is untouched
-        self.assertEqual(st["watching"], {"a": 1})
+        self.assertNotIn("watching", st, "the watchlist is retired")
         self.assertEqual(st["opened_today"], 2)
 
     def test_a_corrupt_file_is_still_fatal(self):

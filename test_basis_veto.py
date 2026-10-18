@@ -131,11 +131,13 @@ class WiredAtZeroExtraCost(unittest.TestCase):
         """get_perp_contexts carries mark and oracle beside the mid, so the
         veto costs no additional request -- still one call per pass."""
         import inspect
-        src = inspect.getsource(T.build_intents)
-        self.assertIn("client.get_perp_contexts()", src)
+        # The pass makes this call itself now. It used to sit inside
+        # build_intents, which the band scan replaced.
+        src = inspect.getsource(T.main)
+        self.assertIn("ro.get_perp_contexts()", src)
         # The CALL, not the word: the comment explaining the switch names the
         # old method, and matching bare text flagged that as a regression.
-        self.assertNotIn("client.get_all_mids()", src)
+        self.assertNotIn("ro.get_all_mids()", src)
         self.assertIn("mid_px", src)
 
     def test_the_contexts_reach_the_gate(self):

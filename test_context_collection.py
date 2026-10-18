@@ -46,10 +46,14 @@ class Inertness(unittest.TestCase):
     """The guarantee that matters while this is still an experiment."""
 
     def test_the_live_filter_does_not_read_any_of_them(self):
-        import tools.live_levels_trader as T
-        src = inspect.getsource(T.passes_quality)
+        """The live filter is zone_pass.rejection now -- passes_quality was
+        deleted with the level scan. Same guarantee, new name: the thing that
+        decides whether a setup is tradeable must not read a context field
+        that has not earned its own evidence."""
+        from research.levels import zone_pass
+        src = inspect.getsource(zone_pass)
         for f in CTX_FIELDS:
-            self.assertNotIn(f, src, f"passes_quality reads {f}")
+            self.assertNotIn(f, src, f"zone_pass reads {f}")
 
     def test_the_logging_gate_does_not_read_any_of_them(self):
         from research.levels import gate
@@ -80,8 +84,10 @@ class Inertness(unittest.TestCase):
         """
         import tools.live_levels_trader as T
         whole = inspect.getsource(T)
+        # main rather than build_intents: the one contexts call moved into
+        # the pass when the band scan replaced the level scan.
         for allowed_fn in (T.persist_traded_episode, T.entry_is_actionable,
-                           T.build_intents):
+                           T.main):
             whole = whole.replace(inspect.getsource(allowed_fn), "")
         for f in CTX_FIELDS:
             self.assertNotIn(f, whole,
