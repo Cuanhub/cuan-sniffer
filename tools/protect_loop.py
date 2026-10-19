@@ -58,6 +58,21 @@ def main() -> int:
             print(f"[PROTECT] cycle raised: {str(e)[:160]}")
         if args.once:
             return 0
+        # Self-heal. A loop that has not managed a single venue read for
+        # READ_DEAD_SEC is not protecting anything, and some causes outlive
+        # the process: on 2026-10-19 this and the trader lost DNS after days
+        # of uptime while `dig` resolved the host instantly, and nothing
+        # recovered them. Backing off cannot fix a dead resolver.
+        #
+        # Exiting is safe HERE in a way it is not for an unexpected error --
+        # see the handler above, which deliberately keeps going. The
+        # difference is that this process is already doing nothing, and every
+        # stop it placed is resting at the venue where it fires without us.
+        # KeepAlive restarts it after ThrottleInterval (30s).
+        why = safety.give_up_if_unreadable("Protect loop")
+        if why:
+            print(f"[PROTECT] exiting so launchd can restart me: {why}")
+            return 1
         time.sleep(POLL_SEC)
 
 

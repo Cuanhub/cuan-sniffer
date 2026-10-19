@@ -6,9 +6,15 @@ backoff, daily loss breach, drawdown breach, unknown position at startup.
 
 from __future__ import annotations
 
+import tempfile
+import time
+
 import pytest
 
-from core import execute, safety
+import pathlib
+
+from core import execute, protect, safety
+from core.meta import MetaStore
 from core.safety import AUTO, MANUAL, EquityLog, HaltState
 from tests.fake_venue import FakeHL, build_venue
 
@@ -416,3 +422,96 @@ def test_the_venue_read_paths_record_their_failures():
     assert "record_error" in inspect.getsource(protect.ensure_stop)
     assert "record_error" in inspect.getsource(protect.run_once)
     assert "record_error" in inspect.getsource(safety.check_limits)
+
+
+# ── self-healing: exit when the venue has been unreadable too long ─────────
+# On 2026-10-19 the trader and the scanner lost DNS -- NameResolutionError on
+# every read -- after 25 hours and three days of uptime, while `dig` and
+# `curl` on the same machine resolved the host in 0.25s. The error-rate rail
+# alerted at 5/5 and then sat pegged at 10/5 for half an hour, because
+# alerting is all it does. Backing off cannot fix a dead resolver; a fresh
+# process can, and launchd will make one.
+
+def test_a_fresh_process_is_not_considered_dead():
+    safety.reset_reads()
+    assert safety.unreadable_for_sec() < 1.0
+    assert safety.give_up_if_unreadable("test") is None
+
+
+def test_a_successful_read_resets_the_clock(monkeypatch):
+    safety.reset_reads()
+    monkeypatch.setattr(safety, "_last_read_ok", time.time() - 10_000)
+    assert safety.unreadable_for_sec() > 9_000
+    safety.note_read(True)
+    assert safety.unreadable_for_sec() < 1.0
+
+
+def test_a_failed_read_does_not_reset_the_clock(monkeypatch):
+    safety.reset_reads()
+    monkeypatch.setattr(safety, "_last_read_ok", time.time() - 10_000)
+    safety.note_read(False)
+    assert safety.unreadable_for_sec() > 9_000, (
+        "a failed read moved the clock forward")
+
+
+def test_it_gives_up_past_the_limit(monkeypatch):
+    safety.reset_reads()
+    monkeypatch.setattr(safety, "_last_read_ok",
+                        time.time() - safety.READ_DEAD_SEC - 60)
+    why = safety.give_up_if_unreadable("Protect loop")
+    assert why and "no successful venue read" in why
+
+
+def test_it_does_NOT_give_up_on_a_transient_failure(monkeypatch):
+    """Rate limits and single hiccups are normal and must be ridden out --
+    answering them with a restart loop would be worse than the fault."""
+    safety.reset_reads()
+    monkeypatch.setattr(safety, "_last_read_ok",
+                        time.time() - safety.READ_DEAD_SEC * 0.5)
+    assert safety.give_up_if_unreadable("Protect loop") is None
+
+
+def test_the_limit_outlasts_more_than_two_trader_passes():
+    """Pinned as a relationship, not a number: a threshold near the pass
+    interval restarts the trader for an ordinary hiccup.
+
+    This caught the first choice. 900s is EXACTLY two 450s passes, so two
+    consecutive failed reads would have tripped it.
+    """
+    from research.levels.config import POLL_SEC
+    assert safety.READ_DEAD_SEC > POLL_SEC * 2, (
+        f"{safety.READ_DEAD_SEC}s is not more than two {POLL_SEC}s passes")
+
+
+def test_giving_up_alerts_the_operator(monkeypatch, captured_alerts):
+    safety.reset_reads()
+    monkeypatch.setattr(safety, "_last_read_ok",
+                        time.time() - safety.READ_DEAD_SEC - 60)
+    safety.give_up_if_unreadable("Trader")
+    body = " ".join(str(a) for a in captured_alerts)
+    assert "restarting" in body
+    assert "keep their stops" in body, (
+        "the alert must say the positions are still protected")
+
+
+def test_a_flat_account_reads_fine_and_keeps_the_watchdog_alive(monkeypatch):
+    """`None` means the read could not be MADE. An empty dict is a flat
+    account, which read perfectly well -- confusing the two would restart a
+    healthy idle process every READ_DEAD_SEC."""
+    safety.reset_reads()
+    monkeypatch.setattr(safety, "_last_read_ok", time.time() - 10_000)
+    fake = FakeHL(positions={})
+    protect.run_once(build_venue(fake), MetaStore(
+        pathlib.Path(tempfile.mkdtemp()) / "m.json"))
+    assert safety.unreadable_for_sec() < 1.0, (
+        "a flat account was treated as unreadable")
+
+
+def test_an_unreadable_venue_leaves_the_watchdog_tripping(monkeypatch):
+    safety.reset_reads()
+    monkeypatch.setattr(safety, "_last_read_ok", time.time() - 10_000)
+    fake = FakeHL(positions={"HYPE": 1.0})
+    fake.fail_info_always = True
+    protect.run_once(build_venue(fake), MetaStore(
+        pathlib.Path(tempfile.mkdtemp()) / "m.json"))
+    assert safety.unreadable_for_sec() > 9_000

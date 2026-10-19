@@ -596,6 +596,22 @@ def main():
                 print(f"[LEVELS_LIVE] not opening this pass: {why}")
                 if args.once:
                     return 0
+                # Self-heal. Refusing to open blind is correct and it is what
+                # the line above does, but refusing for ever is not a
+                # recovery: on 2026-10-19 this process lost DNS after 25
+                # hours and sat doing exactly that for half an hour while
+                # `dig` resolved the host instantly. A dead resolver does not
+                # come back by waiting, and a fresh process gets a new one.
+                #
+                # The plist has KeepAlive SuccessfulExit=false, so a NON-ZERO
+                # exit is what restarts it, after ThrottleInterval (60s).
+                # Nothing is dropped by going: the state file is on disk and
+                # every stop is resting at the venue.
+                dead = safety.give_up_if_unreadable("Trader")
+                if dead:
+                    print(f"[LEVELS_LIVE] exiting so launchd can restart "
+                          f"me: {dead}")
+                    return 1
                 for _ in range(POLL_SEC):
                     if _stop:
                         break
@@ -767,6 +783,9 @@ def preflight(venue, state: Dict[str, Any], halt: "safety.HaltState",
     # position. state["owned"] used to answer this and a single parsing bug
     # emptied it, which is how one pass opened twelve positions.
     positions = venue.positions()
+    # The real outcome into the readability watchdog. None could not be read;
+    # an empty dict is a flat account, which read fine.
+    safety.note_read(positions is not None)
     if positions is None:
         safety.record_error("positions", "preflight could not read the venue")
         return "venue unreadable -- not opening blind"
@@ -780,6 +799,7 @@ def preflight(venue, state: Dict[str, Any], halt: "safety.HaltState",
         return f"opened {state['opened_today']} today, max {MAX_NEW_PER_DAY}"
 
     eq = venue.equity()
+    safety.note_read(eq is not None)
     if eq is None:
         safety.record_error("equity", "preflight could not read equity")
         return "equity query failed -- refusing to size blind"

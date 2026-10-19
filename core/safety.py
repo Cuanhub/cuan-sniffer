@@ -393,6 +393,85 @@ def standing_down(venue: Venue,
     return sd
 
 
+# ── readability: is the venue answering at all? ─────────────────────────────
+#
+# Separate from the error RATE below, which counts failures in a window and
+# alerts. This asks a different question with a different remedy: has a single
+# read SUCCEEDED recently? A loop that cannot read the venue is not doing its
+# job, and some reasons it cannot are permanent for the life of the process.
+#
+# On 2026-10-19 the trader and the scanner lost DNS -- NameResolutionError on
+# every read -- after 25 hours and three days of uptime, while `dig` and
+# `curl` on the same machine resolved the host in 0.25s. Nothing recovered it.
+# The rate rail alerted at 5/5 and then sat pegged at 10/5 for half an hour,
+# because alerting is all it does. Backing off cannot fix a dead resolver; a
+# fresh process can, and launchd will make one.
+#
+# So a loop that has had no successful read for this long exits, and its plist
+# restarts it.
+#
+# 1200s, and the margin is the point. 900 was the first choice and it is
+# EXACTLY two of the trader's 450s passes, so two consecutive failed reads
+# would have tripped it -- a restart for an ordinary venue hiccup, which is
+# worse than the hiccup. 1200 leaves most of a third pass in hand, and is
+# twenty of protect's 60s cycles, by which point "the venue is not answering
+# this process" is not a guess. The 2026-10-19 outage ran over 30 minutes, so
+# it would still have self-healed partway through.
+#
+# ThrottleInterval (30s protect, 60s trader) bounds the restart rate even if
+# the cause is permanent, so the failure mode of getting this wrong is a slow
+# restart loop with an alert on it, not a hot one.
+READ_DEAD_SEC = float(os.getenv("SAFETY_READ_DEAD_SEC", "1200"))
+
+# Process start counts as the last good read, so a process that can NEVER
+# read -- the startup case of the same fault -- still exits on schedule
+# rather than spinning for ever.
+_last_read_ok: float = time.time()
+
+
+def note_read(ok: bool) -> None:
+    """Record whether a venue read answered. Call it with the real outcome.
+
+    `ok` is False for a read that could not be made, NOT for one that
+    answered emptily: a flat account reads fine and must keep this alive.
+    """
+    global _last_read_ok
+    if ok:
+        _last_read_ok = time.time()
+
+
+def unreadable_for_sec() -> float:
+    """Seconds since the last successful venue read."""
+    return max(0.0, time.time() - _last_read_ok)
+
+
+def reset_reads() -> None:
+    global _last_read_ok
+    _last_read_ok = time.time()
+
+
+def give_up_if_unreadable(who: str) -> Optional[str]:
+    """A reason to exit, or None. Alerts once before the process goes.
+
+    The caller exits; this does not, so the decision stays visible at the top
+    of the loop that makes it.
+    """
+    dead = unreadable_for_sec()
+    if dead < READ_DEAD_SEC:
+        return None
+    reason = (f"no successful venue read for {dead / 60:.0f} min "
+              f"(limit {READ_DEAD_SEC / 60:.0f} min)")
+    notify.send(
+        f"♻️ *{who} is restarting*\n{reason}.\n\n"
+        "A process that cannot read the venue cannot do its job, and "
+        "some causes -- a dead resolver, a poisoned connection pool -- "
+        "last as long as the process does. launchd will start a fresh "
+        "one.\n\nOpen positions keep their stops: those rest AT THE "
+        "VENUE and fire whether or not this system can read anything.",
+        key=f"readdead_{who}", cooldown_sec=600)
+    return reason
+
+
 # ── error rate ─────────────────────────────────────────────────────────────
 
 _errors: List[Tuple[float, str]] = []

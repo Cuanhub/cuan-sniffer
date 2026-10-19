@@ -383,3 +383,17 @@ def test_the_read_handler_prints_the_root_cause(capsys):
     out = capsys.readouterr().out
     assert "OSError" in out, out
     assert "ConnectionError" in out, out
+    assert "<-" in out, out
+
+
+def test_an_unchained_error_is_not_named_twice(capsys):
+    """"Transport: Transport: ..." is noise on the one line that has to be
+    readable in a hurry."""
+    v = build_venue(FakeHL())
+
+    def boom():
+        raise ValueError("plain")
+
+    assert v._get("user_state", boom) is None
+    out = capsys.readouterr().out
+    assert out.count("ValueError") == 1, out

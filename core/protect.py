@@ -224,6 +224,10 @@ def run_once(venue: Venue, meta: Optional[MetaStore] = None) -> List[Result]:
     """One protection cycle over every position the venue reports."""
     store = meta or MetaStore()
     positions = venue.positions()
+    # Feed the readability watchdog with the real outcome. None means the read
+    # could not be MADE; an empty dict means a flat account, which reads fine
+    # and must keep the watchdog alive.
+    safety.note_read(positions is not None)
     if positions is None:
         safety.record_error("positions", "venue unreadable")
         print("[PROTECT] venue unreadable this cycle")
@@ -250,6 +254,7 @@ def run_once(venue: Venue, meta: Optional[MetaStore] = None) -> List[Result]:
     # Deferring cleanup one cycle costs nothing; forgetting a live plan is
     # how a planned trade silently becomes an unplanned one.
     readable = resting is not None
+    safety.note_read(readable)
     if not readable:
         safety.record_error("open_orders", "venue unreadable -- keeping plans")
     bidding = {o.coin for o in (resting or []) if o.is_entry}

@@ -234,8 +234,13 @@ class Venue:
             # failed on DNS while the log looked like a rate limit, and the
             # remedy for the two is not the same: a 429 wants the brake below,
             # a dead resolver in a long-lived process wants a restart.
-            print(f"[VENUE] {what} failed: {type(e).__name__}: "
-                  f"{_root_cause(e)}: {str(e)[:160]}")
+            outer = type(e).__name__
+            root = _root_cause(e)
+            # Only name the root when it ADDS something. An unchained
+            # exception is its own cause, and "Transport: Transport: ..." is
+            # noise on the one line that has to be readable in a hurry.
+            label = outer if root == outer else f"{outer} <- {root}"
+            print(f"[VENUE] {what} failed: {label}: {str(e)[:160]}")
             if not urgent and "429" in str(e):
                 time.sleep(RATE_LIMIT_SLEEP_SEC)
             return None
