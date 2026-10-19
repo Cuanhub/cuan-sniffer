@@ -121,6 +121,24 @@ class Equity:
     available: float         # free collateral, per the venue
 
 
+def _root_cause(exc: BaseException) -> str:
+    """The innermost exception's type name.
+
+    requests nests the real failure: a DNS error arrives as
+    ConnectionError -> MaxRetryError -> NameResolutionError, and only the
+    outermost name is on the exception itself.
+    """
+    seen = set()
+    cur: BaseException = exc
+    while True:
+        nxt = cur.__cause__ or cur.__context__
+        if nxt is None or id(nxt) in seen:
+            break
+        seen.add(id(nxt))
+        cur = nxt
+    return type(cur).__name__
+
+
 class Venue:
     def __init__(self, debug: bool = False) -> None:
         if not HL_ACCOUNT_ADDRESS:
@@ -207,7 +225,17 @@ class Venue:
         try:
             return call()
         except Exception as e:
-            print(f"[VENUE] {what} failed: {str(e)[:120]}")
+            # The EXCEPTION TYPE first, then the message. requests wraps the
+            # real cause at the end of a long urllib3 string, so truncating
+            # the message alone threw away the only useful part: on
+            # 2026-10-19 every line read "HTTPSConnectionPool(host=... Max
+            # retries exceeded with url: /info (Caused by Nam" -- cut one
+            # character into NameResolutionError. Thirty minutes of reads
+            # failed on DNS while the log looked like a rate limit, and the
+            # remedy for the two is not the same: a 429 wants the brake below,
+            # a dead resolver in a long-lived process wants a restart.
+            print(f"[VENUE] {what} failed: {type(e).__name__}: "
+                  f"{_root_cause(e)}: {str(e)[:160]}")
             if not urgent and "429" in str(e):
                 time.sleep(RATE_LIMIT_SLEEP_SEC)
             return None

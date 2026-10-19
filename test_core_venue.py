@@ -310,3 +310,76 @@ def test_the_test_double_sets_every_attribute_the_real_init_does():
     built = build_venue(FakeHL())
     missing = {a for a in assigned if not hasattr(built, a)}
     assert not missing, f"build_venue is missing {sorted(missing)}"
+
+
+# ── a failed read must name its root cause ─────────────────────────────────
+# Thirty minutes of reads failed on DNS on 2026-10-19 while the log looked
+# like a rate limit, because the message was truncated one character into
+# "NameResolutionError". requests nests the real failure -- ConnectionError
+# -> MaxRetryError -> NameResolutionError -- and only the OUTERMOST name is
+# on the exception. The remedies differ: a 429 wants the brake, a dead
+# resolver in a long-lived process wants a restart, so the log has to tell
+# them apart.
+
+def test_the_innermost_cause_is_reported():
+    from core.venue import _root_cause
+    inner = OSError("getaddrinfo failed")
+    middle = RuntimeError("max retries")
+    middle.__cause__ = inner
+    outer = ConnectionError("pool error")
+    outer.__cause__ = middle
+    assert _root_cause(outer) == "OSError"
+
+
+def test_an_unchained_exception_is_its_own_cause():
+    from core.venue import _root_cause
+    assert _root_cause(ValueError("x")) == "ValueError"
+
+
+def test_implicit_context_counts_too():
+    """`raise X` inside an `except Y` sets __context__, not __cause__."""
+    from core.venue import _root_cause
+    try:
+        try:
+            raise OSError("dns")
+        except OSError:
+            raise ConnectionError("wrapped")
+    except ConnectionError as e:
+        assert _root_cause(e) == "OSError"
+
+
+def test_a_cycle_does_not_hang():
+    from core.venue import _root_cause
+    a, b = ValueError("a"), ValueError("b")
+    a.__cause__ = b
+    b.__cause__ = a
+    assert _root_cause(a) == "ValueError"
+
+
+def test_a_real_dns_failure_unwraps_past_the_outer_type():
+    """Not a mock: the actual shape requests produces."""
+    import requests
+    from core.venue import _root_cause
+    try:
+        requests.post("https://api-does-not-exist.invalid/info", timeout=5)
+    except Exception as e:
+        assert _root_cause(e) != type(e).__name__, (
+            "the root cause is still the outer type -- not unwrapped")
+    else:
+        pytest.skip("the invalid host resolved; no DNS failure to read")
+
+
+def test_the_read_handler_prints_the_root_cause(capsys):
+    """End to end through _get, which is what writes the log line."""
+    v = build_venue(FakeHL())
+
+    def boom():
+        try:
+            raise OSError("getaddrinfo failed")
+        except OSError:
+            raise ConnectionError("HTTPSConnectionPool(...): Max retries")
+
+    assert v._get("user_state", boom) is None
+    out = capsys.readouterr().out
+    assert "OSError" in out, out
+    assert "ConnectionError" in out, out
