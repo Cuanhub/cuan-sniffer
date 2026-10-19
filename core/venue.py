@@ -254,9 +254,42 @@ class Venue:
                           urgent)
         if not isinstance(state, dict):
             return None
+        # SCHEMA GUARD. The outer type check above is not enough: a dict with
+        # no `assetPositions` iterated `[]` and returned {}, which is
+        # indistinguishable from flat -- and "flat" is acted on hard.
+        # flatten_all would print FLAT and report flat=True with positions
+        # live; preflight would count 0 held and open MAX_CONCURRENT on top of
+        # them, which is the 2026-09-18 runaway with a new cause; protect would
+        # call _forget_closed and delete every plan.
+        #
+        # A flat account really does send the key -- verified against the live
+        # account while flat, and against clearinghouse_state_flat.json, both
+        # carrying "assetPositions": []. So requiring it cannot misread flat.
+        #
+        # The type check is the other half, and it was a separate bug: a
+        # present-but-wrong-type value (a dict or a string) RAISED
+        # AttributeError out of this function, through flatten_all's loop and
+        # through preflight. Unreadable must mean None, in both directions.
+        rows = state.get("assetPositions")
+        if not isinstance(rows, list):
+            print(f"[VENUE] SCHEMA user_state assetPositions is "
+                  f"{type(rows).__name__}, not a list -- treating the venue as "
+                  f"UNREADABLE rather than flat")
+            return None
+        # A non-empty list of rows none of which is even a dict is drift too.
+        # Narrow on purpose: "non-empty but nothing parsed" would NOT be safe
+        # here, because skipping a row for |szi| <= FLAT_EPSILON is legitimate
+        # and happens around a close. Row SHAPE cannot collide with that.
+        if rows and not any(isinstance(r, dict) for r in rows):
+            print(f"[VENUE] SCHEMA user_state assetPositions has "
+                  f"{len(rows)} row(s), none of them a dict -- treating the "
+                  f"venue as UNREADABLE rather than flat")
+            return None
         out: Dict[str, Position] = {}
-        for item in state.get("assetPositions") or []:
-            p = (item or {}).get("position") or {}
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            p = item.get("position") or {}
             coin = str(p.get("coin", "")).upper()
             szi = _f(p.get("szi"))
             if not coin or szi is None or abs(szi) <= FLAT_EPSILON:
@@ -300,6 +333,20 @@ class Venue:
                 is_stop=kind.startswith("Stop"),
                 limit_px=_f(o.get("limitPx")) or 0.0,
                 timestamp_ms=int(_f(o.get("timestamp")) or 0)))
+        # SCHEMA GUARD. The list check above passes a list of rows this code
+        # cannot read, and the result is [] -- "nothing is resting" -- which
+        # is acted on: protect places a SECOND stop on a position that already
+        # has one, and _forget_closed deletes the plan for every resting bid.
+        # A renamed `oid` alone would do it, because every row is skipped.
+        #
+        # Only when NO coin filter was applied. `open_orders("SOL")` returning
+        # [] while other coins rest is correct and common, so the filtered call
+        # cannot use this rule.
+        if raw and not want and not out:
+            print(f"[VENUE] SCHEMA frontend_open_orders returned {len(raw)} "
+                  f"row(s) and none could be read -- treating orders as "
+                  f"UNREADABLE rather than empty")
+            return None
         return out
 
     def equity(self, urgent: bool = False) -> Optional[Equity]:
@@ -318,10 +365,23 @@ class Venue:
                          lambda: self.info.spot_user_state(self.address), urgent)
         if not isinstance(spot, dict):
             return None
-        usdc = next((b for b in spot.get("balances") or []
-                     if str(b.get("coin", "")).upper() == "USDC"), None)
+        # SCHEMA GUARD, same reasoning as positions(). A MISSING `balances`
+        # already returned None here, which was right -- but a present and
+        # wrong-TYPED one raised AttributeError out of this function, because
+        # iterating a dict or a string yields values with no .get. The two
+        # causes are now logged apart, because "the venue changed shape" and
+        # "this account holds no USDC" need different responses from a human.
+        balances = spot.get("balances")
+        if not isinstance(balances, list):
+            print(f"[VENUE] SCHEMA spot_user_state balances is "
+                  f"{type(balances).__name__}, not a list -- equity "
+                  f"UNREADABLE")
+            return None
+        usdc = next((b for b in balances
+                     if isinstance(b, dict)
+                     and str(b.get("coin", "")).upper() == "USDC"), None)
         if usdc is None:
-            print("[VENUE] no USDC balance in spot state")
+            print("[VENUE] no USDC balance in spot state -- equity unreadable")
             return None
         total = _f(usdc.get("total"))
         if total is None:

@@ -397,3 +397,131 @@ def test_an_unchained_error_is_not_named_twice(capsys):
     assert v._get("user_state", boom) is None
     out = capsys.readouterr().out
     assert out.count("ValueError") == 1, out
+
+
+# ── schema drift must read as UNREADABLE, never as empty ───────────────────
+#
+# The outer container check was not enough. A dict with no `assetPositions`
+# iterated [] and returned {} -- indistinguishable from flat -- and "flat" is
+# acted on hard. The three consequences, each verified below at the level that
+# would have suffered them:
+#
+#   flatten_all  prints FLAT and returns flat=True with positions live
+#   preflight    counts 0 held and opens MAX_CONCURRENT on top of them,
+#                which is the 2026-09-18 runaway with a new cause
+#   protect      calls _forget_closed and deletes every plan
+#
+# A present-but-wrong-TYPE value was a second bug in the other direction: it
+# RAISED AttributeError out of positions() and equity(), through flatten_all's
+# loop and through preflight.
+#
+# Verified safe before writing the guard: a flat account really does send the
+# key. Live, while flat, and clearinghouse_state_flat.json both carry
+# "assetPositions": []. If it did not, requiring it would make every read
+# unreadable -- which now also trips the restart watchdog, so over-triggering
+# costs more than it used to.
+
+GOOD_ORDER = {"coin": "SOL", "oid": 1, "sz": "1", "side": "A",
+              "orderType": "Stop Market", "triggerPx": "100",
+              "limitPx": "100", "timestamp": 1, "reduceOnly": True,
+              "isTrigger": True}
+
+
+def _drifted_positions(fake, payload):
+    fake.user_state = lambda *a, **k: payload
+
+
+@pytest.mark.parametrize("payload,why", [
+    ({"marginSummary": {}}, "key missing"),
+    ({"assetPositions": None}, "None"),
+    ({"assetPositions": {"SOL": 1}}, "dict not list"),
+    ({"assetPositions": "none"}, "string"),
+    ({"assetPositions": ["junk", 7]}, "no row is a dict"),
+])
+def test_drifted_user_state_reads_as_unreadable(payload, why):
+    fake = FakeHL(positions={"SOL": 1.76})
+    _drifted_positions(fake, payload)
+    assert build_venue(fake).positions() is None, why
+
+
+def test_a_genuinely_flat_account_still_reads_as_flat():
+    """The guard must not misread flat, or every loop restarts every 20 min."""
+    fake = FakeHL(positions={})
+    assert build_venue(fake).positions() == {}
+
+
+def test_the_recorded_flat_payload_carries_the_key():
+    """The evidence the guard rests on, pinned so it cannot rot."""
+    flat = load("clearinghouse_state_flat.json")
+    assert "assetPositions" in flat
+    assert flat["assetPositions"] == []
+
+
+def test_a_zero_size_row_is_flat_not_drift():
+    """Skipping |szi| <= FLAT_EPSILON is legitimate and happens around a
+    close, so "non-empty but nothing parsed" could not be the rule."""
+    fake = FakeHL(positions={})
+    _drifted_positions(fake, {"assetPositions": [
+        {"position": {"coin": "SOL", "szi": "0.0"}}]})
+    assert build_venue(fake).positions() == {}
+
+
+# ── orders ─────────────────────────────────────────────────────────────────
+
+def test_orders_that_cannot_be_read_are_unreadable_not_empty():
+    """A renamed `oid` alone would skip every row and return []."""
+    fake = FakeHL()
+    fake.frontend_open_orders = lambda *a, **k: [
+        {**GOOD_ORDER, "oid": None, "order_id": 1}]
+    assert build_venue(fake).open_orders() is None
+
+
+def test_junk_order_rows_are_unreadable():
+    fake = FakeHL()
+    fake.frontend_open_orders = lambda *a, **k: ["nope"]
+    assert build_venue(fake).open_orders() is None
+
+
+def test_genuinely_no_orders_is_still_empty():
+    fake = FakeHL()
+    fake.frontend_open_orders = lambda *a, **k: []
+    assert build_venue(fake).open_orders() == []
+
+
+def test_a_coin_filter_matching_nothing_is_still_empty():
+    """`open_orders("ETH")` returning [] while SOL rests is correct and
+    common, so the filtered call cannot use the drift rule."""
+    fake = FakeHL()
+    fake.frontend_open_orders = lambda *a, **k: [GOOD_ORDER]
+    v = build_venue(fake)
+    assert v.open_orders("ETH") == []
+    assert len(v.open_orders("SOL") or []) == 1
+
+
+# ── equity ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("payload", [
+    {"tokenToAvailableAfterMaintenance": {}},
+    {"balances": {"USDC": "100"}},
+    {"balances": "100"},
+    {"balances": ["junk"]},
+])
+def test_drifted_spot_state_reads_as_unreadable(payload):
+    """A missing `balances` already returned None. A wrong-TYPED one RAISED."""
+    fake = FakeHL()
+    fake.spot_user_state = lambda *a, **k: payload
+    assert build_venue(fake).equity() is None
+
+
+# ── and nothing raises, in either direction ────────────────────────────────
+
+@pytest.mark.parametrize("payload", [
+    {"assetPositions": {"SOL": 1}}, {"assetPositions": "x"},
+    {"assetPositions": ["junk"]}, {},
+])
+def test_no_drifted_shape_raises_out_of_positions(payload):
+    """`flatten_all` calls this inside its loop and `preflight` calls it
+    unguarded, so an exception here reaches the kill switch."""
+    fake = FakeHL(positions={"SOL": 1.0})
+    _drifted_positions(fake, payload)
+    build_venue(fake).positions()          # must not raise

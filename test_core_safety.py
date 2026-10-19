@@ -515,3 +515,70 @@ def test_an_unreadable_venue_leaves_the_watchdog_tripping(monkeypatch):
     protect.run_once(build_venue(fake), MetaStore(
         pathlib.Path(tempfile.mkdtemp()) / "m.json"))
     assert safety.unreadable_for_sec() > 9_000
+
+
+# ── schema drift must not make the kill switch lie ─────────────────────────
+
+def _meta_row():
+    from core.meta import TradeMeta
+    return TradeMeta(reason="resting bid", planned_stop=100.33,
+                     planned_tp=105.75, opened_at="2026-10-19T00:00:00Z")
+
+
+def _drift(fake):
+    """user_state answers with a dict that has no assetPositions."""
+    fake.user_state = lambda *a, **k: {"marginSummary": {}}
+
+
+def test_flatten_all_does_not_report_flat_on_schema_drift():
+    """The worst consequence of C1, and the reason it is severity-one.
+
+    flatten_all's "if not positions: return flat=True" ran on {} -- so drift
+    made it print FLAT and report success while positions were live, and
+    /closeall answered "Flat" with money on the table.
+    """
+    fake = FakeHL(positions={"SOL": 1.76}, mid=104.0)
+    _drift(fake)
+    safety.MAX_FLATTEN_SEC = 0.3
+    res = safety.flatten_all(build_venue(fake), reason="drift test")
+    assert not res.flat, "the kill switch claimed flat on unreadable state"
+    assert "unreadable" in res.detail.lower(), res.detail
+
+
+def test_flatten_all_does_not_raise_on_a_wrong_typed_payload():
+    """A present-but-wrong-type value raised AttributeError out of
+    positions(), through this loop -- the kill switch itself throwing."""
+    fake = FakeHL(positions={"SOL": 1.76}, mid=104.0)
+    fake.user_state = lambda *a, **k: {"assetPositions": "nonsense"}
+    safety.MAX_FLATTEN_SEC = 0.3
+    res = safety.flatten_all(build_venue(fake), reason="drift test")
+    assert not res.flat
+
+
+def test_drift_does_not_look_like_a_flat_account_to_the_watchdog():
+    """None feeds note_read(False), so drift counts toward a restart rather
+    than silently passing as a healthy idle read."""
+    import time as _t
+    safety.reset_reads()
+    monkey = _t.time() - 10_000
+    safety._last_read_ok = monkey
+    fake = FakeHL(positions={"SOL": 1.0})
+    _drift(fake)
+    protect.run_once(build_venue(fake), MetaStore(
+        pathlib.Path(tempfile.mkdtemp()) / "m.json"))
+    assert safety.unreadable_for_sec() > 9_000, (
+        "drift reset the readability clock -- it read as a successful read")
+
+
+def test_protect_does_not_wipe_plans_on_schema_drift():
+    """protect saw {} -> "flat" -> _forget_closed(bidding) -> every plan gone.
+    That is the NEAR -$5.44 failure arriving through a different door."""
+    store = MetaStore(pathlib.Path(tempfile.mkdtemp()) / "m.json")
+    store.put("SOL", _meta_row())
+    fake = FakeHL(positions={})
+    _drift(fake)
+    protect.run_once(build_venue(fake), store)
+    kept = store.get("SOL")
+    assert kept is not None, "drift deleted the plan"
+    assert kept.planned_tp == 105.75
+
