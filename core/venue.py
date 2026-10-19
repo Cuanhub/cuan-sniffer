@@ -449,9 +449,80 @@ class Venue:
 
     # ── writes. Every one returns the raw response, for the log only. ───────
 
+    def _refuse(self, what: str, why: str) -> Dict[str, Any]:
+        """Decline to send, in the shape `_send` returns on failure.
+
+        NOT an exception. These functions are called from `flatten_all`'s
+        loop, from `preflight` and from the protection cycle, and a raise on
+        the write path would reach the kill switch -- worse than the bug it
+        would be reporting. Callers already treat a non-"ok" status as a
+        failure, and the ones that do not (protect confirms a stop by READING
+        the book) see no order appear, which is the same refusal.
+        """
+        print(f"[VENUE] REFUSED {what}: {why}")
+        return {"status": "err", "response": f"refused: {why}"}
+
+    def _checked(self, what: str, coin: str, size: float, px: float,
+                 direction: str) -> Any:
+        """Round size and price here, or refuse. Returns (size, px) or None.
+
+        Every caller in this repo already rounds and already refuses on 0.0,
+        so for them this is IDEMPOTENT -- rounding an already-valid value
+        returns it unchanged, and that was verified per caller before this was
+        added. It exists because trusting the caller for a safety-critical
+        tick only holds until the next caller: an unrounded trigger price is
+        venue-rounded in an unknown direction, a `round_price` refusal (0.0)
+        would be sent verbatim as a limit of zero, and a size that rounds to
+        zero would be sent as a zero-size order.
+
+        `direction` mirrors what the callers pass, so this cannot change where
+        an existing order lands. See the table in the C2 review.
+        """
+        rsize = self.round_size(coin, size)
+        if rsize <= 0:
+            return self._refuse(what, f"size {size!r} rounds to zero at "
+                                      f"{coin} precision")
+        rpx = self.round_price(coin, px, direction=direction)
+        if rpx <= 0:
+            return self._refuse(what, f"price {px!r} has no representation at "
+                                      f"{coin} precision")
+        # round_price's refusal is DIRECTION-DEPENDENT, and "up" is the
+        # direction a long's stop uses. BTC allows one decimal place, so
+        # round_price(BTC, 0.00012345, "up") returns 0.1 -- 810x the price
+        # asked for -- while "down" and "nearest" correctly return 0.0. Its
+        # own docstring describes substituting the smallest increment as the
+        # bug it replaced ("quietly turning a stop into one three orders of
+        # magnitude away"), and that is still what the ceiling path does.
+        #
+        # desired_stop's usable() catches it only when the inflated price
+        # lands on the WRONG SIDE of the mark. For a BTC long at 80,351 a
+        # stop inflated to 0.1 is still below the mark, so it would pass as
+        # usable and rest at 0.1 -- which is no stop at all.
+        #
+        # A legitimate rounding moves a price by at most one tick: at five
+        # significant figures that is about 0.001%. 10% is four orders of
+        # magnitude of headroom, so this cannot refuse an honest order, and
+        # it is zero for every caller in this repo because their values are
+        # already rounded.
+        if px > 0 and not 0.9 <= (rpx / px) <= 1.1:
+            return self._refuse(
+                what, f"rounding {px!r} {direction} at {coin} precision gives "
+                      f"{rpx!r}, {rpx / px:,.4g}x the requested price -- "
+                      f"refusing rather than sending a price nobody chose")
+        return (rsize, rpx)
+
     def send_ioc(self, coin: str, is_buy: bool, size: float, limit_px: float,
                  reduce_only: bool) -> Any:
-        return self._send(f"IOC {coin} {'BUY' if is_buy else 'SELL'} {size}",
+        what = f"IOC {coin} {'BUY' if is_buy else 'SELL'} {size}"
+        # Crossing the spread: pay up to buy, accept less to sell. Matches
+        # execute.enter and execute.close, which both pass
+        # direction="up" if is_buy else "down".
+        checked = self._checked(what, coin, size, limit_px,
+                                "up" if is_buy else "down")
+        if not isinstance(checked, tuple):
+            return checked
+        size, limit_px = checked
+        return self._send(what,
                           lambda: self.exchange.order(
                               coin, is_buy, size, limit_px,
                               {"limit": {"tif": "Ioc"}}, reduce_only=reduce_only,
@@ -467,8 +538,17 @@ class Venue:
         guard, the nearest 3.10% away -- every tap had resolved before a poll
         could see it. A bid sitting at the level is filled BY the tap.
         """
-        return self._send(f"LIMIT {coin} {'BUY' if is_buy else 'SELL'} "
-                          f"{size}@{limit_px}",
+        what = (f"LIMIT {coin} {'BUY' if is_buy else 'SELL'} "
+                f"{size}@{limit_px}")
+        # Resting, so the opposite of crossing: never bid MORE than asked,
+        # never offer LESS. Matches execute.rest_bid, which passes
+        # direction="down" if is_long else "up".
+        checked = self._checked(what, coin, size, limit_px,
+                                "down" if is_buy else "up")
+        if not isinstance(checked, tuple):
+            return checked
+        size, limit_px = checked
+        return self._send(what,
                           lambda: self.exchange.order(
                               coin, is_buy, size, limit_px,
                               {"limit": {"tif": "Gtc"}}, reduce_only=False,
@@ -479,8 +559,24 @@ class Venue:
         """Place a reduce-only trigger. The caller confirms it is resting by
         reading open_orders, not by parsing this response.
         """
+        what = f"TRIGGER {coin} {'sl' if is_stop else 'tp'} {size}@{trigger_px}"
+        # A STOP closes the position, so is_buy is inverted from the position
+        # side: a long's stop is a SELL (is_buy False). protect.desired_stop
+        # rounds it "up" -- it triggers slightly earlier, capping the loss --
+        # and guards the case where rounding up crosses the mark. Expressed in
+        # terms of is_buy that is "down" if is_buy else "up", which is the
+        # same rule, not a new one.
+        #
+        # A TAKE-PROFIT keeps protect.ensure_tp's "nearest": it is the one of
+        # these with no directional argument made for it, and inventing one
+        # here would be policy rather than a safety net.
+        direction = ("down" if is_buy else "up") if is_stop else "nearest"
+        checked = self._checked(what, coin, size, trigger_px, direction)
+        if not isinstance(checked, tuple):
+            return checked
+        size, trigger_px = checked
         return self._send(
-            f"TRIGGER {coin} {'sl' if is_stop else 'tp'} {size}@{trigger_px}",
+            what,
             lambda: self.exchange.order(
                 coin, is_buy, size, trigger_px,
                 {"trigger": {"triggerPx": trigger_px, "isMarket": True,

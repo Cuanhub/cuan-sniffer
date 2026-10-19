@@ -525,3 +525,172 @@ def test_no_drifted_shape_raises_out_of_positions(payload):
     fake = FakeHL(positions={"SOL": 1.0})
     _drifted_positions(fake, payload)
     build_venue(fake).positions()          # must not raise
+
+
+# ── writes round and validate here, not only in the caller ─────────────────
+#
+# send_ioc, send_limit and send_trigger passed limit_px / trigger_px / size
+# straight to the SDK. round_price exists, can return 0.0 as a refusal, and
+# none of the send_* called it.
+#
+# Verified before changing anything: all five callers in this repo ALREADY
+# round and already refuse on 0.0 -- execute.enter, execute.close,
+# execute.rest_bid, protect._place_stop (via desired_stop) and
+# protect.ensure_tp. So the three consequences were LATENT, not live. This is
+# defence in depth on the write path, and the directions mirror what those
+# callers pass so it cannot move an existing order:
+#
+#   send_ioc      up if is_buy else down     execute.enter / execute.close
+#   send_limit    down if is_buy else up     execute.rest_bid
+#   send_trigger  down if is_buy else up     protect.desired_stop (a long's
+#                 (stops)                    stop is a SELL, rounded "up")
+#   send_trigger  nearest                    protect.ensure_tp
+#                 (take-profits)
+
+def _venue_with_precision():
+    fake = FakeHL(positions={"SOL": 1.76}, mid=104.0)
+    v = build_venue(fake)
+    v._sz_decimals.update({"SOL": 2, "BTC": 5})
+    return fake, v
+
+
+def test_an_unrepresentable_price_is_refused_not_sent():
+    """round_price returns 0.0 for a price with no representation. Sent
+    verbatim that is a limit of ZERO."""
+    fake, v = _venue_with_precision()
+    resp = v.send_trigger("BTC", is_buy=True, size=1.0,
+                          trigger_px=0.00000001, is_stop=True)
+    assert fake.sent == [], f"an order was sent anyway: {fake.sent}"
+    assert resp["status"] == "err"
+    assert "no representation" in resp["response"]
+
+
+def test_a_price_rounding_restores_the_increment_bug_is_refused():
+    """round_price's refusal is DIRECTION-DEPENDENT, and this test is how
+    that was found.
+
+    BTC allows one decimal place. round_price(BTC, 0.00012345, "down") and
+    "nearest" both return 0.0, correctly. "up" returns 0.1 -- 810x the price
+    asked for -- which is exactly what its own docstring describes as the bug
+    it replaced: "quietly turning a stop into one three orders of magnitude
+    away". And "up" is the direction a LONG's stop uses.
+
+    desired_stop's usable() catches it only when the inflated price lands on
+    the wrong side of the mark. For a BTC long at 80,351 a stop inflated to
+    0.1 is still below the mark, so it passes as usable and would rest at
+    0.1, which is no stop at all.
+    """
+    fake, v = _venue_with_precision()
+    assert v.round_price("BTC", 0.00012345, direction="up") == 0.1
+    assert v.round_price("BTC", 0.00012345, direction="down") == 0.0
+    resp = v.send_trigger("BTC", is_buy=False, size=1.0,
+                          trigger_px=0.00012345, is_stop=True)
+    assert fake.sent == [], f"a stop at 0.1 was sent: {fake.sent}"
+    assert "810" in resp["response"], resp["response"]
+
+
+def test_the_deviation_guard_cannot_refuse_an_honest_rounding():
+    """A legitimate rounding moves a price by at most one tick -- about
+    0.001% at five significant figures. Every real value this account has
+    traded must pass."""
+    fake, v = _venue_with_precision()
+    for coin, px, direction, is_buy in (
+            ("SOL", 100.328559, "up", False),
+            ("SOL", 104.03 * 1.0025, "up", True),
+            ("SOL", 101.93, "down", True),
+            ("BTC", 80351.4999, "up", True),
+    ):
+        r = v.round_price(coin, px, direction=direction)
+        assert 0.9 <= r / px <= 1.1, f"{coin} {px} {direction} -> {r}"
+
+
+def test_a_size_that_rounds_to_zero_is_refused_not_sent():
+    fake, v = _venue_with_precision()
+    resp = v.send_ioc("SOL", is_buy=True, size=0.0001, limit_px=104.0,
+                      reduce_only=False)
+    assert fake.sent == [], f"a zero-size order was sent: {fake.sent}"
+    assert resp["status"] == "err"
+    assert "rounds to zero" in resp["response"]
+
+
+def test_a_non_positive_price_is_refused():
+    fake, v = _venue_with_precision()
+    for px in (0.0, -1.0):
+        assert v.send_limit("SOL", is_buy=True, size=1.0,
+                            limit_px=px)["status"] == "err"
+    assert fake.sent == []
+
+
+def test_an_already_rounded_order_is_sent_unchanged():
+    """The idempotence that makes this safe to add under a live system.
+
+    Values taken from real orders this account placed: the SOL stop at
+    100.33, its take-profit at 105.75, and the resting bid at 101.93.
+    """
+    for px, kind in ((100.33, "stop"), (105.75, "tp"), (101.93, "bid")):
+        fake, v = _venue_with_precision()
+        if kind == "stop":
+            v.send_trigger("SOL", is_buy=False, size=1.76, trigger_px=px,
+                           is_stop=True)
+        elif kind == "tp":
+            v.send_trigger("SOL", is_buy=False, size=1.76, trigger_px=px,
+                           is_stop=False)
+        else:
+            v.send_limit("SOL", is_buy=True, size=1.76, limit_px=px)
+        assert len(fake.sent) == 1, kind
+        assert fake.sent[0]["px"] == px, f"{kind}: {fake.sent[0]['px']} != {px}"
+        assert fake.sent[0]["sz"] == 1.76, kind
+
+
+def test_an_unrounded_price_is_corrected_before_it_is_sent():
+    """The latent bug: the venue would otherwise round it in a direction
+    nobody chose."""
+    fake, v = _venue_with_precision()
+    v.send_trigger("SOL", is_buy=False, size=1.76, trigger_px=100.328559,
+                   is_stop=True)
+    assert len(fake.sent) == 1
+    sent = fake.sent[0]["px"]
+    assert sent == v.round_price("SOL", 100.328559, direction="up")
+    assert sent != 100.328559, "the raw price reached the SDK"
+
+
+def test_a_stops_direction_matches_what_desired_stop_would_choose():
+    """Expressed in terms of is_buy, the rule here must be the same rule
+    protect.desired_stop applies -- not a second, different one.
+
+    A long's stop is a SELL (is_buy False) and desired_stop rounds it "up".
+    """
+    from core.protect import desired_stop
+    from core.meta import TradeMeta
+    fake, v = _venue_with_precision()
+    pos = (v.positions() or {})["SOL"]
+    planned = 100.328559
+    want, _ = desired_stop(v, pos, TradeMeta(
+        reason="x", planned_stop=planned, planned_tp=0.0, opened_at=""))
+    v.send_trigger("SOL", is_buy=not pos.is_long, size=pos.size,
+                   trigger_px=planned, is_stop=True)
+    assert fake.sent[0]["px"] == want, (
+        f"send_trigger rounded to {fake.sent[0]['px']}, desired_stop to {want}")
+
+
+def test_a_refusal_never_raises():
+    """These are called from flatten_all's loop, from preflight and from the
+    protection cycle. A raise on the write path would reach the kill switch,
+    which is worse than the bug it would be reporting."""
+    fake, v = _venue_with_precision()
+    for call in (
+        lambda: v.send_ioc("BTC", True, 1e-12, 1e-12, False),
+        lambda: v.send_limit("BTC", True, 0.0, 0.0),
+        lambda: v.send_trigger("BTC", False, -1.0, -1.0, True),
+        lambda: v.send_trigger("NOSUCH", False, 0.0, 0.0, False),
+    ):
+        resp = call()                       # must not raise
+        assert isinstance(resp, dict) and resp["status"] == "err"
+    assert fake.sent == []
+
+
+def test_a_refusal_is_logged_loudly(capsys):
+    fake, v = _venue_with_precision()
+    v.send_ioc("SOL", True, 0.0001, 104.0, False)
+    out = capsys.readouterr().out
+    assert "REFUSED" in out, out
