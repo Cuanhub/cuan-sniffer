@@ -117,6 +117,24 @@ def ensure_stop(venue: Venue, pos: Position, meta: Optional[TradeMeta]
         safety.record_error("open_orders", coin)
         return Result(coin, "unknown", "order book unreadable")
 
+    # UNKNOWN precision is not an unprotectable position. Without this the
+    # rounders' refusal reaches desired_stop as "no valid representation",
+    # ensure_stop reads that as unprotectable, and _give_up tries to flatten
+    # -- which ALSO needs round_size, so the flatten fails too. The observed
+    # result was an alert saying "could not be protected, so the position was
+    # closed" with Flat: False and the position still open. A lie, a failed
+    # exit and a false alarm, for a metadata fetch that will probably succeed
+    # on the next cycle.
+    #
+    # So it lands where the unreadable order book lands: report, wait, retry.
+    # precision_known retries the metadata load itself, and the restart
+    # watchdog is the backstop if it never comes back.
+    if not venue.precision_known(coin):
+        safety.record_error("precision", f"{coin} szDecimals unknown")
+        return Result(coin, "unknown",
+                      f"{coin} szDecimals unknown -- cannot price a stop, "
+                      f"retrying next cycle")
+
     want_px, why = desired_stop(venue, pos, meta)
     if want_px <= 0:
         # No stop price exists for this position, so it can never be

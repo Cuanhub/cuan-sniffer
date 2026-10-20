@@ -459,9 +459,19 @@ class EntryDriftTest(unittest.TestCase):
         sent = self.orders_sent(b)
         self.assertEqual(len(sent), 1)
         notional = 1000.0 * T.MARGIN_PCT_PER_TRADE / 100.0 * T.FLAT_LEVERAGE
-        self.assertAlmostEqual(sent[0]["sz"], round(notional / 101.0, 2),
-                               places=2,
-                               msg="size must come from the LIVE price")
+        # Through the venue's OWN rounding, not round(). round_size uses
+        # ROUND_DOWN deliberately -- a position must never size UP -- so a
+        # nearest-rounded expectation differs by up to one tick. This passed
+        # on tolerance while the precision default was 3 (a 0.005 gap at
+        # places=2) and failed at the coin's real 2 decimals (0.01). The claim
+        # under test is "from the LIVE price, not the plan", so the live price
+        # is what belongs in the expectation; the precision is the venue's.
+        want = b.round_size("AAA", notional / 101.0)
+        self.assertEqual(sent[0]["sz"], want,
+                         msg="size must come from the LIVE price")
+        assert want != b.round_size("AAA", notional / episode("AAA")["suggested_entry"]), \
+            "the planned and live prices round to the same size; this test " \
+            "cannot tell them apart"
 
 
 class DailyCapTest(unittest.TestCase):

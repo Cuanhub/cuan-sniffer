@@ -163,8 +163,28 @@ class FakeHL:
         return {c: str(self.mid_px) for c in coins}
 
     def meta(self, dex: str = "") -> Dict[str, Any]:
+        """The recorded universe, plus the synthetic names tests use.
+
+        `quoted` carries coins the real venue does not list but tests name
+        anyway, and they need a declared szDecimals for the same reason they
+        need a price: the rounders refuse a coin whose precision is unknown
+        rather than defaulting to 3, which is correct for only 6 of the
+        venue's 234 perps. Without this a test about entry drift fails on
+        precision instead, which tests the wrong thing.
+
+        `sz_decimals` is the knob for the synthetic ones, so a test that cares
+        about precision can set it.
+        """
         self._maybe_fail_info()
-        return copy.deepcopy(load("meta.json"))
+        m = copy.deepcopy(load("meta.json"))
+        listed = {str(a.get("name", "")).upper()
+                  for a in m.get("universe", [])}
+        for name in sorted(self.quoted | set(self.pos)):
+            if name and name.upper() not in listed:
+                m["universe"].append({"name": name.upper(),
+                                      "szDecimals": self.sz_decimals,
+                                      "maxLeverage": 20})
+        return m
 
     def user_fills_by_time(self, address: str, start: int,
                            end: Optional[int] = None) -> List[Dict[str, Any]]:

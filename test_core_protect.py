@@ -525,3 +525,49 @@ def test_a_plan_that_survives_gets_its_real_stop_and_its_tp(store):
     pxs = sorted(float(o.get("triggerPx") or 0) for o in trigs)
     assert any(abs(x - 90.0) < 1e-6 for x in pxs), f"no planned stop: {pxs}"
     assert any(abs(x - 120.0) < 1e-6 for x in pxs), f"no take-profit: {pxs}"
+
+
+# ── unknown precision must not be read as unprotectable ────────────────────
+
+def test_unknown_precision_waits_rather_than_flattening(store):
+    """Observed when the rounders first started refusing: ensure_stop read
+    "no valid representation" as unprotectable, _give_up tried to flatten,
+    and the flatten ALSO needed round_size -- so it failed. The result was an
+    alert saying "could not be protected, so the position was closed" with
+    Flat: False and the position still open. A lie, a failed exit and a false
+    alarm, for a metadata fetch that would probably succeed next cycle.
+    """
+    fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    v = build_venue(fake)
+    v._sz_decimals.clear()
+    fake.meta = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("429"))
+    store.put("HYPE", planned(stop=90.0, tp=120.0))
+
+    results = protect.run_once(v, store)
+
+    assert [r.action for r in results] == ["unknown"], results
+    assert "szDecimals unknown" in results[0].detail
+    assert "HYPE" in (v.positions() or {}), "the position was flattened"
+    assert store.get("HYPE") is not None, "the plan was dropped"
+    assert fake.sent == [], f"orders were sent blind: {fake.sent}"
+
+
+def test_known_precision_still_protects_normally(store):
+    """The guard must not make protection conditional on anything new."""
+    fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    store.put("HYPE", planned(stop=90.0, tp=120.0))
+    results = protect.run_once(build_venue(fake), store)
+    assert [r.action for r in results] == ["placed"], results
+
+
+def test_a_genuinely_unpriceable_stop_still_flattens(store):
+    """Unknown must not swallow the real case. A position whose stop cannot
+    be expressed at a KNOWN precision is still unprotectable, and rule 1
+    says an unprotected position is not the trade."""
+    fake = FakeHL(positions={"BTC": 1.0}, mid=1e-9)
+    safety.MAX_FLATTEN_SEC = 0.3
+    v = build_venue(fake)
+    v._sz_decimals["BTC"] = 5          # known: 1 price decimal
+    store.put("BTC", planned(stop=0.0, tp=0.0))
+    results = protect.run_once(v, store)
+    assert [r.action for r in results] == ["flattened"], results

@@ -178,10 +178,41 @@ class Venue:
             print(f"[VENUE] meta load failed: {str(e)[:120]}")
         return bool(self._sz_decimals)
 
+    def precision_known(self, coin: str) -> bool:
+        """Whether this coin's szDecimals is actually known.
+
+        The rounders used to default to 3 for an unknown coin, and 3 is right
+        for SIX of the venue's 234 perps -- 134 are whole units only
+        (szDecimals 0) and 66 take one decimal. So the default was correct
+        2.6% of the time, and wrong quietly: with an empty map
+        round_price(PUMP, 0.0043) returns 0.004, a 7% error on a price this
+        account currently has a live bid at, and round_size(BTC, 0.000123)
+        returns 0.0.
+
+        Retries the metadata load if the map is empty, which is free when it
+        is already populated and is the whole recovery path when it is not --
+        the load happens once in __init__ and swallows its own failure, so a
+        process that started during a venue outage has an empty map for its
+        whole life otherwise. The restart watchdog makes that MORE likely, not
+        less: it restarts loops precisely when the venue is unreachable.
+        """
+        if not self._sz_decimals:
+            self.load_meta()
+        return coin.upper() in self._sz_decimals
+
     def round_size(self, coin: str, size: float) -> float:
+        """Size at the coin's own precision, or 0.0 as a refusal.
+
+        0.0 means "cannot be expressed", and a caller must treat it as a
+        refusal -- never as a size.
+        """
         if size <= 0:
             return 0.0
-        q = Decimal("1").scaleb(-self._sz_decimals.get(coin.upper(), 3))
+        if not self.precision_known(coin):
+            print(f"[VENUE] PRECISION {coin} szDecimals unknown -- refusing "
+                  f"to round a size for it rather than guessing")
+            return 0.0
+        q = Decimal("1").scaleb(-self._sz_decimals[coin.upper()])
         return float(Decimal(str(size)).quantize(q, rounding=ROUND_DOWN))
 
     def round_price(self, coin: str, px: float, direction: str = "nearest") -> float:
@@ -204,11 +235,15 @@ class Venue:
         """
         if px <= 0:
             return 0.0
+        if not self.precision_known(coin):
+            print(f"[VENUE] PRECISION {coin} szDecimals unknown -- refusing "
+                  f"to round a price for it rather than guessing")
+            return 0.0
         mode = {"up": ROUND_CEILING, "down": ROUND_FLOOR}.get(direction,
                                                               ROUND_HALF_UP)
         d = Decimal(str(px))
         d = d.quantize(Decimal(1).scaleb(d.adjusted() - 4), rounding=mode)
-        decimals = max(0, 6 - int(self._sz_decimals.get(coin.upper(), 3)))
+        decimals = max(0, 6 - int(self._sz_decimals[coin.upper()]))
         d = d.quantize(Decimal(1).scaleb(-decimals), rounding=mode)
         return float(d) if d > 0 else 0.0
 
@@ -478,6 +513,13 @@ class Venue:
         `direction` mirrors what the callers pass, so this cannot change where
         an existing order lands. See the table in the C2 review.
         """
+        # Precision FIRST, so the reason is the real one. Without this the
+        # rounders' refusal surfaced as "size 1.76 rounds to zero at SOL
+        # precision", which is both false and the wrong thing to debug.
+        if not self.precision_known(coin):
+            return self._refuse(what, f"{coin} szDecimals unknown -- no "
+                                      f"precision to round to, and guessing "
+                                      f"is wrong for 228 of 234 perps")
         rsize = self.round_size(coin, size)
         if rsize <= 0:
             return self._refuse(what, f"size {size!r} rounds to zero at "

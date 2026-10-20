@@ -694,3 +694,87 @@ def test_a_refusal_is_logged_loudly(capsys):
     v.send_ioc("SOL", True, 0.0001, 104.0, False)
     out = capsys.readouterr().out
     assert "REFUSED" in out, out
+
+
+# ── unknown precision is refused, not guessed at ───────────────────────────
+#
+# round_size and round_price defaulted to szDecimals=3 for a coin not in the
+# metadata map. Measured against the live venue: 3 is right for SIX of 234
+# perps. 134 are whole units only, 66 take one decimal. So the default was
+# correct 2.6% of the time, and wrong silently:
+#
+#   round_price(PUMP, 0.0043) -> 0.004   a 7% error, on a price this account
+#                                        had a live resting bid at
+#   round_size(BTC, 0.000123) -> 0.0     the size annihilated
+#
+# The 7% case is NOT caught by the deviation guard: 0.004/0.0043 is 0.93,
+# inside the 10% band. Only knowing the precision catches it.
+#
+# Reachability: __init__ loads the metadata and swallows its own failure, so a
+# process that starts during a venue outage has an empty map for its whole
+# life. "meta load failed" has 0 occurrences in production to date -- but the
+# restart watchdog makes that case MORE likely, not less, because it restarts
+# loops precisely when the venue is unreachable.
+
+def _no_meta():
+    fake = FakeHL(positions={"SOL": 1.76}, mid=104.0)
+    v = build_venue(fake)
+    v._sz_decimals.clear()
+    fake.meta = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("429"))
+    return fake, v
+
+
+def test_an_unknown_coins_size_is_refused_not_guessed():
+    _, v = _no_meta()
+    assert v.round_size("SOL", 1.76) == 0.0
+
+
+def test_an_unknown_coins_price_is_refused_not_guessed():
+    """The 7% error, as the specific number it was."""
+    _, v = _no_meta()
+    assert v.round_price("PUMP", 0.0043) == 0.0
+    v._sz_decimals["PUMP"] = 0            # the truth: 6 price decimals
+    assert v.round_price("PUMP", 0.0043) == 0.0043
+
+
+def test_the_old_default_would_have_been_wrong_here():
+    """Pinned as the counterfactual, so the default cannot come back quietly.
+
+    With szDecimals defaulted to 3, PUMP's price decimals come out 3 and
+    0.0043 rounds to 0.004 -- and the deviation guard does not catch it,
+    because 0.93 is inside the 10% band.
+    """
+    _, v = _no_meta()
+    v._sz_decimals["PUMP"] = 3            # what the default assumed
+    assert v.round_price("PUMP", 0.0043) == 0.004
+    assert 0.9 <= 0.004 / 0.0043 <= 1.1, "the deviation guard would catch it"
+
+
+def test_precision_known_retries_the_metadata_load():
+    """The recovery path. __init__ swallows its own failure, so without a
+    retry an empty map lasts the life of the process."""
+    fake = FakeHL(positions={"SOL": 1.76})
+    v = build_venue(fake)
+    v._sz_decimals.clear()
+    assert v.precision_known("SOL"), "it did not retry the load"
+    assert v.round_size("SOL", 1.76) > 0
+
+
+def test_a_write_for_an_unknown_coin_is_refused_with_the_real_reason():
+    """It surfaced as "size 1.76 rounds to zero at SOL precision", which is
+    both false and the wrong thing to debug."""
+    fake, v = _no_meta()
+    resp = v.send_trigger("SOL", is_buy=False, size=1.76, trigger_px=100.33,
+                          is_stop=True)
+    assert fake.sent == []
+    assert "szDecimals unknown" in resp["response"], resp["response"]
+    assert "rounds to zero" not in resp["response"]
+
+
+def test_every_live_perp_precision_is_a_known_value():
+    """The recorded universe must actually carry szDecimals, or the guard
+    refuses everything and the watchdog restart-loops the daemons."""
+    universe = load("meta.json")["universe"]
+    assert len(universe) > 100
+    missing = [a.get("name") for a in universe if "szDecimals" not in a]
+    assert not missing, missing
