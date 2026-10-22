@@ -867,3 +867,60 @@ class RetiredStateKeysAreStripped(unittest.TestCase):
         T.STATE_PATH.write_text('{"watching": ')
         with self.assertRaises(SystemExit):
             T.load_state()
+
+
+class UniverseLoadRetries(unittest.TestCase):
+    """The trader's half of the 2026-10-22 crash loop.
+
+    `select_universe` at startup was unguarded and raised VenueFetchError
+    straight out of main() 58 times -- a raw traceback to stderr and a dead
+    process each time, restarted by launchd at its 60s ThrottleInterval.
+    77KB of identical tracebacks for "DNS is down". The in-loop refresh has
+    always been guarded and keeps the previous universe; at startup there is
+    no previous one, so the choice is retry or exit.
+    """
+
+    def test_a_transient_failure_is_retried(self):
+        waits, calls = [], {"n": 0}
+
+        def flaky(ro):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise RuntimeError("metaAndAssetCtxs failed after 5 retries")
+            return [{"symbol": "SOL"}]
+
+        with mock.patch.object(T, "select_universe", flaky):
+            got = T.start_universe(object(), sleep=waits.append)
+        self.assertEqual(got, [{"symbol": "SOL"}])
+        self.assertEqual(calls["n"], 3)
+        self.assertGreater(len(waits), 0, "it did not back off")
+
+    def test_it_returns_None_rather_than_raising(self):
+        """A raise here is what produced the tracebacks. main() turns None
+        into a clean non-zero exit, which is what launchd restarts on."""
+        with mock.patch.object(T, "select_universe",
+                               lambda ro: (_ for _ in ()).throw(
+                                   RuntimeError("NameResolutionError"))):
+            got = T.start_universe(object(), sleep=lambda s: None)
+        self.assertIsNone(got)
+
+    def test_an_empty_universe_is_a_failure_not_a_universe(self):
+        """Trading an empty universe is a silent no-op forever."""
+        with mock.patch.object(T, "select_universe", lambda ro: []):
+            got = T.start_universe(object(), sleep=lambda s: None)
+        self.assertIsNone(got)
+
+    def test_a_first_attempt_success_does_not_wait(self):
+        waits = []
+        with mock.patch.object(T, "select_universe",
+                               lambda ro: [{"symbol": "SOL"}]):
+            T.start_universe(object(), sleep=waits.append)
+        self.assertEqual(waits, [])
+
+    def test_main_exits_cleanly_when_the_universe_never_loads(self):
+        """Non-zero, so KeepAlive SuccessfulExit=false restarts it -- and no
+        traceback, which is the difference from the 58 in the err log."""
+        src = inspect.getsource(T.main)
+        self.assertIn("universe = start_universe(ro)", src)
+        self.assertIn("if universe is None:", src)
+        self.assertIn("return 1", src)

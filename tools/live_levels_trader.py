@@ -480,7 +480,9 @@ def main():
             key="armed_start", cooldown_sec=300)
 
     ro = HyperliquidReadOnlyClient()
-    universe = select_universe(ro)
+    universe = start_universe(ro)
+    if universe is None:
+        return 1
 
     # Lives across passes on purpose, unlike bars_cache. A 4h series is keyed
     # to the bar it belongs to and cannot change until that bar closes, so
@@ -977,6 +979,48 @@ def cached_1h(coin: str, cache: Optional[Dict[str, Any]]) -> List[Dict[str, Any]
     if coin not in cache:
         cache[coin] = fetch_1h(_ro_client(), coin)
     return cache[coin]
+
+
+def start_universe(ro, sleep=time.sleep) -> Optional[List[Dict[str, Any]]]:
+    """The universe at startup, retrying a transient venue failure.
+
+    This call was unguarded, and it is the first thing after the venue comes
+    up. During the 2026-10-22 outage it raised VenueFetchError straight out of
+    main() 58 times -- a raw traceback to stderr and a dead process each time,
+    restarted by launchd at its 60s ThrottleInterval. 77KB of identical
+    tracebacks for "DNS is down".
+
+    The in-loop refresh has always been guarded and falls back to the previous
+    universe. At startup there IS no previous one, so the choice is retry or
+    exit -- and exiting on the first failure is the crash loop. Same five
+    attempts and linear backoff as start_venue, for the same reason its
+    docstring gives: every restart is another request.
+
+    Returns None when a stop was requested, or after every attempt failed. The
+    caller exits non-zero, which is what launchd restarts on, so a genuinely
+    long outage still gets a fresh process -- just every ~3 minutes rather
+    than every 60 seconds, and without a traceback.
+    """
+    for attempt in range(1, BACKEND_START_ATTEMPTS + 1):
+        try:
+            u = select_universe(ro)
+            if u:
+                return u
+            last = "the venue returned an empty universe"
+        except Exception as e:                                 # noqa: BLE001
+            last = str(e)[:160]
+        if attempt == BACKEND_START_ATTEMPTS:
+            print(f"[LEVELS_LIVE] universe failed to load after {attempt} "
+                  f"attempts: {last} -- exiting for launchd to retry")
+            return None
+        wait = BACKEND_START_BACKOFF_SEC * attempt
+        print(f"[LEVELS_LIVE] universe load attempt {attempt} failed "
+              f"({last[:80]}); retrying in {wait}s")
+        for _ in range(int(wait)):
+            if _stop:
+                return None
+            sleep(1)
+    return None
 
 
 def start_venue(factory, sleep=time.sleep):
