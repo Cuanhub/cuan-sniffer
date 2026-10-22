@@ -31,6 +31,40 @@ from core.venue import Venue                                      # noqa: E402
 
 POLL_SEC = float(os.getenv("PROTECT_POLL_SEC", "60"))
 
+# Retry venue construction before giving the process up.
+#
+# The SDK fetches perp metadata inside Info.__init__, so construction hits the
+# network and raises there before any of our code runs. This loop used to
+# return 1 on the first failure, and with KeepAlive plus a 30s
+# ThrottleInterval that is a crash loop: during the 2026-10-22 outage it
+# logged "no venue ... cannot run" 117 times, about an hour of cycling.
+#
+# The trader has had start_venue() for exactly this since 2026-09-19, and its
+# docstring says why: "a crash loop against a rate limit is the worst possible
+# way to wait, because every restart is another request, which is what caused
+# the limit." The protection loop -- the safety-critical one -- did not have
+# it. Five attempts at 15/30/45/60s ride out a short outage without exiting at
+# all, and a longer one cycles every ~3 minutes instead of every 30 seconds.
+#
+# Kept here rather than shared with the trader's version because that one
+# honours the trader's SIGTERM flag mid-wait and this process has none.
+START_ATTEMPTS = 5
+START_BACKOFF_SEC = 15
+
+
+def start_venue(sleep=time.sleep) -> "Venue":
+    for attempt in range(1, START_ATTEMPTS + 1):
+        try:
+            return Venue(debug=False)
+        except Exception as e:                                 # noqa: BLE001
+            if attempt == START_ATTEMPTS:
+                raise
+            wait = START_BACKOFF_SEC * attempt
+            print(f"[PROTECT] venue start attempt {attempt} failed "
+                  f"({str(e)[:90]}); retrying in {wait}s")
+            sleep(wait)
+    raise RuntimeError("unreachable")
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -38,9 +72,10 @@ def main() -> int:
     args = ap.parse_args()
 
     try:
-        venue = Venue(debug=False)
+        venue = start_venue()
     except Exception as e:
-        print(f"[PROTECT] no venue ({str(e)[:120]}) -- cannot run")
+        print(f"[PROTECT] no venue after {START_ATTEMPTS} attempts "
+              f"({str(e)[:120]}) -- exiting for launchd to retry")
         return 1
     store = MetaStore()
     print(f"[PROTECT] protecting every {POLL_SEC:g}s")
