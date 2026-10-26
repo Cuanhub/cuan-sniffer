@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from research.levels import storage
+from research.levels import zone_log
 from research.levels.gate import evaluate
 from research.levels.levels import (
     detect_levels, log_sigma, sigma_distance, structural_stop, choose_target,
@@ -399,7 +400,22 @@ def main():
             last_universe_day = datetime.now(timezone.utc).date()
         found = run_pass(client, universe)
         n = resolve_outcomes(client, [u["symbol"] for u in universe])
-        print(f"[LEVEL_SCANNER] pass complete: {len(found)} gated, {n} outcome(s) resolved "
+        # Band outcomes too. The trader RECORDS band episodes; resolving them
+        # needs bars after the fact, which is this loop's job and not the
+        # trading pass's -- and leaving it to a hand-run command means the
+        # record quietly stops being analysable the week nobody runs it.
+        #
+        # zone_log imports only storage and zones, so this does not breach the
+        # read-only contract test_research_levels_isolation.py enforces on
+        # everything research.levels.scanner reaches.
+        try:
+            z = zone_log.resolve(client)
+        except Exception as exc:                               # noqa: BLE001
+            z = 0
+            print(f"[LEVEL_SCANNER] band outcome resolution failed "
+                  f"({str(exc)[:100]}) -- the level pass is unaffected")
+        print(f"[LEVEL_SCANNER] pass complete: {len(found)} gated, {n} outcome(s) resolved"
+              f"{f', {z} band outcome(s)' if z else ''} "
               f"at {storage.now_iso()}")
         for _ in range(int(max(0.0, POLL_INTERVAL_SEC - (time.time() - t0)))):
             if _stop:

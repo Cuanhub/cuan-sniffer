@@ -166,3 +166,65 @@ def test_broken_geometry_is_refused_not_resolved():
     for p in (plan(entry=97.0, stop=101.0), plan(tp=95.0)):
         row = zone_log.episode_row(p, bars(), 101.0, taken=True)
         assert zone_log.resolve_one(row, bars(40)) is None
+
+
+# ── which bands are worth a human verdict ──────────────────────────────────
+
+def _row(coin="SOL", rr=2.0, eid=None):
+    return {"zone_episode_id": eid or f"zone:{coin}:1:{rr}", "coin": coin,
+            "rr": str(rr), "zone_lo": "100", "zone_hi": "103",
+            "risk_pct": "3.0", "stop_atr_mult": "2.0",
+            "target_dist_pct": "6.0"}
+
+
+def test_it_picks_the_boundary_not_the_best_setups():
+    """A band at rr 0.02 teaches nothing -- the gate refuses it and so would
+    anyone. The only place a label can say the LINE is wrong is next to it."""
+    rows = [_row(rr=0.02), _row(rr=1.95), _row(rr=2.05), _row(rr=9.0)]
+    got = {float(r["rr"]) for r in zone_log.boundary_cases(rows, 2.0)}
+    # A SET: 1.95 and 2.05 are equidistant in intent and their float gaps
+    # differ in the 17th decimal, so asserting an order here would be
+    # asserting a rounding artefact.
+    assert got == {1.95, 2.05}, got
+
+
+def test_nearest_to_the_line_comes_first():
+    rows = [_row(rr=2.3), _row(rr=1.98), _row(rr=1.7)]
+    got = [float(r["rr"]) for r in zone_log.boundary_cases(rows, 2.0)]
+    assert got[0] == 1.98
+
+
+def test_it_says_which_side_the_gate_came_down_on():
+    rows = [_row(rr=1.9), _row(rr=2.1)]
+    sides = {float(r["rr"]): r["_side"] for r in
+             zone_log.boundary_cases(rows, 2.0)}
+    assert "REFUSE" in sides[1.9] and "TAKE" in sides[2.1]
+
+
+def test_already_labelled_bands_are_not_asked_about_again():
+    rows = [_row(rr=1.95, eid="A"), _row(rr=1.96, eid="B")]
+    got = zone_log.boundary_cases(rows, 2.0, labelled=["A"])
+    assert [r["zone_episode_id"] for r in got] == ["B"]
+
+
+def test_the_window_scales_with_the_floor():
+    """At MIN_RR 2.0 the window is rr 1.6-2.4; at 1.0 it must not still be
+    +/-0.4, or half of everything qualifies."""
+    # rr 1.7 is INSIDE the window at a 2.0 floor (gap 0.3 <= 0.4) and
+    # OUTSIDE it at a 1.0 floor (gap 0.7 > 0.2).
+    rows = [_row(rr=1.7)]
+    assert zone_log.boundary_cases(rows, 2.0), "1.7 is near a 2.0 floor"
+    assert not zone_log.boundary_cases(rows, 1.0), "1.7 is far from a 1.0 floor"
+
+
+def test_an_unparseable_rr_is_skipped_not_crashed():
+    rows = [{"zone_episode_id": "x", "coin": "SOL", "rr": ""},
+            {"zone_episode_id": "y", "coin": "SOL", "rr": "n/a"},
+            _row(rr=2.0, eid="z")]
+    got = zone_log.boundary_cases(rows, 2.0)
+    assert [r["zone_episode_id"] for r in got] == ["z"]
+
+
+def test_the_limit_is_a_sitting_not_a_mailing_list():
+    rows = [_row(rr=2.0 + i * 0.001, eid=f"e{i}") for i in range(80)]
+    assert len(zone_log.boundary_cases(rows, 2.0, limit=10)) == 10

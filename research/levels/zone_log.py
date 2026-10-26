@@ -263,3 +263,53 @@ def resolve(client, hours: int = 1200) -> int:
             if out and storage.append_zone_outcome(out):
                 written += 1
     return written
+
+
+# ── which bands are worth a human verdict ──────────────────────────────────
+
+# How far from the gate's decision line still counts as "near it".
+#
+# Sampling at random wastes the scarce resource. A band at rr 0.02 teaches
+# nothing: the gate refuses it and so would anyone. A band at rr 1.90, just
+# under a 2.0 floor, is where a human verdict carries information the gate
+# does not have -- it is the only place a label can tell you the line is in
+# the wrong place.
+#
+# 0.4 of the floor is wide enough to catch both sides of it. At MIN_RR 2.0
+# that is rr 1.6 to 2.4, which on a representative pass was 6 of 47 bands --
+# a sitting's worth, not a mailing list.
+BOUNDARY_FRAC = 0.2
+
+
+def boundary_cases(rows: Sequence[Dict[str, Any]], min_rr: float,
+                   labelled: Optional[Sequence[str]] = None,
+                   limit: int = 10) -> List[Dict[str, Any]]:
+    """Recorded band episodes sitting closest to the gate's decision line.
+
+    `rows` are zone_episode dicts as written to disk. Already-labelled ids
+    are dropped, and the rest are ordered by how close their reward/risk sits
+    to `min_rr` -- nearest first, because that is where a verdict is worth
+    most.
+
+    Deliberately NOT ordered by how good the setup looks. The point is to
+    find out where the line belongs, and a band everybody agrees on cannot
+    say anything about that.
+    """
+    done = set(labelled or ())
+    band = max(min_rr * BOUNDARY_FRAC, 0.05)
+    out = []
+    for r in rows:
+        if str(r.get("zone_episode_id") or "") in done:
+            continue
+        try:
+            rr = float(r.get("rr", ""))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(rr):
+            continue
+        gap = abs(rr - min_rr)
+        if gap <= band:
+            out.append({**r, "_gap": gap, "_side":
+                        "would TAKE" if rr >= min_rr else "would REFUSE"})
+    out.sort(key=lambda r: r["_gap"])
+    return out[:limit]
