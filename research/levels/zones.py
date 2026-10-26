@@ -132,6 +132,37 @@ ZONE_REACH_PCT = float(os.getenv("LEVELS_ZONE_REACH_PCT", "5.0"))
 # from 23 bands to 4 and every band of his that price can still reach
 # survives -- the four it loses were already out of reach.
 ZONE_RECENT_BARS = int(os.getenv("LEVELS_ZONE_RECENT_BARS", "240"))
+# The stop must clear the coin's own noise, not a fixed percentage.
+#
+# ZONE_STOP_BUFFER_PCT alone put the stop 0.25% under the band low, and
+# measured against 2,256 resolved episodes that is the losing side of the
+# single largest effect in the data. Holding the target distance fixed and
+# varying only the stop:
+#
+#     stop 0.72-2.80% of price   n=250   -14.4pp against break-even
+#     stop 2.81-4.63%            n=251    -1.1pp
+#     stop 4.65-24.6%            n=251   +14.8pp
+#
+# It normalises by volatility, which is what makes it a rule rather than a
+# curve fit -- in ATR multiples the relationship is monotonic across four
+# buckets, 19.3% / 17.9% / 50.4% / 71.5% win rate, crossing break-even at
+# about 1.32x ATR. Ten of ten coins with enough resolved episodes agreed that
+# wider beat tighter.
+#
+# As built, 6 of 11 band plans sat under 1.32x ATR and the median was 1.29x --
+# just inside the losing zone. At 1.5x none of them do, and the median rr
+# falls from 2.79 to 1.38, into the band that actually paid. One parameter
+# fixes both, because a tight stop is what MANUFACTURES a high rr.
+#
+# The cost is honest: median risk per trade goes 1.87% -> 3.37%.
+#
+# Caveat recorded with the number: the 2,256 episodes are from levels.py, not
+# from bands, and August reversed the sign (tight +24.4pp vs wide +15.5pp,
+# n=86) where September and October agreed with it.
+ZONE_STOP_ATR_MULT = float(os.getenv("LEVELS_ZONE_STOP_ATR_MULT", "1.5"))
+# Bars of true range behind the ATR. 14 is the conventional window and the
+# measurement did not turn on it.
+ZONE_ATR_BARS = int(os.getenv("LEVELS_ZONE_ATR_BARS", "14"))
 
 
 DEMAND = "demand"
@@ -216,10 +247,18 @@ class Plan:
     stop: float
     tp: float
     immediate: bool      # price is in the band now, rather than above it
+    atr_pct: float = 0.0  # the volatility the stop was scaled against
 
     @property
     def coin(self) -> str:
         return self.zone.coin
+
+    @property
+    def stop_atr_mult(self) -> float:
+        """The stop distance in ATR multiples -- the unit that predicted
+        outcome. Under about 1.32x is the losing side of the measurement in
+        ZONE_STOP_ATR_MULT's comment."""
+        return (self.risk_pct / self.atr_pct) if self.atr_pct > 0 else 0.0
 
     @property
     def risk_pct(self) -> float:
@@ -282,12 +321,17 @@ def plans_for(bars: List[Dict[str, Any]], px: float, coin: str = "",
     if not demand:
         return []
     supply = supply_zones(bars, coin=coin, window=window, min_bars=min_bars)
+    # One ATR reading per coin, not per band: it describes the coin's current
+    # noise, which is what the stop has to clear, and it does not depend on
+    # which band is being considered.
+    a = atr_pct(bars)
+    buf = stop_buffer_pct(bars)
     out: List[Plan] = []
     for z in demand:
         if px < z.lo:
             continue                   # band is above price: not a buy
         entry = z.entry_px(px_now=px)
-        stop = z.stop_px()
+        stop = z.stop_px(buffer_pct=buf)
         if not entry > stop > 0:
             continue
         # Measured from the MARKET, not from the entry. A supply band below
@@ -300,7 +344,7 @@ def plans_for(bars: List[Dict[str, Any]], px: float, coin: str = "",
         if t is None:
             continue                   # nothing overhead: no target, no plan
         out.append(Plan(zone=z, target=t, entry=entry, stop=stop, tp=t.lo,
-                        immediate=z.contains(px)))
+                        immediate=z.contains(px), atr_pct=a))
     out.sort(key=lambda pl: -pl.zone.base_i)
     return out
 
@@ -428,6 +472,47 @@ def live_zones(zones: List[Zone], px: float,
     seen = {id(z) for z in out}
     out += [z for z in reach if id(z) not in seen]
     return sorted(out, key=lambda z: (not z.contains(px), abs(px - z.hi)))
+
+
+def atr_pct(bars: List[Dict[str, Any]], n: int = ZONE_ATR_BARS) -> float:
+    """Average true range over the last `n` bars, as a percent of price.
+
+    True range, not the bar range: a gap between bars is movement the stop
+    has to survive, and `h - l` alone cannot see it.
+    """
+    if len(bars) < 2:
+        return 0.0
+    trs: List[float] = []
+    for i in range(max(1, len(bars) - n), len(bars)):
+        prev, bar = bars[i - 1], bars[i]
+        trs.append(max(bar["h"] - bar["l"],
+                       abs(bar["h"] - prev["c"]),
+                       abs(bar["l"] - prev["c"])))
+    px = float(bars[-1]["c"])
+    if not trs or px <= 0:
+        return 0.0
+    return sum(trs) / len(trs) / px * 100.0
+
+
+def stop_buffer_pct(bars: List[Dict[str, Any]],
+                    mult: Optional[float] = None) -> float:
+    """How far under the band low the stop belongs, as a percent.
+
+    The wider of the fixed floor and `mult` x ATR. The floor still matters:
+    on a coin so quiet that ATR rounds to nothing, a stop AT the band low is
+    not a stop.
+
+    `mult` defaults to None and the module value is read INSIDE the function,
+    the same way `min_bars` is handled below. Binding it as a default
+    argument instead -- `mult: float = ZONE_STOP_ATR_MULT` -- captures the
+    value at import, which makes the knob unchangeable afterwards: a
+    parameter sweep then measures one configuration repeatedly and reports it
+    as several. That is how it was written first, and
+    test_a_wider_stop_lowers_reward_risk_as_arithmetic_says_it_must is what
+    caught it, by producing byte-identical reward/risk for 0.0x and 1.5x.
+    """
+    m = ZONE_STOP_ATR_MULT if mult is None else mult
+    return max(ZONE_STOP_BUFFER_PCT, m * atr_pct(bars))
 
 
 def _first_close_above(bars: List[Dict[str, Any]], start: int,

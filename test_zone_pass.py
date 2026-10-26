@@ -75,13 +75,37 @@ def test_the_setups_he_refused_are_not_offered(coin):
     assert intents == []
 
 
-@pytest.mark.parametrize("coin", ["FARTCOIN", "SUI"])
+@pytest.mark.parametrize("coin", ["SUI"])
 def test_the_setups_he_took_are_offered_inside_his_band(coin):
     intents, _, _ = run(coins=[coin])
     assert len(intents) == 1, intents
     lo, hi = BANDS[coin]
     e = intents[0]["suggested_entry"]
     assert e <= hi, f"{coin} entry {e} above his band top {hi}"
+
+
+def test_FARTCOIN_is_now_refused_on_reward_risk_not_on_the_band():
+    """FARTCOIN was in this list until the stop became volatility-scaled.
+
+    Its band is still found and still correct -- what changed is that the
+    stop now clears the coin's own noise, which widened the risk and took
+    the ratio to about 0.98. At MIN_RR 2.0 that no longer pays for itself.
+
+    This is the trade-off being made deliberately, not a regression. On a
+    208-day walk-forward backtest the volatility-scaled stop took the
+    strategy from -43.7R over 786 trades to +25.2R over 173, and the price
+    of that is exactly this: fewer setups clear the bar. The band is
+    offered on the candidate table either way, with the reason.
+    """
+    intents, rejected, found = run(coins=["FARTCOIN"])
+    assert intents == [], "FARTCOIN cleared MIN_RR unexpectedly"
+    assert found.get("FARTCOIN"), "the band itself must still be detected"
+    lo, hi = BANDS["FARTCOIN"]
+    p = found["FARTCOIN"][0]
+    err = max(abs(p.zone.lo - lo) / lo, abs(p.zone.hi - hi) / hi) * 100
+    assert err <= 2.5, f"it is no longer his band: {err:.2f}% off"
+    assert p.rr < 2.0
+    assert any("rr" in r[2] for r in rejected), rejected
 
 
 # ── one coin, one intent ───────────────────────────────────────────────────

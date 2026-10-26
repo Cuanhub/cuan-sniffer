@@ -542,10 +542,43 @@ def test_every_plan_has_a_target_above_the_market():
             assert p.tp > p.entry
 
 
-def test_the_target_fix_shows_up_as_reward_risk():
-    """Pinned as a number so the regression is visible, not just the rule."""
-    rrs = [pl[0].rr for c in sorted(BANDS) if (pl := plans(c))]
-    assert statistics.median(rrs) > 2.0, f"median rr {statistics.median(rrs):.2f}"
+def test_the_target_is_measured_from_the_market_not_the_entry():
+    """What the target fix actually guarantees.
+
+    This used to assert median rr > 2.0, and that was the wrong pin: it
+    measured the SYMPTOM of the fix rather than the fix. When the stop became
+    volatility-scaled the median rr fell to about 1.38 -- deliberately,
+    because a wider stop lowers rr -- and the test failed for a change it was
+    never meant to police.
+
+    The property it exists to protect is that a supply band price has already
+    traded through is not taken as a target. WLD scored rr 0.08 that way: a
+    bid at 0.46969 against a "target" of 0.4705 while price was 0.49138.
+    """
+    for coin in sorted(BANDS):
+        px = BARS[coin][-1]["c"]
+        for p in plans(coin):
+            assert p.tp > px, f"{coin} target {p.tp} is at or below market {px}"
+
+
+def test_a_wider_stop_lowers_reward_risk_as_arithmetic_says_it_must():
+    """The direction of the stop change, so a silent revert is visible.
+
+    rr = (target - entry) / (entry - stop), so widening the stop MUST lower
+    rr. If this ever fails, either the stop stopped being volatility-scaled
+    or the target moved to compensate.
+    """
+    wide = [pl[0].rr for c in sorted(BANDS) if (pl := plans(c))]
+    tight = []
+    saved = Z.ZONE_STOP_ATR_MULT
+    Z.ZONE_STOP_ATR_MULT = 0.0          # the old fixed-percentage buffer
+    try:
+        tight = [pl[0].rr for c in sorted(BANDS) if (pl := plans(c))]
+    finally:
+        Z.ZONE_STOP_ATR_MULT = saved
+    assert statistics.median(wide) < statistics.median(tight), (
+        f"wide {statistics.median(wide):.2f} vs tight "
+        f"{statistics.median(tight):.2f}")
 
 
 def test_plans_are_ordered_by_recency_not_reward_risk():
@@ -624,3 +657,74 @@ def test_the_width_floor_costs_exactly_one_band():
     arb = demand_zones(BARS["ARB"], "ARB")
     assert all(z.width_pct >= Z.ZONE_MIN_WIDTH_PCT for z in arb)
     assert Z.plans_for(BARS["ARB"], BARS["ARB"][-1]["c"], coin="ARB") == []
+
+
+# ── the stop is scaled to the coin's own noise ─────────────────────────────
+
+def test_the_atr_uses_true_range_not_the_bar_range():
+    """A gap between bars is movement the stop has to survive, and h-l
+    cannot see it."""
+    gappy = [{"o": 100, "h": 100, "l": 100, "c": 100},
+             {"o": 110, "h": 110, "l": 110, "c": 110}]
+    assert Z.atr_pct(gappy) > 0, "a pure gap registered as zero range"
+
+
+def test_the_buffer_is_the_wider_of_the_floor_and_the_atr():
+    quiet = [{"o": 100, "h": 100.01, "l": 99.99, "c": 100}] * 20
+    assert Z.stop_buffer_pct(quiet) == pytest.approx(Z.ZONE_STOP_BUFFER_PCT)
+    wild = [{"o": 100, "h": 105, "l": 95, "c": 100}] * 20
+    assert Z.stop_buffer_pct(wild) > Z.ZONE_STOP_BUFFER_PCT * 10
+
+
+def test_the_multiplier_is_read_at_call_time_not_bound_at_import():
+    """The bug this file caught. `mult: float = ZONE_STOP_ATR_MULT` as a
+    default argument captures the value at import, so the knob cannot be
+    changed afterwards -- a parameter sweep then measures ONE configuration
+    repeatedly and reports it as several. That is exactly what happened: a
+    backtest over nine settings produced byte-identical reward/risk.
+    """
+    bars = [{"o": 100, "h": 102, "l": 98, "c": 100}] * 20
+    saved = Z.ZONE_STOP_ATR_MULT
+    try:
+        Z.ZONE_STOP_ATR_MULT = 1.0
+        one = Z.stop_buffer_pct(bars)
+        Z.ZONE_STOP_ATR_MULT = 3.0
+        three = Z.stop_buffer_pct(bars)
+    finally:
+        Z.ZONE_STOP_ATR_MULT = saved
+    assert three > one * 2.5, (
+        f"the module value is frozen: {one} vs {three}")
+
+
+def test_an_explicit_multiplier_still_overrides():
+    bars = [{"o": 100, "h": 102, "l": 98, "c": 100}] * 20
+    assert Z.stop_buffer_pct(bars, mult=0.0) == pytest.approx(
+        Z.ZONE_STOP_BUFFER_PCT)
+
+
+def test_no_band_plan_keeps_a_stop_inside_the_noise():
+    """The finding this implements: measured on 2,256 resolved episodes, a
+    stop under about 1.32x ATR sat on the losing side -- 17.9-19.3% win
+    against a 22.6-25.4% break-even. As built, 6 of 11 band plans were
+    there."""
+    for coin in sorted(BANDS):
+        for p in plans(coin):
+            assert p.stop_atr_mult >= 1.32, (
+                f"{coin} stop is {p.stop_atr_mult:.2f}x ATR")
+
+
+def test_the_plan_carries_the_volatility_it_was_sized_against():
+    """So the log and the review flags can show it, and so stop_atr_mult is
+    not recomputed from different bars later."""
+    for coin in sorted(BANDS):
+        for p in plans(coin):
+            assert p.atr_pct > 0
+            assert p.stop_atr_mult == pytest.approx(p.risk_pct / p.atr_pct)
+
+
+def test_a_quiet_coin_still_gets_a_real_stop():
+    """The floor matters: on a coin whose ATR rounds to nothing, a stop AT
+    the band low is not a stop."""
+    z = Zone("X", lo=100.0, hi=103.0, base_i=0, bos_i=1)
+    flat = [{"o": 100, "h": 100, "l": 100, "c": 100}] * 20
+    assert z.stop_px(buffer_pct=Z.stop_buffer_pct(flat)) < z.lo
