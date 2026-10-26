@@ -526,10 +526,20 @@ def main():
         print(f"[LEVELS_LIVE] no equity reading; dry run, assuming "
               f"${equity:.2f} to print sizes")
     _margin = equity * MARGIN_PCT_PER_TRADE / 100.0
+    # Risk per trade is NOT a constant any more, so this no longer pretends
+    # it is. It used to read "risk at a median 1.76% stop $3.10", with both
+    # the 1.76% and the 0.088 that derived it hardcoded -- and when the stop
+    # became max(0.25%, ZONE_STOP_ATR_MULT x ATR) the median moved to about
+    # 3.37% while the line kept reporting the old figure. A number the
+    # operator reads to know what the bot is risking has to come from the
+    # same place the bot gets it, or not be printed.
+    _notional = _margin * FLAT_LEVERAGE
     print(f"[LEVELS_LIVE] per trade: margin ${_margin:.2f}, "
-          f"notional ${_margin * FLAT_LEVERAGE:.2f}, "
-          f"risk at a median 1.76% stop ${_margin * 0.088:.2f} "
-          f"({_margin * 0.088 / equity * 100:.2f}% of equity)")
+          f"notional ${_notional:.2f}; risk = notional x the stop distance, "
+          f"which is max({zones.ZONE_STOP_BUFFER_PCT}%, "
+          f"{zones.ZONE_STOP_ATR_MULT:g}x ATR) under the band low -- so "
+          f"${_notional * 0.02:.2f} at a 2% stop, "
+          f"${_notional * 0.04:.2f} at 4%")
 
     meta = MetaStore()
     if armed and venue is not None:

@@ -837,8 +837,9 @@ def summary() -> str:
             f"{_z.ZONE_MAX_WIDTH_PCT}% wide, base within "
             f"{_z.ZONE_RECENT_BARS}b, within {_z.ZONE_REACH_PCT}% of price, "
             f"target above, rr>={MIN_RR} | "
-            f"entry inside the band, stop {_z.ZONE_STOP_BUFFER_PCT}% under "
-            f"its low")
+            f"entry inside the band, stop "
+            f"max({_z.ZONE_STOP_BUFFER_PCT}%, "
+            f"{_z.ZONE_STOP_ATR_MULT:g}x ATR) under its low")
 
 
 # ---- rule 9: how long each kind of record is kept --------------------------

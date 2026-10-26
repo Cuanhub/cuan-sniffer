@@ -135,3 +135,57 @@ class EnvExampleMatchesTheCode(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheRailsLineDescribesTheRailsThatRun(unittest.TestCase):
+    """The line the operator reads to know what the bot is doing.
+
+    It has gone stale twice. First it advertised `depth>=5.0s rested>=9b
+    headroom>=3.0s` after the pass moved to bands -- thresholds nothing
+    applied. Then it said `stop 0.25% under its low` after the stop became
+    max(0.25%, ZONE_STOP_ATR_MULT x ATR). Both times it was describing a
+    system that no longer existed, on the one line that is supposed to say
+    what the system is.
+    """
+
+    def summary(self):
+        from research.levels.config import summary
+        return summary()
+
+    def test_it_names_the_volatility_scaled_stop(self):
+        from research.levels import zones
+        s = self.summary()
+        assert "ATR" in s, s
+        assert f"{zones.ZONE_STOP_ATR_MULT:g}x" in s, s
+
+    def test_it_does_not_claim_a_bare_fixed_buffer(self):
+        """"stop 0.25% under its low" was true and became false."""
+        from research.levels import zones
+        s = self.summary()
+        bare = f"stop {zones.ZONE_STOP_BUFFER_PCT}% under"
+        self.assertNotIn(bare, s, f"the fixed buffer is described as the stop: {s}")
+
+    def test_it_reads_every_band_knob_from_the_module(self):
+        """So a knob change cannot leave the description behind."""
+        from research.levels import zones
+        s = self.summary()
+        for v in (zones.ZONE_MIN_WIDTH_PCT, zones.ZONE_MAX_WIDTH_PCT,
+                  zones.ZONE_RECENT_BARS, zones.ZONE_REACH_PCT):
+            self.assertIn(f"{v:g}", s, f"{v} missing from: {s}")
+
+    def test_the_per_trade_line_does_not_hardcode_a_median_stop(self):
+        """It read "risk at a median 1.76% stop $3.10" with both the 1.76%
+        and the 0.088 that derived it hardcoded, and kept reporting them
+        after the real median moved to about 3.37%."""
+        import inspect
+        import tools.live_levels_trader as T
+        # Comments stripped: this file's own comment RECORDS the old numbers
+        # as history, and matching prose rather than code is how a guard like
+        # this gets deleted for crying wolf.
+        code = "\n".join(
+            line for line in inspect.getsource(T.main).splitlines()
+            if not line.strip().startswith("#"))
+        self.assertNotIn("median 1.76%", code)
+        self.assertNotIn("0.088", code)
+        self.assertIn("ZONE_STOP_ATR_MULT", code,
+                      "the line must read the multiplier from the module")
