@@ -70,6 +70,53 @@ OUTCOME_FIELDNAMES = [
     "outcome_r", "level_broke",
 ]
 
+# ── the band strategy's own record ─────────────────────────────────────────
+#
+# The level episodes above are why the 2026-10-26 analysis was possible at
+# all: 2,256 resolved outcomes with 40 features is what let stop-distance be
+# separated from reward/risk and from time. The BAND strategy had no
+# equivalent, so the same questions had to be answered by borrowing level
+# episodes and hand-rolling a backtest -- which is how a finding ends up
+# resting on a different strategy's data.
+#
+# One row per BAND, not per pass: the id is the band itself, so a band
+# re-planned every 450s is recorded once with the features it had when first
+# seen. Taken or refused, because the refused ones are half the question --
+# "why are we losing" needs the counterfactual.
+ZONE_EPISODE_FIELDNAMES = [
+    "zone_episode_id", "coin", "detected_at_utc", "bar_ts_ms",
+    # the band
+    "zone_lo", "zone_hi", "zone_width_pct", "zone_base_i", "zone_bos_i",
+    "bars_since_base", "touches",
+    # the plan
+    "entry", "stop", "tp", "rr", "risk_pct", "immediate",
+    # volatility -- the axis the 2026-10-26 analysis found mattered most
+    "atr_pct", "stop_atr_mult",
+    # the target
+    "target_lo", "target_hi", "target_dist_pct",
+    # context at detection
+    "price_at_detect", "entry_hour_utc",
+    # universe. Rank and volume are recorded because the same analysis could
+    # NOT answer "does universe rank predict outcome" -- nothing stored it.
+    "max_leverage", "day_ntl_vlm", "universe_rank",
+    # the one feature that has ever reached significance here: perp richness
+    "mark_px", "oracle_px", "basis_bps",
+    # what the pass actually did, and why not
+    "taken", "refused_reason",
+]
+
+ZONE_OUTCOME_FIELDNAMES = [
+    "zone_episode_id", "coin", "resolved_at_utc", "bars_elapsed",
+    "filled", "bars_to_fill",
+    "hit_stop", "hit_tp", "bars_to_stop", "bars_to_tp",
+    # `won` is resolved HERE, once, and stored. hit_tp and hit_stop can both
+    # be true -- price touched the target and the stop -- so every consumer
+    # that reads the bare flags gets a contaminated answer. That was the
+    # single biggest trap in the 2026-10-26 analysis, and storing the ordered
+    # result means it cannot be made twice.
+    "won", "outcome_r", "mae_pct", "mfe_pct",
+]
+
 LABEL_FIELDNAMES = [
     "episode_id", "labelled_at_utc", "verdict", "confidence", "note",
 ]
@@ -148,6 +195,28 @@ def append_outcome(row: Dict[str, Any]) -> bool:
 
 def append_label(row: Dict[str, Any]) -> bool:
     return _append("labels.csv", LABEL_FIELDNAMES, row, "episode_id")
+
+
+def append_zone_episode(row: Dict[str, Any]) -> bool:
+    return _append("zone_episodes.csv", ZONE_EPISODE_FIELDNAMES, row,
+                   "zone_episode_id")
+
+
+def append_zone_outcome(row: Dict[str, Any]) -> bool:
+    return _append("zone_outcomes.csv", ZONE_OUTCOME_FIELDNAMES, row,
+                   "zone_episode_id")
+
+
+def load_zone_episodes() -> List[Dict[str, Any]]:
+    path = _path("zone_episodes.csv")
+    if not path.exists():
+        return []
+    with path.open(newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
+def zone_resolved_ids() -> Set[str]:
+    return _existing_ids(_path("zone_outcomes.csv"), "zone_episode_id")
 
 
 def load_episodes() -> List[Dict[str, Any]]:

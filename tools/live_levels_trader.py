@@ -61,6 +61,7 @@ from research.levels.venue_client import HyperliquidReadOnlyClient    # noqa: E4
 from research.levels.universe import select_universe                 # noqa: E402
 from research.levels.trigger import fetch_1h                          # noqa: E402
 from research.levels import zone_pass                                 # noqa: E402
+from research.levels import zone_log                                  # noqa: E402
 from research.levels import zones                                     # noqa: E402
 
 # Rails come from research/levels/config.py -- one definition each, tagged with
@@ -651,6 +652,24 @@ def main():
         intents, rejected, found = zone_pass.plans_by_coin(
             ro, universe, min_rr=MIN_RR, bars_out=bars_cache, mids=mids)
         save_state(state)
+        # Record what this pass SAW, taken or refused, so the strategy
+        # accumulates its own evidence. The level scanner's episode log is
+        # the only reason the 2026-10-26 stop finding could be measured at
+        # all, and bands had no equivalent -- so that finding had to rest on
+        # a different strategy's data. Refusals are recorded too, because
+        # "why are we losing" needs the counterfactual, and nothing else here
+        # can say whether a refusal was right.
+        #
+        # Reads nothing back and decides nothing. zone_log swallows its own
+        # failures; a recorder that can break the pass is worse than none.
+        _rec = zone_log.record_pass(
+            found, MIN_RR, bars_cache, mids=mids, universe=universe,
+            leverage={c: lv for c in found
+                      if (lv := venue.max_leverage_for(c)) is not None}
+            if venue is not None else None,
+            ctx=ctx_cache)
+        if _rec:
+            print(f"[ZONE_LOG] recorded {_rec} new band episode(s)")
         # The candidate table, every pass, before anything is sent. The
         # operator asked for it and the reason is in the measurement: no
         # selection rule reproduced his own band choice better than 9 of 12,

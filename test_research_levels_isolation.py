@@ -29,9 +29,22 @@ PACKAGE_DIR = Path(__file__).resolve().parent / "research" / "levels"
 class TestResearchLevelsImportIsolation(unittest.TestCase):
 
     def test_no_forbidden_module_in_runtime_import_graph(self):
-        for mod in list(sys.modules):
-            if mod.startswith("research."):
-                del sys.modules[mod]
+        # Purging research.* is the point -- the question is what a FRESH
+        # import of the scanner pulls in -- but the purge has to be undone.
+        #
+        # Left unrestored it orphans every module object other test files
+        # bound at collection time with `from research.levels import X`. A
+        # later import creates a NEW object, conftest's isolation fixture
+        # patches THAT one, and the stale reference the test file holds still
+        # points at the live data directory. That is how a band episode from
+        # test_zone_log.py reached research/levels/data/zone_episodes.csv:
+        # clean when that file ran alone, leaking in the full suite, with two
+        # module ids for one path.
+        saved = {m: sys.modules[m] for m in list(sys.modules)
+                 if m.startswith("research.")}
+        self.addCleanup(sys.modules.update, saved)
+        for mod in saved:
+            del sys.modules[mod]
 
         before = set(sys.modules.keys())
         import research.levels.scanner  # noqa: F401
