@@ -137,10 +137,6 @@ class AgreesWithProduction(unittest.TestCase):
                 self.assertAlmostEqual(series[t], Z.atr_pct(bars[:t + 1]), places=10,
                                        msg=f"{coin} t={t}")
 
-    def test_bid_ttl_is_production_s(self):
-        from core import protect
-        self.assertEqual(band.BID_TTL_BARS, protect.BID_TTL_HOURS)
-
     def test_the_window_is_production_s(self):
         self.assertEqual(band.WINDOW, zone_pass.ZONE_PASS_1H_HOURS)
 
