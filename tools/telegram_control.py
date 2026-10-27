@@ -131,6 +131,12 @@ def _f(v, d=0.0) -> float:
         return d
 
 
+def _age(order) -> str:
+    """An order's age for display; the venue may not say."""
+    h = order.age_hours()
+    return "age unknown" if h is None else f"{h:.1f}h"
+
+
 def render_status(state: Dict[str, Any], equity: Optional[float],
                   backend=None) -> str:
     """What the account is doing. Positions come from the VENUE.
@@ -188,7 +194,7 @@ def render_status(state: Dict[str, Any], equity: Optional[float],
                 + (f"  tp `{tp.trigger_px:.6g}`" if tp else ""))
         for o in sorted(bids, key=lambda o: o.coin):
             lines.append(f"  _{o.coin}_ bid {o.size:g} @ `{o.limit_px:.6g}`"
-                         f"  ({o.age_hours():.1f}h old)")
+                         f"  ({_age(o)} old)")
 
     if backend is not None:
         sd = streak.current(backend,
@@ -247,7 +253,7 @@ def render_positions(state: Dict[str, Any], backend) -> str:
     bids = [o for o in orders if o.is_entry]
     if bids:
         out.append("resting: " + ", ".join(
-            f"`{o.coin}` @ {o.limit_px:.6g} ({o.age_hours():.1f}h)"
+            f"`{o.coin}` @ {o.limit_px:.6g} ({_age(o)})"
             for o in bids))
     return "\n".join(out)
 

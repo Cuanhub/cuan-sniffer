@@ -612,6 +612,16 @@ MAX_NEW_PER_DAY = _i("LEVELS_MAX_NEW_PER_DAY", 20)
 # 6h is the middle of the gap in the evidence: nothing in the sample sits
 # between 0.8h and 15.9h, so any value from 1h to 15h blocks the same three
 # losers and preserves the same winners. 6h claims no more precision than that.
+#
+# WHAT IT COVERS TODAY (2026-10-27 audit): MARKET entries only. It is checked
+# in execute_one and NOT when a resting bid is placed -- and under the band
+# strategy about 90% of entries are bids, so on most trades this rail does not
+# apply. The evidence above came from the level strategy's market re-entries.
+# Extending it to bids was measured on the band strategy (research/backtest,
+# 45 coins, 2026-04-02..10-27, descriptive -- not pre-registered): 907 -> 901
+# trades, -46.6R -> -46.5R; the 46 trades it would block averaged +0.228R. No
+# detectable effect either way, so the live behaviour was left unchanged. The
+# OpenClaw lab's queue holds the pre-registered test.
 COIN_REENTRY_COOLDOWN_HOURS = _f("LEVELS_COIN_REENTRY_COOLDOWN_HOURS", 6.0)
 
 # Minimum gap between two entries, in minutes, regardless of coin. 0 disables.

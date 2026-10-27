@@ -53,7 +53,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 import notify                                                        # noqa: E402
-from core import execute, protect, safety, streak                     # noqa: E402
+from core import config_audit, execute, protect, safety, streak       # noqa: E402
 from core.meta import MetaStore, TradeMeta                            # noqa: E402
 from core.venue import Venue                                          # noqa: E402
 from research.levels import storage                                   # noqa: E402
@@ -455,6 +455,18 @@ def main():
     armed = bool(args.arm and env_armed)
     if args.arm and not env_armed:
         print("[LEVELS_LIVE] --arm given but LEVELS_LIVE_ARMED is not 'yes' -- staying DRY")
+    # A setting that looks live and does nothing is a control the operator
+    # will one day reach for and find is not there. Refuse to trade while
+    # .env describes one; DRY still protects positions and expires bids.
+    why_not = config_audit.refusal(config_audit.dead_keys())
+    if why_not:
+        print(f"[LEVELS_LIVE] !! {why_not}")
+        if armed:
+            armed = False
+            print("[LEVELS_LIVE] !! refusing to ARM until .env matches the code")
+            notify.send(f"⛔ *Trader NOT armed*\n{why_not}\n\nRunning DRY: positions "
+                        f"stay protected and bids still expire; nothing new opens.",
+                        key="dead_config", cooldown_sec=3600)
     print(f"[LEVELS_LIVE] mode: {'ARMED -- PLACING REAL ORDERS' if armed else 'DRY RUN'}")
     # "margin", not "risk". RISK_PCT_PER_TRADE stopped deciding size when flat
     # sizing landed, and printing it here said 3% while the margin committed

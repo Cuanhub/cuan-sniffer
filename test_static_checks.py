@@ -116,14 +116,18 @@ class EnvExampleMatchesTheCode(unittest.TestCase):
                   "LEVELS_LIVE_ARMED"):
             self.assertIn(k, d, f"{k} is not in .env.example")
 
-    def test_testnet_defaults_to_false_in_the_example_but_true_in_code(self):
-        """The example is for a real account, so it says false explicitly --
-        while the CODE defaults to true, so a missing .env cannot put real
-        money on a live venue by omission."""
+    def test_the_network_is_stated_never_defaulted(self):
+        """The example is for a real account, so it says false explicitly.
+        The CODE used to default to true, so a missing .env could not put real
+        money on mainnet by omission -- but it could, and would silently, run
+        the live bot on testnet. It now has no default at all: Venue() refuses
+        unless HL_TESTNET is exactly true or false (test_venue_is_real)."""
         self.assertIn("HL_TESTNET=false", open(".env.example").read())
         from core import venue
         import inspect
-        self.assertIn('"HL_TESTNET", "true"', inspect.getsource(venue))
+        src = inspect.getsource(venue)
+        self.assertNotIn('"HL_TESTNET", "true"', src)
+        self.assertNotIn('"HL_TESTNET", "false"', src)
 
     def test_the_band_knobs_are_offered_since_they_are_the_strategy(self):
         d = self.declared()

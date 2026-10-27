@@ -25,7 +25,10 @@ grounding. Remove an item when it is registered (note the experiment id).
 4. **Re-entry cooldown on the bid path.** The 6h post-loss cooldown only
    applies to market entries; ~90% of entries are bids. Measure whether
    applying it to bids would have helped (band.run(cooldown_on_bids=True)
-   vs False, paired). Grounding: 2026-10-27 audit finding.
+   vs False, paired). Grounding: 2026-10-27 audit finding. A descriptive
+   look on that date found no detectable effect (907 -> 901 trades, -46.6R ->
+   -46.5R; the 46 blocked trades averaged +0.228R) -- so this is low value
+   unless new data or a different window suggests otherwise.
 
 5. **Band touch count as a veto.** Trades on bands reached into more than N
    times since forming. Grounding: the operator's bands sit at the 8th

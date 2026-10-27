@@ -11,6 +11,7 @@ this package can act on them.
 """
 
 import ast
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -20,43 +21,43 @@ FORBIDDEN_MODULES = {
     "live_position_monitor", "execution_backend_factory", "bootstrap", "agent",
     # core/ places orders. research/ is read-only by design and must never
     # reach it, the same reason the retired trading modules are listed here.
-    "core.venue", "core.execute", "core.safety", "core.protect",
+    "core", "notify", "tools", "hyperliquid.exchange", "eth_account",
 }
 
 PACKAGE_DIR = Path(__file__).resolve().parent / "research" / "levels"
 
 
 class TestResearchLevelsImportIsolation(unittest.TestCase):
+    """Both checks were rewritten after the 2026-10-27 audit, when a smuggled
+    `from core.venue import Venue` in research/levels/zones.py PASSED them:
+
+      - the static check compared only the FIRST dotted component ("core")
+        against names like "core.venue", so a dotted import never matched;
+      - the runtime check asked whether importing the scanner NEWLY loaded a
+        forbidden module -- inside a pytest run where earlier tests had
+        already imported core.venue, so it was never new.
+
+    A guard that cannot fail is not a guard. Names now match by prefix, and
+    the runtime check runs in a fresh interpreter with no history.
+    """
+
+    @staticmethod
+    def _forbidden(name: str) -> bool:
+        return any(name == f or name.startswith(f + ".") for f in FORBIDDEN_MODULES)
 
     def test_no_forbidden_module_in_runtime_import_graph(self):
-        # Purging research.* is the point -- the question is what a FRESH
-        # import of the scanner pulls in -- but the purge has to be undone.
-        #
-        # Left unrestored it orphans every module object other test files
-        # bound at collection time with `from research.levels import X`. A
-        # later import creates a NEW object, conftest's isolation fixture
-        # patches THAT one, and the stale reference the test file holds still
-        # points at the live data directory. That is how a band episode from
-        # test_zone_log.py reached research/levels/data/zone_episodes.csv:
-        # clean when that file ran alone, leaking in the full suite, with two
-        # module ids for one path.
-        saved = {m: sys.modules[m] for m in list(sys.modules)
-                 if m.startswith("research.")}
-        self.addCleanup(sys.modules.update, saved)
-        for mod in saved:
-            del sys.modules[mod]
-
-        before = set(sys.modules.keys())
-        import research.levels.scanner  # noqa: F401
-        after = set(sys.modules.keys())
-
-        newly_loaded = after - before
-        offending = FORBIDDEN_MODULES & newly_loaded
-        self.assertEqual(
-            offending, set(),
-            f"importing research.levels.scanner newly loaded forbidden "
-            f"write-capable module(s): {offending}",
-        )
+        code = ("import sys, pkgutil, importlib, research.levels as P\n"
+                "for m in pkgutil.iter_modules(P.__path__):\n"
+                "    importlib.import_module('research.levels.' + m.name)\n"
+                "print('\\n'.join(sorted(sys.modules)))\n")
+        out = subprocess.run([sys.executable, "-c", code], cwd=PACKAGE_DIR.parents[1],
+                             capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+        loaded = out.stdout.split()
+        self.assertIn("research.levels.scanner", loaded, "the check imported nothing")
+        offending = sorted(m for m in loaded if self._forbidden(m))
+        self.assertEqual(offending, [], f"research/levels loads write-capable module(s): "
+                                        f"{offending}")
 
     def test_no_forbidden_import_statement_in_source(self):
         py_files = list(PACKAGE_DIR.glob("*.py"))
@@ -66,16 +67,19 @@ class TestResearchLevelsImportIsolation(unittest.TestCase):
             tree = ast.parse(path.read_text(), filename=str(path))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
-                    names = {alias.name.split(".")[0] for alias in node.names}
+                    names = [alias.name for alias in node.names]
                 elif isinstance(node, ast.ImportFrom):
-                    names = {node.module.split(".")[0]} if node.module else set()
+                    names = [node.module] if node.module else []
                 else:
                     continue
-                offending = FORBIDDEN_MODULES & names
-                self.assertEqual(
-                    offending, set(),
-                    f"{path.name} imports forbidden module(s): {offending}",
-                )
+                offending = [n for n in names if self._forbidden(n)]
+                self.assertEqual(offending, [],
+                                 f"{path.name} imports forbidden module(s): {offending}")
+
+    def test_the_static_check_matches_a_dotted_import(self):
+        self.assertTrue(self._forbidden("core.venue"))
+        self.assertTrue(self._forbidden("core"))
+        self.assertFalse(self._forbidden("research.levels.zones"))
 
     def test_venue_client_holds_no_write_capability(self):
         from research.levels.venue_client import HyperliquidReadOnlyClient

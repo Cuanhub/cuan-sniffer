@@ -30,7 +30,16 @@ from hyperliquid.info import Info
 from hyperliquid.utils import constants
 from hyperliquid.utils.types import Cloid
 
-HL_TESTNET = os.getenv("HL_TESTNET", "true").lower() == "true"
+# The network must be STATED. It used to default to testnet, on the reasoning
+# that a missing .env should never put real money on mainnet by omission --
+# right about that, but it traded one silent failure for another: with the
+# variable missing (a renamed .env, a launchd environment change, a typo)
+# the live bot would trade TESTNET while every log and alert looked normal,
+# and while the research client kept deciding on MAINNET prices. Neither
+# network is a safe guess for a live bot, so there is no guess: Venue()
+# refuses to start unless this is exactly "true" or "false".
+HL_TESTNET_RAW = os.getenv("HL_TESTNET", "").strip().lower()
+HL_TESTNET = HL_TESTNET_RAW == "true"
 HL_ACCOUNT_ADDRESS = os.getenv("HL_ACCOUNT_ADDRESS", "").strip()
 HL_SECRET_KEY = os.getenv("HL_SECRET_KEY", "").strip()
 HL_VAULT_ADDRESS = os.getenv("HL_VAULT_ADDRESS", "").strip() or None
@@ -93,9 +102,13 @@ class Order:
         """
         return not self.reduce_only and not self.is_trigger
 
-    def age_hours(self, now_ms: Optional[int] = None) -> float:
+    def age_hours(self, now_ms: Optional[int] = None) -> Optional[float]:
+        """Hours since the venue accepted this order, or None if the venue
+        did not say. Never 0.0 for "unknown": that made an order with a
+        missing timestamp look brand new forever, so a resting bid would
+        never expire and could fill days later in a different market."""
         if self.timestamp_ms <= 0:
-            return 0.0
+            return None
         ref = now_ms if now_ms is not None else int(time.time() * 1000)
         return max(0.0, (ref - self.timestamp_ms) / 3_600_000.0)
 
@@ -145,6 +158,11 @@ class Venue:
             raise ValueError("[VENUE] HL_ACCOUNT_ADDRESS not set")
         if not HL_SECRET_KEY:
             raise ValueError("[VENUE] HL_SECRET_KEY not set")
+        if HL_TESTNET_RAW not in ("true", "false"):
+            raise ValueError(
+                f"[VENUE] HL_TESTNET must be set to exactly 'true' or 'false' "
+                f"(got {HL_TESTNET_RAW or 'nothing'!r}). Refusing to guess which "
+                f"network this account trades on.")
         self.debug = debug
         self.address = (HL_VAULT_ADDRESS or HL_ACCOUNT_ADDRESS).lower()
         base = constants.TESTNET_API_URL if HL_TESTNET else constants.MAINNET_API_URL
@@ -171,9 +189,14 @@ class Venue:
         try:
             for asset in (self.info.meta() or {}).get("universe", []):
                 name = str(asset.get("name", "")).upper()
-                if name:
-                    self._sz_decimals[name] = int(asset.get("szDecimals", 3))
-                    self._max_leverage[name] = int(asset.get("maxLeverage", 0) or 0)
+                # A row without szDecimals leaves the coin UNKNOWN, so
+                # precision_known() is false and the rounders refuse it. It
+                # used to record a default of 3 -- right for 6 of 234 perps --
+                # and then report that invented value as known.
+                if name and asset.get("szDecimals") is not None:
+                    self._sz_decimals[name] = int(asset["szDecimals"])
+                if name and asset.get("maxLeverage"):
+                    self._max_leverage[name] = int(asset["maxLeverage"])
         except Exception as e:
             print(f"[VENUE] meta load failed: {str(e)[:120]}")
         return bool(self._sz_decimals)

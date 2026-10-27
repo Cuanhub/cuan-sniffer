@@ -336,12 +336,17 @@ def expire_bids(venue: Venue) -> List[str]:
         if not o.is_entry:
             continue
         age = o.age_hours()
-        if age < BID_TTL_HOURS:
+        # Unknown age is treated as expired. Cancelling an entry bid costs an
+        # opportunity at most; leaving one of unknown age resting risks a fill
+        # in a market that no longer resembles the one that justified it.
+        if age is not None and age < BID_TTL_HOURS:
             continue
         resp = venue.cancel(o.coin, o.oid)
         ok = isinstance(resp, dict) and str(resp.get("status")) == "ok"
-        print(f"[PROTECT] bid {o.coin} @ {o.limit_px:g} expired after "
-              f"{age:.1f}h -- cancel {'ok' if ok else 'FAILED'}")
+        print(f"[PROTECT] bid {o.coin} @ {o.limit_px:g} "
+              + (f"expired after {age:.1f}h" if age is not None
+                 else "has no venue timestamp -- treated as expired")
+              + f" -- cancel {'ok' if ok else 'FAILED'}")
         if ok:
             pulled.append(o.coin)
         else:
