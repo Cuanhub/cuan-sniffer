@@ -171,3 +171,16 @@ class Decide(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ControlDraws(unittest.TestCase):
+    """PREREG Amendment 1: controls come from AFTER the signal."""
+
+    def test_every_draw_is_strictly_after_the_centre(self):
+        for centre in (900, 2500, 4800):
+            d = X._draw_bars(5000, centre, X._rng("ETH", centre, 3))
+            self.assertTrue((d > centre).all())
+            self.assertTrue((d <= min(5000 - 2, centre + X.CONTROL_SPAN)).all())
+
+    def test_no_room_after_the_centre_means_no_draws(self):
+        self.assertEqual(len(X._draw_bars(1000, 998, X._rng("ETH", 998, 3))), 0)

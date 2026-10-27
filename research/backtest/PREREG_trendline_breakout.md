@@ -183,3 +183,41 @@ averaged +0.013R +/- 0.011, win rate 33.8% against 33.3%.
 Reported as the share of variants with the primary's sign and the count with
 uncorrected p < 0.05 -- out of N variants, about 0.05 x N would reach that by
 chance alone.
+
+## Amendment 1 -- 2026-10-27, after the null calibration, before any real data
+
+**Change:** every random control (H1's matched control, H3's control) draws
+its entry bars from the 240 bars AFTER the trade's signal or entry bar,
+not from +/-240 bars around it.
+
+**Why, from the pre-registered null calibration:** on random walks the H3
+excess averaged -0.027R +/- 0.008 across 20 datasets, where a martingale
+says zero. Decomposed on 16 more null datasets (gross, no costs):
+
+| | mean R |
+|---|---|
+| every bar as an entry | +0.026 +/- 0.002 |
+| every breakout bar | +0.017 +/- 0.010 |
+| H3 trades, one at a time | +0.015 +/- 0.011 |
+| their +/-240 controls | **+0.047 +/- 0.002** |
+
+The control draws represent their windows faithfully (difference -0.003 +/-
+0.002), so the window was the problem: a breakout at t exists because price
+rose INTO t, and control entries placed before t ride that same rise. The
+control was being handed the move that defines the signal. (The +0.026 that
+every entry earns on a martingale is a separate, uniform effect: exits are
+booked exactly at the stop or target while a discrete path overshoots
+between samples; theory predicts +0.024 at these step sizes. It applies to
+both arms alike and cancels in every comparison here.)
+
+The same flaw would have biased H1's "matched control must agree" criterion
+against the filter. Draws after the signal cannot overlap what defines it:
+unbiased under the null, and conservative (attenuated) if an effect is real.
+The null calibration is re-run with this design and must pass again before
+real data is fetched.
+
+**Added calibration check:** the false-positive count alone let a -0.027R
+bias through (it fired 0/20 because the bias pointed away from "adds edge").
+So each framing's mean estimate across the 20 null datasets must also sit
+within 2.5 standard errors of zero; a framing that fails this is reported as
+miscalibrated, exactly as for too many false positives. Nothing else changes.

@@ -57,6 +57,7 @@ NULL_DATASETS = 20
 NULL_COINS = 12
 NULL_BARS = 5000
 NULL_MAX_FALSE = 2                 # of 20; more marks a framing miscalibrated
+NULL_MAX_BIAS_SE = 2.5             # Amendment 1: |null mean| must be within this many SE
 
 _BARS: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -161,8 +162,18 @@ def _rng(coin: str, i: int, salt: int) -> np.random.Generator:
 
 
 def _draw_bars(n: int, centre: int, rng) -> np.ndarray:
-    lo = max(WARMUP, centre - CONTROL_SPAN)
+    """Random control entry bars: the CONTROL_SPAN bars AFTER `centre`.
+
+    Not a window around it -- PREREG Amendment 1. A signal at bar t exists
+    because of the path INTO t (a breakout is a rise), so a control entered
+    before t partly rides the very move that defines the signal and wins
+    more for it. On random walks that inflated the H3 control by about
+    +0.021R. Entries after t cannot overlap what defines the signal.
+    """
+    lo = max(WARMUP, centre + 1)
     hi = min(n - 2, centre + CONTROL_SPAN)
+    if hi < lo:
+        return np.empty(0, dtype=np.int64)
     return rng.integers(lo, hi + 1, CONTROL_DRAWS)
 
 
@@ -575,9 +586,21 @@ def null_calibration(log=print) -> Dict[str, Any]:
         log(f"  [NULL {k+1:2}/{NULL_DATASETS}] " + "  ".join(
             f"{h} {fmt(row[h]['estimate'])} p={fmt(row[h]['p'], 3, False)}"
             f"{' FIRED' if row[h]['adds_edge'] else ''}" for h in row))
+    # Amendment 1: a bias pointing AWAY from "adds edge" never fires, so the
+    # false-positive count alone cannot see it. The null mean must be ~0 too.
+    centred = {}
+    for h in fired:
+        est = [r[h]["estimate"] for r in per if math.isfinite(r[h]["estimate"])]
+        m = float(np.mean(est)) if est else float("nan")
+        se = float(np.std(est, ddof=1) / math.sqrt(len(est))) if len(est) > 1 else float("nan")
+        centred[h] = {"mean": m, "se": se,
+                      "ok": bool(math.isfinite(m) and math.isfinite(se)
+                                 and abs(m) <= NULL_MAX_BIAS_SE * se)}
     return {"datasets": NULL_DATASETS, "coins": NULL_COINS, "bars": NULL_BARS,
             "holm_rejections": rejected, "decision_fired": fired,
-            "miscalibrated": {h: fired[h] > NULL_MAX_FALSE for h in fired},
+            "null_mean": centred,
+            "miscalibrated": {h: fired[h] > NULL_MAX_FALSE or not centred[h]["ok"]
+                              for h in fired},
             "max_false_allowed": NULL_MAX_FALSE, "per_dataset": per}
 
 
@@ -602,7 +625,10 @@ def render(s: Dict[str, Any]) -> str:
               f"Decision fired (false positives): " + ", ".join(
                   f"{h} {n['decision_fired'][h]}/{n['datasets']}" for h in ("H1", "H2", "H3"))
               + f". Holm rejections: " + ", ".join(
-                  f"{h} {n['holm_rejections'][h]}" for h in ("H1", "H2", "H3")) + ".", ""]
+                  f"{h} {n['holm_rejections'][h]}" for h in ("H1", "H2", "H3")) + ". "
+              + "Mean null estimate (must be ~0): " + ", ".join(
+                  f"{h} {n['null_mean'][h]['mean']:+.4f} +/- {n['null_mean'][h]['se']:.4f}"
+                  for h in ("H1", "H2", "H3")) + ".", ""]
     L += ["## Baseline (the live strategy, replayed)", "",
           f"{b['n']} resolved trades ({b['limit_entries']} bids, {b['market_entries']} market), "
           f"mean net R {fmt(b.get('mean'))} (gross {fmt(b['gross_mean_r'])}, costs "
@@ -675,6 +701,9 @@ def main() -> int:
         nc["runtime_sec"] = round(time.time() - t0, 1)
         (RESULTS / "null_calibration.json").write_text(json.dumps(nc, indent=1, default=str))
         print(f"[NULL] fired: {nc['decision_fired']}  miscalibrated: {nc['miscalibrated']}")
+        for h, c in nc["null_mean"].items():
+            print(f"[NULL] {h} mean estimate {c['mean']:+.4f} +/- {c['se']:.4f}  "
+                  f"{'ok' if c['ok'] else 'BIASED'}")
         return 0
     cal_path = RESULTS / "null_calibration.json"
     cal: Optional[Dict[str, Any]] = (json.loads(cal_path.read_text())
@@ -699,7 +728,7 @@ def main() -> int:
         "runtime_sec": round(time.time() - t0, 1)})
     if cal:
         s["null"] = {k: cal[k] for k in ("datasets", "coins", "bars", "holm_rejections",
-                                         "decision_fired", "miscalibrated")}
+                                         "decision_fired", "miscalibrated", "null_mean")}
     (RESULTS / "summary.json").write_text(json.dumps(s, indent=1, default=str))
     (RESULTS / "report.md").write_text(render(s))
     print(f"[DONE] {RESULTS}  ({s['runtime_sec']}s)")
