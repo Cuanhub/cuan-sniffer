@@ -53,3 +53,9 @@ NOT scaled, because they are not notional: `px`, `sz`, `origSz`,
 `startPosition`, every status, every `orderType`, and the field names and
 nesting. `sz: "0.0"` on a filled order and `sz == origSz` on a reject -- the
 two facts this whole rewrite turned on -- are untouched.
+
+## Market data (added 2026-10-27)
+
+| file | source |
+|---|---|
+| `candle_snapshot_1h_eth.json` | `candleSnapshot` ETH 1h, last 30 hours, recorded verbatim with the request and the fetch time in ms. Public market data, so nothing is scrubbed. The final candle was still forming at fetch time, which is what `test_backtest_data` uses it for. |

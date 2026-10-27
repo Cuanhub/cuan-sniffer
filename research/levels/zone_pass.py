@@ -79,6 +79,22 @@ def rejection(plan: Plan, min_rr: float) -> Optional[str]:
     return None
 
 
+def first_tradeable(plans: List[Plan], min_rr: float) -> Optional[Plan]:
+    """The plan the live pass takes for one coin: the first that passes.
+
+    `plans` arrives most recent band first (plans_for's order), so this is
+    the most recent band whose trade pays for its risk. Factored out of
+    plans_by_coin so research/backtest replays the SAME selection the live
+    pass makes rather than a reimplementation of it -- the previous scratch
+    backtest took plans[0] and skipped the coin when that one failed, which
+    is not what trades.
+    """
+    for p in plans:
+        if rejection(p, min_rr) is None:
+            return p
+    return None
+
+
 def review_flags(plan: Plan, size_usd: float, equity: float,
                  bars: Optional[List[Dict[str, Any]]] = None) -> List[str]:
     """Reasons a human should look at this trade even though it passed.
@@ -186,13 +202,12 @@ def plans_by_coin(client, universe, min_rr: float,
         # recent qualifying band is the selection rule -- it agrees with the
         # operator's own choice on 9 of 12, against 6 of 12 for the deepest
         # and 4 of 12 for the nearest.
-        taken = False
+        chosen = first_tradeable(plans, min_rr)
+        if chosen is not None:
+            intents.append(to_episode(chosen, bars))
         for p in plans:
             why = rejection(p, min_rr)
-            if why is None and not taken:
-                intents.append(to_episode(p, bars))
-                taken = True
-            elif why is not None:
+            if why is not None:
                 rejected.append((coin, p.zone.lo, why))
     return intents, rejected, found
 
