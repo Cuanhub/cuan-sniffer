@@ -590,6 +590,12 @@ def main():
             for coin in persist_filled_bids(venue, meta):
                 print(f"[LEVELS_LIVE] {coin}: resting bid filled -- episode "
                       f"persisted")
+            # Armed only. A dry run reads the same real fills, so its
+            # alerts would be truthful -- but it shares this state file, and
+            # advancing the watermark there would silence the armed process
+            # on the next real close.
+            if armed:
+                announce_closes(venue, state)
 
             # Bookkeeping runs BEFORE the preflight early-return, not after it.
             # preflight continues the loop whenever it refuses a pass, so with
@@ -1168,6 +1174,73 @@ def _announce_fill(venue, coin: str, pos, plan) -> None:
     except Exception as exc:                                   # noqa: BLE001
         # An alert that can break the pass is worse than a missing alert.
         print(f"[LEVELS_LIVE] fill alert for {coin} failed: {str(exc)[:120]}")
+
+
+def announce_closes(venue, state: Dict[str, Any]) -> int:
+    """Tell the operator when a trade ENDS, not only when it starts.
+
+    The other half of the silence the operator found. A stop or a target
+    fills at the venue; no code of ours runs. protect notices the position
+    is gone, prints "is gone at the venue -- metadata dropped" into a log
+    nobody reads, and sends nothing. So the run of seven consecutive
+    stop-outs that cost $20.31 happened entirely in the dark, and the only
+    way to learn a trade had ended was to notice the equity line move.
+
+    The result comes from `core.streak`, which groups the venue's own fills
+    into round trips: net of fees, computed fresh every time, never a number
+    this process incremented and believed. A trade whose opening fill is
+    outside the lookback window is skipped by that grouping -- its entry
+    fees are missing, so its result would be wrong -- and skipping it is
+    better than announcing a figure that is off by an unknown amount.
+
+    The watermark is the last close already announced. On a first run there
+    is none, and this announces NOTHING: it stamps the watermark at the
+    newest close it can see and starts from the next one. Otherwise the
+    first armed pass after a deploy would fire two weeks of history at the
+    operator's phone, and an alert channel that does that once gets muted.
+    """
+    since = int(time.time() * 1000) - int(streak.LOOKBACK_HOURS * 3_600_000)
+    fills = venue.fills(since)
+    if fills is None:
+        return 0                       # unreadable: say nothing, keep the mark
+    trades = streak.trades_from_fills(fills)
+    if not trades:
+        return 0
+    mark = int(state.get("announced_close_ms") or 0)
+    if not mark:
+        state["announced_close_ms"] = max(t.closed_ms for t in trades)
+        save_state(state)
+        print(f"[LEVELS_LIVE] close alerts start from now "
+              f"({len(trades)} earlier trade(s) left unannounced)")
+        return 0
+
+    fresh = [t for t in trades if t.closed_ms > mark]
+    for t in fresh:
+        _announce_close(t)
+    if fresh:
+        state["announced_close_ms"] = max(t.closed_ms for t in fresh)
+        save_state(state)
+    return len(fresh)
+
+
+def _announce_close(t: "streak.Trade") -> None:
+    """One finished round trip, as the venue accounts for it.
+
+    Deliberately does NOT claim which order closed it. A loss is almost
+    always the stop and a win almost always the target, but a hand `/close`
+    reads as either, and a message that names the wrong cause is worse than
+    one that names none.
+    """
+    try:
+        held_h = max(0.0, (t.closed_ms - t.opened_ms) / 3_600_000)
+        head = "🎯" if not t.lost else "🔴"
+        word = "won" if not t.lost else ("lost" if t.pnl < 0 else "scratched")
+        notify.send(
+            f"{head} *{t.coin} closed* -- {word} *${t.pnl:+,.2f}* net of fees\n"
+            f"held {held_h:.1f}h, {t.fills} fill(s)",
+            key=f"closed_{t.coin}_{t.closed_ms}", cooldown_sec=0)
+    except Exception as exc:                                   # noqa: BLE001
+        print(f"[LEVELS_LIVE] close alert for {t.coin} failed: {str(exc)[:120]}")
 
 
 def rest_one_bid(venue, meta, client, universe, coin: str, level: str,

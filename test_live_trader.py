@@ -29,6 +29,7 @@ import tools.live_levels_trader as T
 import inspect
 import json
 import tempfile
+import time
 
 from core import execute, safety
 from core.meta import MetaStore
@@ -1030,3 +1031,124 @@ class AFilledBidAnnouncesItself(unittest.TestCase):
         with mock.patch.object(T.notify, "send",
                                side_effect=RuntimeError("telegram down")):
             T.persist_filled_bids(v, self.store)      # must not raise
+
+
+class AClosedTradeAnnouncesItself(unittest.TestCase):
+    """The other half of the silence: a stop fires at the venue and no code
+    of ours runs, so seven consecutive stop-outs cost $20.31 in the dark."""
+
+    def setUp(self):
+        self.state = {}
+        # The fake filters fills by `time >= start`, and the venue asks for
+        # the last STREAK_LOOKBACK_HOURS, so fixture times have to be real
+        # recent ones. An earlier version of this used 1_000_000 and every
+        # fill was filtered out before the code under test ever saw it.
+        self.now = int(time.time() * 1000)
+
+    def ago(self, hours):
+        return self.now - int(hours * 3_600_000)
+
+    @staticmethod
+    def fill(coin, t, start, side, sz, pnl=0.0, fee=0.0, tid=1):
+        return {"coin": coin, "time": t, "startPosition": str(start),
+                "side": side, "sz": str(sz), "closedPnl": str(pnl),
+                "fee": str(fee), "tid": tid}
+
+    def venue_with(self, fills):
+        fake = FakeHL()
+        fake.fills_override = fills
+        return fake, build_venue(fake)
+
+    def round_trip(self, coin="XRP", open_h=5.0, close_h=4.0, pnl=-2.80):
+        """One round trip that opened `open_h` hours ago and closed
+        `close_h` hours ago."""
+        return [self.fill(coin, self.ago(open_h), 0, "B", 135, 0.0, 0.06, 1),
+                self.fill(coin, self.ago(close_h), 135, "A", 135, pnl, 0.06, 2)]
+
+    def test_the_first_pass_announces_nothing_and_stamps_the_mark(self):
+        """A deploy must not fire two weeks of history at the operator."""
+        fake, v = self.venue_with(self.round_trip())
+        with mock.patch.object(T, "save_state"), \
+             mock.patch.object(T.notify, "send") as send:
+            n = T.announce_closes(v, self.state)
+        self.assertEqual(n, 0)
+        self.assertFalse(send.called, "a first run announced history")
+        self.assertEqual(self.state["announced_close_ms"], self.ago(4.0))
+
+    def test_a_close_after_the_mark_is_announced_once(self):
+        self.state["announced_close_ms"] = self.ago(6.0)
+        fake, v = self.venue_with(self.round_trip())
+        with mock.patch.object(T, "save_state"), \
+             mock.patch.object(T.notify, "send") as send:
+            self.assertEqual(T.announce_closes(v, self.state), 1)
+            body = " ".join(str(a) for a in send.call_args[0])
+            # The second pass sees the same fills and must stay quiet.
+            self.assertEqual(T.announce_closes(v, self.state), 0)
+        self.assertIn("XRP", body)
+        self.assertIn("-2.92", body)      # pnl net of BOTH fees
+        self.assertIn("1.0h", body)
+
+    def test_a_win_and_a_loss_do_not_read_the_same(self):
+        for pnl, want in ((-2.80, "🔴"), (+5.40, "🎯")):
+            self.state["announced_close_ms"] = self.ago(6.0)
+            fake, v = self.venue_with(self.round_trip(pnl=pnl))
+            with mock.patch.object(T, "save_state"), \
+                 mock.patch.object(T.notify, "send") as send:
+                T.announce_closes(v, self.state)
+            body = " ".join(str(a) for a in send.call_args[0])
+            self.assertIn(want, body, f"pnl {pnl} rendered as: {body}")
+
+    def test_an_unreadable_venue_does_not_move_the_mark(self):
+        """A 429 must not skip the next close's alert."""
+        self.state["announced_close_ms"] = self.ago(6.0)
+        fake, v = self.venue_with(self.round_trip())
+        fake.fail_info_always = True
+        with mock.patch.object(T, "save_state"), \
+             mock.patch.object(T.notify, "send") as send:
+            self.assertEqual(T.announce_closes(v, self.state), 0)
+        self.assertFalse(send.called)
+        self.assertEqual(self.state["announced_close_ms"], self.ago(6.0))
+        fake.fail_info_always = False
+        with mock.patch.object(T, "save_state"), \
+             mock.patch.object(T.notify, "send") as send:
+            self.assertEqual(T.announce_closes(v, self.state), 1,
+                             "the close missed during the outage never fired")
+
+    def test_a_still_open_position_is_not_announced(self):
+        self.state["announced_close_ms"] = self.ago(99.0)
+        fake, v = self.venue_with([self.fill("XRP", self.ago(5.0), 0, "B", 135)])
+        with mock.patch.object(T, "save_state"), \
+             mock.patch.object(T.notify, "send") as send:
+            self.assertEqual(T.announce_closes(v, self.state), 0)
+        self.assertFalse(send.called, "an open position was called closed")
+
+    def test_every_one_of_several_closes_is_announced(self):
+        self.state["announced_close_ms"] = self.ago(99.0)
+        fills = (self.round_trip("XRP", 9.0, 8.0, -2.80)
+                 + self.round_trip("SOL", 7.0, 6.0, +4.10)
+                 + self.round_trip("WLD", 5.0, 4.0, -1.20))
+        fake, v = self.venue_with(fills)
+        with mock.patch.object(T, "save_state"), \
+             mock.patch.object(T.notify, "send") as send:
+            self.assertEqual(T.announce_closes(v, self.state), 3)
+        named = " ".join(str(c) for c in send.call_args_list)
+        for coin in ("XRP", "SOL", "WLD"):
+            self.assertIn(coin, named)
+        self.assertEqual(self.state["announced_close_ms"], self.ago(4.0))
+
+    def test_an_alert_failure_never_breaks_the_pass(self):
+        self.state["announced_close_ms"] = self.ago(6.0)
+        fake, v = self.venue_with(self.round_trip())
+        with mock.patch.object(T, "save_state"), \
+             mock.patch.object(T.notify, "send",
+                               side_effect=RuntimeError("telegram down")):
+            T.announce_closes(v, self.state)      # must not raise
+
+
+class CloseAlertsAreArmedOnly(unittest.TestCase):
+    def test_a_dry_run_does_not_consume_the_watermark(self):
+        """Both processes share one state file. A dry run that advanced the
+        mark would make the armed process miss the next real close."""
+        src = inspect.getsource(T.main)
+        call = src[:src.index("announce_closes(venue, state)")]
+        self.assertRegex(call.rsplit("\n", 2)[-2].strip(), r"^if armed:$")
