@@ -125,6 +125,12 @@ class RefusesUnsafeContents(unittest.TestCase):
         (self.out / "lab" / "notes.md").write_text(f"wallet {addr.upper()}\n")
         self.assertTrue(any("account address" in p for p in B.check(self.out)))
 
+    def test_a_cache_directory_is_refused(self):
+        d = self.out / "lab" / ".mypy_cache" / "3.13"
+        d.mkdir(parents=True)
+        (d / "cache.db").write_bytes(b"x")
+        self.assertTrue(any("build artifact" in p for p in B.check(self.out)))
+
     def test_live_data_is_refused(self):
         d = self.out / "lab" / "research" / "levels" / "data"
         d.mkdir(parents=True)

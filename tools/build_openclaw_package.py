@@ -70,6 +70,11 @@ FORBIDDEN_PATHS = ("core/", "tools/live_levels_trader.py", "tools/telegram_contr
 FORBIDDEN_IMPORTS = ("core", "notify", "tools.live_levels_trader", "tools.telegram_control",
                      "tools.protect_loop", "hyperliquid.exchange", "eth_account")
 PRIVATE_KEY = re.compile(r"0x[0-9a-fA-F]{64}\b")
+# Caches and environments a development run leaves in the source tree. Not
+# source, not reviewable, and a cache can hold strings from whatever it
+# analysed -- never shipped.
+BUILD_ARTIFACTS = ("__pycache__", ".pytest_cache", ".mypy_cache", ".venv", ".git",
+                   ".ruff_cache")
 
 
 def _sha(p: Path) -> str:
@@ -95,6 +100,9 @@ def check(out: Path) -> list:
             continue
         rel = str(p.relative_to(out))
         lab_rel = rel[4:] if rel.startswith("lab/") else rel
+        if any(part in BUILD_ARTIFACTS for part in p.relative_to(out).parts):
+            problems.append(f"build artifact shipped: {rel}")
+            continue
         if p.name == ".env" or p.name.startswith(".env."):
             problems.append(f"secrets file shipped: {rel}")
         placeholder = p.name == ".gitkeep" and p.stat().st_size == 0
@@ -120,8 +128,8 @@ def check(out: Path) -> list:
 def build(out: Path = DIST / "cuan-lab", tarball: bool = True, log=print) -> Path:
     if out.exists():
         shutil.rmtree(out)
-    shutil.copytree(SRC, out, ignore=shutil.ignore_patterns("__pycache__", "*.pyc",
-                                                            ".pytest_cache", "data", "results"))
+    shutil.copytree(SRC, out, ignore=shutil.ignore_patterns(*BUILD_ARTIFACTS, "*.pyc",
+                                                            "data", "results"))
     shutil.copy2(REPO / "openclaw" / "README.md", out / "README.md")
     lab = out / "lab"
     n = 0
@@ -149,9 +157,12 @@ def build(out: Path = DIST / "cuan-lab", tarball: bool = True, log=print) -> Pat
 
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True,
                             text=True).stdout.strip()
+    # research/levels/data is the live bot's runtime state, rewritten every
+    # pass; it is not source and is never shipped, so it cannot make the
+    # build "dirty".
     dirty = bool(subprocess.run(["git", "status", "--porcelain", "--", "research", "tools",
-                                 "openclaw"], cwd=REPO, capture_output=True,
-                                text=True).stdout.strip())
+                                 "openclaw", ":!research/levels/data"], cwd=REPO,
+                                capture_output=True, text=True).stdout.strip())
     files = {str(p.relative_to(out)): _sha(p) for p in sorted(out.rglob("*")) if p.is_file()}
     manifest = {"built_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "source_commit": commit, "source_dirty": dirty, "files": files}
