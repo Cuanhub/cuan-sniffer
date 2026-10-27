@@ -1106,9 +1106,68 @@ def persist_filled_bids(venue, meta: "MetaStore") -> List[str]:
             ep = None
         if isinstance(ep, dict) and persist_traded_episode(ep):
             done.append(coin)
+        # ALERT HERE. A resting bid filling is a position opening, and it was
+        # silent: the "OPENED" notification lives in execute_one, which is the
+        # IMMEDIATE-entry path, and the band strategy almost never takes that
+        # one -- on a live 45-coin pass 19 of 21 plans were bids waiting. So
+        # every position this system has actually opened arrived without a
+        # message. XRP 135 @ 1.2967 was found open by hand.
+        #
+        # Once-only for the same reason the persist is: pending_episode is
+        # cleared below, and this is the only place that clears it.
+        _announce_fill(venue, coin, held.get(coin), row)
         row.pending_episode = ""
         meta.put(coin, row)
     return done
+
+
+def _announce_fill(venue, coin: str, pos, plan) -> None:
+    """Tell the operator a bid became a position, with what it risks.
+
+    Everything needed to check it against a chart goes in the message,
+    because the alternative is opening a laptop to find out what was bought.
+    Reads the STOP AND TARGET FROM THE VENUE rather than from the plan: the
+    plan says what was intended, and the only thing worth alerting on is what
+    is actually resting.
+    """
+    if pos is None:
+        return
+    try:
+        orders = venue.open_orders(coin) if venue is not None else None
+        # None means the book could not be read. An unread book is not an
+        # empty one: calling a protected position unprotected because of a
+        # 429 is the mistake that cost NEAR $5.44 in protect.py, and an
+        # alert that cries wolf gets ignored exactly when it matters.
+        readable = orders is not None
+        stops = [o for o in (orders or []) if o.is_protective and o.is_stop]
+        tps = [o for o in (orders or []) if o.is_protective and not o.is_stop]
+        stop_px = stops[0].trigger_px if stops else (plan.planned_stop or 0.0)
+        tp_px = tps[0].trigger_px if tps else (plan.planned_tp or 0.0)
+        entry, size = pos.entry_px, pos.size
+        risk = abs(entry - stop_px) * size if stop_px else 0.0
+        reward = abs(tp_px - entry) * size if tp_px else 0.0
+        lines = [f"🟢 *FILLED {coin}* {size:g} @ `{entry:.6g}`",
+                 f"notional ${entry * size:,.2f}   "
+                 f"now `{pos.mark_px:.6g}` ({pos.unrealized_pnl:+,.2f})"]
+        if stop_px:
+            lines.append(f"stop `{stop_px:.6g}`  "
+                         f"({(entry - stop_px) / entry * 100:.2f}% away, "
+                         f"risk ${risk:.2f})"
+                         + ("" if stops or not readable
+                            else "  ⚠️ PLANNED ONLY, not resting"))
+        else:
+            lines.append("🚨 *NO STOP* -- the protection loop should place one")
+        if tp_px:
+            lines.append(f"tp   `{tp_px:.6g}`  "
+                         f"({(tp_px - entry) / entry * 100:.2f}% away, "
+                         f"target ${reward:.2f})"
+                         + ("" if tps or not readable else "  ⚠️ planned only"))
+        if risk:
+            lines.append(f"rr {reward / risk:.2f}")
+        notify.send("\n".join(lines), key=f"filled_{coin}", cooldown_sec=60)
+    except Exception as exc:                                   # noqa: BLE001
+        # An alert that can break the pass is worse than a missing alert.
+        print(f"[LEVELS_LIVE] fill alert for {coin} failed: {str(exc)[:120]}")
 
 
 def rest_one_bid(venue, meta, client, universe, coin: str, level: str,

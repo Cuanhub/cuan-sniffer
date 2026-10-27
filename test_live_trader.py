@@ -924,3 +924,109 @@ class UniverseLoadRetries(unittest.TestCase):
         self.assertIn("universe = start_universe(ro)", src)
         self.assertIn("if universe is None:", src)
         self.assertIn("return 1", src)
+
+
+class AFilledBidAnnouncesItself(unittest.TestCase):
+    """The bug the operator reported: no alert when a position is placed.
+
+    The "OPENED" notification lives in execute_one, which is the IMMEDIATE
+    entry path -- price already inside the band. The band strategy almost
+    never takes that one: on a live 45-coin pass 19 of 21 plans were bids
+    waiting. So every position this system actually opened arrived in
+    silence, and XRP 135 @ 1.2967 was found open by hand.
+    """
+
+    def setUp(self):
+        self.store = MetaStore(Path(tempfile.mkdtemp()) / "m.json")
+        from core.meta import TradeMeta
+        self.store.put("XRP", TradeMeta(
+            reason="resting bid at 1.2967", planned_stop=1.2678,
+            planned_tp=1.3573, opened_at="2026-10-27T00:00:00Z",
+            pending_episode=json.dumps({"coin": "XRP", "episode_id": "z:1"})))
+
+    def venue(self, protected: bool = True):
+        """XRP as it was actually found: filled at 1.2967, mark 1.3206."""
+        fake = FakeHL(positions={"XRP": 135.0}, mid=1.3206,
+                      unrealized={"XRP": 3.23}, entries={"XRP": 1.2967})
+        if protected:
+            fake.rest_protection("XRP", 135.0, 1.2678, 1.3573)
+        return fake, build_venue(fake)
+
+    def test_a_fill_sends_an_alert(self):
+        fake, v = self.venue()
+        with mock.patch.object(T.notify, "send") as send:
+            T.persist_filled_bids(v, self.store)
+        self.assertTrue(send.called, "a filled bid sent no alert")
+        body = " ".join(str(a) for a in send.call_args[0])
+        self.assertIn("XRP", body)
+        self.assertIn("135", body)
+
+    def test_the_alert_carries_what_a_chart_check_needs(self):
+        fake, v = self.venue()
+        with mock.patch.object(T.notify, "send") as send:
+            T.persist_filled_bids(v, self.store)
+        body = " ".join(str(a) for a in send.call_args[0])
+        for want in ("1.2967", "1.2678", "1.3573", "risk", "rr"):
+            self.assertIn(want, body, f"{want} missing from: {body}")
+
+    def test_the_numbers_are_the_entry_s_not_the_mark_s(self):
+        """Risk is measured from where the fill happened. Measuring it from
+        the mark understates a position already in profit and overstates one
+        already underwater -- the two cases where it matters most."""
+        fake, v = self.venue()
+        with mock.patch.object(T.notify, "send") as send:
+            T.persist_filled_bids(v, self.store)
+        body = " ".join(str(a) for a in send.call_args[0])
+        risk = abs(1.2967 - 1.2678) * 135
+        self.assertIn(f"risk ${risk:.2f}", body)
+        self.assertIn(f"{(1.2967 - 1.2678) / 1.2967 * 100:.2f}% away", body)
+
+    def test_the_alert_reads_the_venue_not_the_plan(self):
+        """What is resting is the only thing worth alerting on. A stop moved
+        or re-placed at a different price must show the resting price."""
+        fake, v = self.venue(protected=False)
+        fake.rest_protection("XRP", 135.0, 1.2500, 1.4000)
+        with mock.patch.object(T.notify, "send") as send:
+            T.persist_filled_bids(v, self.store)
+        body = " ".join(str(a) for a in send.call_args[0])
+        self.assertIn("1.25", body)
+        self.assertIn("1.4", body)
+        self.assertNotIn("1.2678", body)
+
+    def test_a_position_with_no_resting_stop_says_so_loudly(self):
+        """The plan having a stop is not the same as one being at the venue,
+        and that difference is the whole point of this alert."""
+        fake, v = self.venue(protected=False)
+        with mock.patch.object(T.notify, "send") as send:
+            T.persist_filled_bids(v, self.store)
+        body = " ".join(str(a) for a in send.call_args[0])
+        self.assertIn("PLANNED ONLY", body)
+
+    def test_an_unreadable_book_does_not_claim_the_stop_is_missing(self):
+        """A 429 on the order book is not evidence of an unprotected
+        position. This is the mistake that cost NEAR $5.44 in protect.py."""
+        fake, v = self.venue(protected=False)
+        with mock.patch.object(type(v), "open_orders", return_value=None), \
+             mock.patch.object(T.notify, "send") as send:
+            T.persist_filled_bids(v, self.store)
+        self.assertTrue(send.called, "the fill itself still deserves an alert")
+        body = " ".join(str(a) for a in send.call_args[0])
+        self.assertNotIn("PLANNED ONLY", body)
+        self.assertIn("1.2678", body)      # falls back to the plan's stop
+
+    def test_it_fires_once_not_every_pass(self):
+        """pending_episode is cleared, and this is the only place that
+        clears it -- so the second pass must be silent."""
+        fake, v = self.venue()
+        with mock.patch.object(T.notify, "send") as send:
+            T.persist_filled_bids(v, self.store)
+            first = send.call_count
+            T.persist_filled_bids(v, self.store)
+            self.assertEqual(send.call_count, first,
+                             "the alert repeated on the next pass")
+
+    def test_an_alert_failure_never_breaks_the_pass(self):
+        fake, v = self.venue()
+        with mock.patch.object(T.notify, "send",
+                               side_effect=RuntimeError("telegram down")):
+            T.persist_filled_bids(v, self.store)      # must not raise

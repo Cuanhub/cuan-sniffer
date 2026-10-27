@@ -1052,3 +1052,64 @@ class CloseOneClosesOne(unittest.TestCase):
         """The scoped fix must not weaken the kill switch."""
         out = self.ctl().close_all()
         self.assertEqual(self.fake.pos, {}, out)
+
+
+class StatusSaysWhatIsHeld(unittest.TestCase):
+    """/status reported a COUNT -- "positions 1/4" -- which answers "how
+    many" and not the question anyone actually has.
+    """
+
+    def venue(self):
+        fake = FakeHL(positions={"XRP": 135.0}, mid=1.3206,
+                      unrealized={"XRP": 3.23})
+        v = build_venue(fake)
+        fake.rest_trigger("XRP", 135.0, 1.2678, is_stop=True, is_buy=False) \
+            if hasattr(fake, "rest_trigger") else None
+        return fake, v
+
+    def test_each_position_is_named_with_its_pnl(self):
+        fake, v = self.venue()
+        out = C.render_status({}, 700.0, v)
+        self.assertIn("XRP", out)
+        self.assertIn("135", out)
+        self.assertIn("+3.23", out)
+
+    def test_an_unprotected_position_is_called_out_in_status(self):
+        """The one thing worth seeing without having to ask a second
+        command."""
+        fake, v = self.venue()
+        fake.resting = []                      # no stop at the venue
+        out = C.render_status({}, 700.0, v)
+        self.assertIn("NO STOP", out)
+
+    def test_resting_bids_are_named_with_their_age(self):
+        fake, v = self.venue()
+        fake.rest_plain_order("HYPE", 2.36, 74.722, is_buy=True)
+        out = C.render_status({}, 700.0, v)
+        self.assertIn("HYPE", out)
+        self.assertIn("74.722", out)
+
+    def test_it_still_reports_an_unreadable_venue_rather_than_flat(self):
+        fake = FakeHL(positions={"XRP": 1.0})
+        fake.fail_info_always = True
+        out = C.render_status({}, 700.0, build_venue(fake))
+        self.assertIn("unreadable", out)
+
+
+class PositionsReadsTheVenueNotThePlan(unittest.TestCase):
+    """/positions took the target from the PLAN. The plan says what was
+    intended; only a resting order will actually sell."""
+
+    def test_a_planned_target_that_is_not_resting_is_flagged(self):
+        from core.meta import MetaStore, TradeMeta
+        import tempfile
+        from pathlib import Path
+        fake = FakeHL(positions={"XRP": 135.0}, mid=1.3206)
+        v = build_venue(fake)
+        store = MetaStore(Path(tempfile.mkdtemp()) / "m.json")
+        store.put("XRP", TradeMeta(reason="x", planned_stop=1.2678,
+                                   planned_tp=1.3573, opened_at=""))
+        with mock.patch("core.meta.MetaStore", return_value=store):
+            out = C.render_positions({}, v)
+        self.assertIn("not resting", out,
+                      "a target that exists only in the plan was shown as a tp")

@@ -89,10 +89,19 @@ class Inertness(unittest.TestCase):
         for allowed_fn in (T.persist_traded_episode, T.entry_is_actionable,
                            T.main):
             whole = whole.replace(inspect.getsource(allowed_fn), "")
+        # Checks the QUOTED name, not the bare word. Context reaches this
+        # module as a dict and only as a dict, so every read of a context
+        # field has to spell its key in quotes; an attribute of the same
+        # name is a different thing entirely. `pos.mark_px` is the mark
+        # carried on a held position by clearinghouseState -- a different
+        # endpoint, a different object, no context involved -- and the bare
+        # word flagged it. That is the same false positive the sibling test
+        # below was written about.
         for f in CTX_FIELDS:
-            self.assertNotIn(f, whole,
-                             f"{f} is referenced outside the three functions "
-                             f"allowed to see context")
+            for key in (f'"{f}"', f"'{f}'"):
+                self.assertNotIn(key, whole,
+                                 f"{f} is read as a context key outside the "
+                                 f"three functions allowed to see context")
 
     def test_the_inert_fields_decide_nothing(self):
         """Checks field ACCESS, not the bare word: an earlier version of this

@@ -172,6 +172,23 @@ def render_status(state: Dict[str, Any], equity: Optional[float],
                      + (f", {len(bids)} resting bid(s)" if bids else "")
                      + f"  |  opened today {state.get('opened_today', 0)}"
                      f"/{MAX_NEW_PER_DAY}")
+        # The COUNT alone was all this said, which answers "how many" and not
+        # the question anyone actually has. One line per position, with its
+        # P&L and whether it is protected, because an unprotected position is
+        # the thing worth seeing without having to ask a second command.
+        for coin, pos in sorted(held.items()):
+            prot = [o for o in (orders or [])
+                    if o.coin == coin and o.is_protective]
+            stop = next((o for o in prot if o.is_stop), None)
+            tp = next((o for o in prot if not o.is_stop), None)
+            lines.append(
+                f"  *{coin}* {pos.size:g} @ `{pos.entry_px:.6g}` → "
+                f"`{pos.mark_px:.6g}`  *{pos.unrealized_pnl:+,.2f}*"
+                + (f"  sl `{stop.trigger_px:.6g}`" if stop else "  🚨 NO STOP")
+                + (f"  tp `{tp.trigger_px:.6g}`" if tp else ""))
+        for o in sorted(bids, key=lambda o: o.coin):
+            lines.append(f"  _{o.coin}_ bid {o.size:g} @ `{o.limit_px:.6g}`"
+                         f"  ({o.age_hours():.1f}h old)")
 
     if backend is not None:
         sd = streak.current(backend,
@@ -213,8 +230,19 @@ def render_positions(state: Dict[str, Any], backend) -> str:
                           f" ⚠️ covers only {stops[0].size:g}"))
         else:
             row.append("🚨 *NO STOP*")
-        if plan and plan.planned_tp:
-            row.append(f"tp `{plan.planned_tp:.6g}`")
+        # The TARGET from the VENUE, not from the plan. The plan says what
+        # was intended; only a resting order will actually sell. Reading the
+        # plan here could show a tp that is not there -- the same "trust the
+        # belief, not the venue" mistake this whole rebuild removed.
+        tps = [o for o in orders
+               if o.coin == coin and o.is_protective and not o.is_stop]
+        if tps:
+            row.append(f"tp `{tps[0].trigger_px:.6g}`")
+            if plan and plan.planned_tp and tps[0].trigger_px and abs(
+                    tps[0].trigger_px - plan.planned_tp) > plan.planned_tp * 0.002:
+                row.append(f"⚠️ plan said {plan.planned_tp:.6g}")
+        elif plan and plan.planned_tp:
+            row.append(f"tp `{plan.planned_tp:.6g}` ⚠️ *not resting*")
         out.append("  ".join(row))
     bids = [o for o in orders if o.is_entry]
     if bids:

@@ -69,9 +69,15 @@ class FakeHL:
 
     def __init__(self, positions: Optional[Dict[str, float]] = None,
                  mid: float = 100.0, usdc: float = 1000.0,
-                 unrealized: Dict[str, float] | None = None) -> None:
+                 unrealized: Dict[str, float] | None = None,
+                 entries: Dict[str, float] | None = None) -> None:
         self.pos: Dict[str, float] = dict(positions or {})
         self.unrealized: Dict[str, float] = dict(unrealized or {})
+        # Entry prices, where a scenario needs one that differs from the
+        # mark. A real held position almost never entered at the current
+        # mark, and anything that reports distance-from-entry reads as
+        # correct against a fake that pretends it did.
+        self.entries: Dict[str, float] = dict(entries or {})
         self.mid_px = mid
         self.usdc = usdc
         self.resting: List[Dict[str, Any]] = []
@@ -131,7 +137,7 @@ class FakeHL:
             p["coin"] = coin
             p["szi"] = str(szi)
             p["positionValue"] = str(abs(szi) * self.mid_px)
-            p["entryPx"] = str(self.mid_px)
+            p["entryPx"] = str(self.entries.get(coin, self.mid_px))
             p["unrealizedPnl"] = str(self.unrealized.get(coin, 0.0))
             state["assetPositions"].append(item)
         return state
