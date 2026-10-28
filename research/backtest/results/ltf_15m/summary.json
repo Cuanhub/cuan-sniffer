@@ -1,0 +1,392 @@
+{
+ "framings": {
+  "B1_band_stop": {
+   "n": 163,
+   "estimate": -0.06701421580335598,
+   "se": 0.10562706021502553,
+   "ci_lo": -0.2891701505360724,
+   "ci_hi": 0.11962829701967034,
+   "p": 0.5257925771893615,
+   "clusters": 8,
+   "halves": [
+    -0.05841526536206893,
+    -0.07550830099535902
+   ],
+   "p_iid": 0.4695886318362522
+  },
+  "B2_ltf_stop": {
+   "n": 163,
+   "estimate": -0.006044083506826193,
+   "se": 0.10319035108721794,
+   "ci_lo": -0.20164202149487834,
+   "ci_hi": 0.20419802362891087,
+   "p": 0.9532928721748329,
+   "clusters": 8,
+   "halves": [
+    -0.0851899364858925,
+    0.0721365761432271
+   ],
+   "p_iid": 0.9563967320872094
+  }
+ },
+ "holm": {
+  "B1_band_stop": {
+   "p": 0.5257925771893615,
+   "p_holm": 1.0,
+   "reject": false
+  },
+  "B2_ltf_stop": {
+   "p": 0.9532928721748329,
+   "p_holm": 1.0,
+   "reject": false
+  }
+ },
+ "decision": {
+  "B1_band_stop": {
+   "criteria": {
+    "holm_rejected": false,
+    "positive": false,
+    "both_halves_positive": false,
+    "null_calibration_ok": true
+   },
+   "adds_edge": false,
+   "material": false
+  },
+  "B2_ltf_stop": {
+   "criteria": {
+    "holm_rejected": false,
+    "positive": false,
+    "both_halves_positive": false,
+    "null_calibration_ok": true
+   },
+   "adds_edge": false,
+   "material": false
+  }
+ },
+ "secondary": {
+  "B1_band_stop": {
+   "status": {
+    "entered": 163,
+    "stopped_first": 75,
+    "invalid_at_entry": 1
+   },
+   "vs_baseline": {
+    "n": 239,
+    "mean": -0.002419857566559301,
+    "sd": 0.9408601470496515,
+    "se": 0.06085918365859978,
+    "t": -0.039761584383614386,
+    "p": 0.9683165366436249,
+    "total": -0.5783459584076729,
+    "win": 0.5732217573221757
+   },
+   "unpaired_vs_random_arm": {
+    "estimate": 0.1208771566302557,
+    "se": 0.055518877370180214,
+    "ci_lo": 0.0014026171937575882,
+    "ci_hi": 0.20865694415246666,
+    "z": 2.1772262400820828,
+    "p": 0.02946369140431489,
+    "clusters": 8,
+    "draws": 10000,
+    "skipped": 0
+   },
+   "per_setup_vs_random": {
+    "estimate": -0.026071593630695142,
+    "se": 0.04032309044192798,
+    "ci_lo": -0.10746708946125577,
+    "ci_hi": 0.049256316587471996,
+    "z": -0.6465673475162479,
+    "p": 0.5179119964867613,
+    "clusters": 8,
+    "draws": 10000,
+    "skipped": 0
+   },
+   "entry_rate": 0.6820083682008368,
+   "ctrl_entry_rate": 0.731673640167364,
+   "confirmed_trades": {
+    "n": 163,
+    "mean": -0.04738166623082389,
+    "sd": 1.227906420851259,
+    "se": 0.09617705357390592,
+    "t": -0.4926504240890901,
+    "p": 0.6229266573822789,
+    "total": -7.723211595624294,
+    "win": 0.44171779141104295
+   },
+   "median_rr_at_entry": 1.3976784347106317
+  },
+  "B2_ltf_stop": {
+   "status": {
+    "entered": 163,
+    "stopped_first": 75,
+    "invalid_at_entry": 1
+   },
+   "vs_baseline": {
+    "n": 239,
+    "mean": -0.00906391660810379,
+    "sd": 1.1466244664721081,
+    "se": 0.07416897103283027,
+    "t": -0.12220631460684177,
+    "p": 0.9028387496848403,
+    "total": -2.1662760693368055,
+    "win": 0.46443514644351463
+   },
+   "unpaired_vs_random_arm": {
+    "estimate": 0.6134249126773148,
+    "se": 0.2056943077787607,
+    "ci_lo": 0.27050513225695977,
+    "ci_hi": 1.0782304035009755,
+    "z": 2.9822162766754747,
+    "p": 0.002861697593441471,
+    "clusters": 8,
+    "draws": 10000,
+    "skipped": 0
+   },
+   "per_setup_vs_random": {
+    "estimate": 0.31245078695224565,
+    "se": 0.14759248445577888,
+    "ci_lo": 0.12078924766592951,
+    "ci_hi": 0.6733274292088877,
+    "z": 2.116983043576728,
+    "p": 0.034261286909042545,
+    "clusters": 8,
+    "draws": 10000,
+    "skipped": 0
+   },
+   "entry_rate": 0.6820083682008368,
+   "ctrl_entry_rate": 0.6564853556485355,
+   "confirmed_trades": {
+    "n": 163,
+    "mean": -0.05712356875186151,
+    "sd": 1.4907504503259486,
+    "se": 0.11676458685420525,
+    "t": -0.48921997919786425,
+    "p": 0.625347686185864,
+    "total": -9.311141706553427,
+    "win": 0.3619631901840491
+   },
+   "median_rr_at_entry": 2.144602481994576
+  }
+ },
+ "b2_stop_in_1h_atr": {
+  "median": 1.7990891564716525,
+  "n": 163,
+  "baseline_median": 1.9963023296840998
+ },
+ "measurement": {
+  "trades": 281,
+  "mean_r_1h": -0.10963135379948113,
+  "mean_r_15m": -0.10963135379948113,
+  "mean_diff_15m_minus_1h": 0.0,
+  "outcome_changed": 0,
+  "1h_ambiguous": 0,
+  "1h_ambiguous_won_at_15m": 0,
+  "1h_fill_hour_target": 1,
+  "1h_fill_hour_target_won_at_15m": 0
+ },
+ "entry_slip_sensitivity": {
+  "B1_band_stop": -0.07131323158573281,
+  "B2_ltf_stop": -0.00603111676210089
+ },
+ "data": {
+  "fetched_1h": "2026-10-28T00:46:11.551000+00:00",
+  "fetched_15m": "2026-10-28T00:54:02.982000+00:00",
+  "days_15m": 52.104166666666664
+ },
+ "coins": {
+  "AAVE": {
+   "1h": "10f79cea5c474432f8cc7869ae6df9bd5e9164fe9579597c35875a825913646f",
+   "15m": "45ee58774d4eae3eb24a6ea79e54bd5878610e1489e0e68469a6cfab19e4ffc4"
+  },
+  "ADA": {
+   "1h": "5c94c7437cd219a15e1d9ea37dd6f30aacbbc7db20ac4d43d999f4d833e67355",
+   "15m": "ead0785e93e6514f9da755cff90bd1aaa5af3ecdd9ac4c438ec6b0dc3417bb4e"
+  },
+  "AERO": {
+   "1h": "c2fa31f3e6c64221c84266bdbd0e06e55f298feef4015a8144cb69079d5030d1",
+   "15m": "2c4448f16530d11f9055d1480d9d1e07b7c6d213304a22fd859211c371021183"
+  },
+  "ARB": {
+   "1h": "6799009126eac15c2f8f708398b5b15b4b35887b8a2ea39ca62719482db30bbb",
+   "15m": "ebb4594090d9a450a1ceff82271a9797d2f35a4a327d3b9e0c786aced2ff074e"
+  },
+  "AVAX": {
+   "1h": "b94f3aed17f4ac236e61ea954f65849374dbd473dbe0075f1a321cf8c9aa6420",
+   "15m": "5e0d24c8cc561790da347c608044f70f50c875d6d606ca436d050b64adac47de"
+  },
+  "BCH": {
+   "1h": "73fd98a7660992d57e252b91e7c57ea8604d770cdafbfd9047d88db0eb351f5a",
+   "15m": "8c8773c798f080b47113a32fc6e983b9856388d6d21c13f1692177b8c472b226"
+  },
+  "BNB": {
+   "1h": "9047834adfe397bb15839b9265f849ec0f2042dec1727fe352e7a18edf00c00a",
+   "15m": "5ddfecad6a78e2e6afb1a62873fd5c7ea31cdf486eb71c494edbe5bfdb5f48ab"
+  },
+  "BTC": {
+   "1h": "9dd4e2a9efe5962ff192bf783ef6f309e8c0fde0caa0b987edf755fbd7cdd0dc",
+   "15m": "84880728a1e017f68b8b38f390f90db8e52e64cd960330a78b683bab5cbb58be"
+  },
+  "CASHCAT": {
+   "1h": "4fab86a3ce607141398c280cf42731cffbeb6d536fa2cfa1c9f347e63b3e0565",
+   "15m": "c4881f5e78de344b24562cb1ea1113073503698b3fb868628ce4366936c1759c"
+  },
+  "CHIP": {
+   "1h": "7866979ec0f91f5ce6c8ed29cadeb1ec2fd34293a3af63b678b7892aa8ee9c0e",
+   "15m": "149a0d3fd76653ee7e31589dfc9c75bf992f2ceb0f9798393e4ee26995de04ef"
+  },
+  "CRV": {
+   "1h": "8c37e1521284364ed72a2ccb3848eaddf460cbb3fa5549421fc5792e06d50090",
+   "15m": "86179e97c2db2401c3ac559f1aba905fa9acf735ced83d992bb91ec277de31d5"
+  },
+  "DOGE": {
+   "1h": "f2bb1ab3531be9621cec09ffcc166d520d28be792c59ece528e693615796cfb9",
+   "15m": "470e2ce2627e8bb8f4bd75084aa036e8095ce238e9d1cbfd42b89f725b68fff5"
+  },
+  "DOT": {
+   "1h": "6937291e44c801957f216b2d4740feaca042250115676018eba8cd90091e3eee",
+   "15m": "32220faf2210174ebb64682cf28c87c2550364c1bdf6fdc5ae6ac678c0d1f6ec"
+  },
+  "ENA": {
+   "1h": "fa29039e96798c380ecd53e728f0c28e37a0f7b82459a525d5bd5e1429033310",
+   "15m": "1edd56f6129662d2aa9fd5efb91aa9116523a8c58b66a6d3c2c8c8036eb96b70"
+  },
+  "ETH": {
+   "1h": "1770dab072ada102834960cd28a8c34c3aaeecf4ecaf4756e2ce10273cd17420",
+   "15m": "f357f3a73b2ce635bcf98a69164b751cdf3a3527447098140751584ba1371ecc"
+  },
+  "FARTCOIN": {
+   "1h": "c798facdc6dd4a45d0262d78fd20e3fe7379c391e86b941285f6fef1cea90c22",
+   "15m": "6504b45fdad9485c7df0fe9b23dd198458b814745f70b0e16fe40f7d54048ccb"
+  },
+  "GRASS": {
+   "1h": "2256eb228ebc16ce460f360ec47f47160e015b559b62cdcaf9e89d1f724ecda5",
+   "15m": "da9cc04f7314fa32a9849d69362ab27980367ca9f2d8b8c177f7d91cf0b69dea"
+  },
+  "HYPE": {
+   "1h": "4404b7514aa1b9c2272d4baf394bf2316b770cfac3b7ce590ac489e477049bce",
+   "15m": "43c10978cc09a196bcf049d80d2bfa51f733acad2687915d7d22c024892ba1c2"
+  },
+  "INIT": {
+   "1h": "71765be0c57ecafa474e31ebf9f49d23788cb5db446555ed2b6419cd273b9ad8",
+   "15m": "402c909777c6ef3ff0090343246c7b0c4dada889a94e5ddc164344b6acb92504"
+  },
+  "INJ": {
+   "1h": "c7a289b731535ab7750c0547273d8ab4ad8391f0b5cdccc90c38fa4cf23320c5",
+   "15m": "b01937a13992d363ec449e495216f32d39745e821a9ef96f8d1be06d49227c47"
+  },
+  "LINK": {
+   "1h": "422042a8221d5078e951e280d131da18ebf51e76a8117fd44c9d2ca2b2aca46b",
+   "15m": "cd2b69e8a0200dbfb60ffde37b6134323f2da779ad87d0f0bf4691f49d4f314b"
+  },
+  "LIT": {
+   "1h": "a873f32ac35d8fc863ec0845ea99a712ce3fa6a5ffdafb45a646015e014a40e4",
+   "15m": "d8935a1dd605c27981aac8b0435aa536361c0889bc23e53786062297bf87bdb0"
+  },
+  "MON": {
+   "1h": "7e76e87b794f6091ef9e9b9b90d365386b4a1f68f803cac95f5ca078213259a3",
+   "15m": "12319a7d343ad1fa6113fe0b62eec860a0f5702b4762f551e040602728167870"
+  },
+  "NEAR": {
+   "1h": "c9a8a8ac0780bb4beef85fa141405b3555512bc9d5a291a93e544a85d82c3b7b",
+   "15m": "2f3de55e928f4db069ca6a017ba41dda92382af92ca089c79c1aeba40f4480bc"
+  },
+  "NIL": {
+   "1h": "2f92f0b44a37619716c0fae35f27532ea318a28cbad146a6550618c01f269c03",
+   "15m": "b3845c425fdf38659b2a126ae5b4e41379dda6d984acc1590b278407c974bddc"
+  },
+  "ONDO": {
+   "1h": "67778548146f172a9721fe8a8ebaaa90445771c110fc7e4d4738a480438b6aff",
+   "15m": "f84cf12ceb3dc7f67cefa0f66f6ab463e45cfeb51dac6674cf95cef29c917029"
+  },
+  "PONS": {
+   "1h": "6bce7936d9d6851eff2ebc3afb276eb73cdebd836cfc2bd443d7b462e82519bf",
+   "15m": "a96dcad64e7a13f6e7c02afd77670b7a1d3a2f0471de01c5566799716286ce7e"
+  },
+  "PUMP": {
+   "1h": "bf5f14f599ebed7f3c547936da03cb47520fe95a0dad0beac8e5277f9bb0f01e",
+   "15m": "c71953db653baee8a07238bcf3fc4f9dec4597e39eb2e6d747576d305d1fb01f"
+  },
+  "SKR": {
+   "1h": "e43e221be7739b1d31e4b34c7571d4c6cd7f502784b063035057a5dc43ed2ef3",
+   "15m": "519e6c44d13adcdbb2cb3aff5800e290e547868661469a4a2846e89d82ee51a2"
+  },
+  "SOL": {
+   "1h": "8401d9bfc1fabbda82c0d1e6f43dbc72359bae4aa3c9a20fafb740bf701679d4",
+   "15m": "d2b952c76ff00b976e153a77c0b3672400a38ced79058e3e0eed5222652a652c"
+  },
+  "STRK": {
+   "1h": "83f7ab8006778ba4842532ae3d81b109426b70adc764b066dc0ac3c70b08b75c",
+   "15m": "8ad241b2f8888c23bd99482a2f72abbe564b2b4d9094e19989e5d449f0f768ba"
+  },
+  "SUI": {
+   "1h": "9d0317fa3adeb75e3e1748576790487d2e1c1ea72e5f799d76c8a22d6bd1f5d8",
+   "15m": "92e2a2f100e7d0eae4bd36b63ad3c8a71ef09eee7c48292b5427c98739ce402c"
+  },
+  "TAO": {
+   "1h": "1f65db7a42eb2485aa57515b922194a79db67acd3aefda86baa3b475f6efbf9c",
+   "15m": "786e503056b4c2cc8a19aa08e94eef01a98b726623056083895e2b34fe78390a"
+  },
+  "TIA": {
+   "1h": "fec8e715eb0f431336b6e28a0fae3aa19ecfe4f44c219d9e24b2dfdbbde6b8ca",
+   "15m": "7c48a0e14aca19afac34f87ae99898fd6efc4a66d55453f68fbf52e802c8f003"
+  },
+  "TRUMP": {
+   "1h": "9b56ff8af5a0bbbb81c332c71f75a125ff1a623c71f12f40d2d10bdf923b6536",
+   "15m": "35b5ecc94e189012cbb41380b418ff31e8ba4a6727375f21994143f1c2893947"
+  },
+  "TRX": {
+   "1h": "5605bb5e0bcbf65fd72b884b523d6988e560a64a988a5ac67b4b93de10532c70",
+   "15m": "f0d723862e8727d2f57104306d1ecab8ea67798cdace1a125869b24e44bb0c97"
+  },
+  "UNI": {
+   "1h": "9253313252c175430ad9d7434b8bc20506d81782b5e970b94349af20f22122bd",
+   "15m": "aecf6950e9410c04cc3af0fca408766e1e955dfcb3c889fa2beaf1602d6411ba"
+  },
+  "VVV": {
+   "1h": "c96e23f3b8810fab842bb89a9494979da7e7bbceaedbfb54cb2d6e3612fdff2f",
+   "15m": "192442f7cbfd48c28d80dc7889f3071c8a2fa1fb972a3f8367fa44b5bbddf535"
+  },
+  "WLD": {
+   "1h": "b31635fb5a2baa908446bc22f61af7b4d1e0bbba0f55c3a309c7825634ddf85d",
+   "15m": "ec008b1383b71af7364ae8d8e197605ccd734295a96417f0fb43fc7b308a518d"
+  },
+  "XMR": {
+   "1h": "124b1a2c4c70d1c2d4343b3538c5c0c3abb0f85c83db0275ef36222eea988d48",
+   "15m": "d52c7bf8ea60138b317c743e635a49ce62f01eabbabeb3519d824a93d043c23d"
+  },
+  "XPL": {
+   "1h": "f382703066a0b83c2081b07e96720f4b399e3953aca10be98c0b0c5fbb695955",
+   "15m": "ef3f61fab1fabe5961a000b1f266731b714fc84c64c45d75e51ad676e57a66a2"
+  },
+  "XRP": {
+   "1h": "458038ec726002efcc8cb583c992ebd86271a608e9ca6d03daab817ca245bdde",
+   "15m": "8e881a5bb78534f5116db9e7a901674b98b50c67790345e36bd6ec04336d4940"
+  },
+  "ZEC": {
+   "1h": "223b44ff898ef6e8978355c8199f7aaf4348f97becc2fecf24d4d93b14d7b22a",
+   "15m": "692455f1e4d472364b464f50caba7ea673716d76d0b6923e8c41a1ff7c8db48f"
+  },
+  "ZRO": {
+   "1h": "234c268231da1b85285ec452cd52c616dc992017f96f3cb41abcec1ee82ea973",
+   "15m": "c04550f96f409d262c01e6e6f717ef0e4e6844842891d4cfb54615d13396d792"
+  }
+ },
+ "null": {
+  "B1_band_stop": {
+   "fired": 0,
+   "mean": -0.019568861960470696,
+   "se": 0.038513889186008746,
+   "centred": true,
+   "miscalibrated": false
+  },
+  "B2_ltf_stop": {
+   "fired": 0,
+   "mean": -0.0188148303636159,
+   "se": 0.03979815658600484,
+   "centred": true,
+   "miscalibrated": false
+  }
+ },
+ "runtime_sec": 131.2
+}
