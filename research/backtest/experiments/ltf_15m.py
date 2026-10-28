@@ -40,6 +40,25 @@ ENTRY_SLIP_SENSITIVITY = 0.0564
 NULL_DATASETS = 20
 NULL_WINDOW_15M = 5000
 FRAMINGS = ("B1_band_stop", "B2_ltf_stop")
+CENSOR_GUARD = 480             # 15m bars (5 days) every arm must leave for resolution
+CONTROL_SPAN_15M = 240
+
+
+def after_entry_control(bars15, tr: Trade, costs: Costs = MEASURED) -> Optional[float]:
+    """PRIMARY control (PREREG Amendment 2): random 15m market entries in the
+    240 15m bars AFTER this trade's entry, with its risk %, reward % and taker
+    fee. None if fewer than common.MIN_CONTROL resolved."""
+    risk = (tr.entry_px - tr.stop) / tr.entry_px
+    reward = (tr.tp - tr.entry_px) / tr.entry_px
+    rs = []
+    for u in C.draws_after(len(bars15), tr.entry_i, C.rng_for(tr.coin, tr.entry_i, 4),
+                           span=CONTROL_SPAN_15M, first=0):
+        c = bars15[int(u)]["c"]
+        t2 = simulate(bars15, Order(tr.coin, int(u), MARKET_CLOSE, c * (1 - risk),
+                                    c * (1 + reward)), costs)
+        if t2 is not None and t2.resolved:
+            rs.append(t2.r_net)
+    return float(np.mean(rs)) if len(rs) >= C.MIN_CONTROL else None
 
 
 def confirm(bars15, br, lows, atr, arm: int, base: Trade, rule: str,
@@ -93,7 +112,7 @@ def _coin(args) -> List[Dict[str, Any]]:
         m15 = measure_on_15m(base, bars_1h, t15, bars15)
         row["measure_15m"] = m15
         arm = ltf.arm_index(base, bars_1h, t15, bars15)
-        if arm is None or arm + WAIT >= n - 1:
+        if arm is None or arm + WAIT + CENSOR_GUARD >= n - 1:
             rows.append(row)
             continue
         row["arm"] = arm
@@ -108,6 +127,8 @@ def _coin(args) -> List[Dict[str, Any]]:
                 if t2 is not None:
                     entered_r.append(t2.r_net)
             row[name] = {"status": status, "trade": tr,
+                         "excess": (tr.r_net - m) if tr is not None and tr.resolved
+                         and (m := after_entry_control(bars15, tr, costs)) is not None else None,
                          "ctrl": float(np.mean(vals)) if vals else None,
                          "ctrl_entered_mean": float(np.mean(entered_r))
                          if len(entered_r) >= MIN_CTRL_ENTERED else None,
@@ -118,6 +139,19 @@ def _coin(args) -> List[Dict[str, Any]]:
                 row["b2_stop_atr1h"] = risk_pct / atr1h[hour] if atr1h[hour] > 0 else None
         rows.append(row)
     return rows
+
+
+def excess_rows(rows, name: str):
+    """PRIMARY (PREREG Amendment 2): per confirmed trade, its net R minus
+    after-entry geometry-matched random entries."""
+    d, cl, tm = [], [], []
+    for r in rows:
+        x = r.get(name)
+        if x and x.get("excess") is not None:
+            d.append(x["excess"])
+            cl.append(S.week_of(r["base"].entry_t))
+            tm.append(r["base"].entry_t)
+    return d, cl, tm
 
 
 def quality(rows, name: str):
@@ -179,21 +213,16 @@ def analyse(pool, bars_1h, bars_15m, B: int = 10_000, secondaries: bool = True,
     fr: Dict[str, Dict[str, Any]] = {}
     extra: Dict[str, Any] = {}
     for name in FRAMINGS:
-        vals, grp, cl, tm = quality(rows, name)
+        d, cl, tm = excess_rows(rows, name)
         _, d_base, _, _ = paired(rows, name)
-        n1 = sum(grp)
-        n0 = len(grp) - n1
-        if n1 >= 2 and n0 >= 2:
-            boot = S.cluster_bootstrap(vals, grp, cl, "diff", B=B)
-            g1 = [v for v, g in zip(vals, grp) if g]
-            g0 = [v for v, g in zip(vals, grp) if not g]
-            fr[name] = {"n": n1, "n_ctrl_setups": n0,
+        if len(d) >= 2:
+            boot = S.cluster_bootstrap(d, [0] * len(d), cl, "mean", B=B)
+            fr[name] = {"n": len(d),
                         **{k: boot[k] for k in ("estimate", "se", "ci_lo", "ci_hi", "p", "clusters")},
-                        "halves": [h["diff"] for h in S.split_half(vals, grp, tm)],
-                        "p_iid": S.welch(g1, g0)["p"],
-                        "arm_mean": float(np.mean(g1)), "random_mean": float(np.mean(g0))}
+                        "halves": [float(np.mean(h)) if h else float("nan") for h in C.halves(d, tm)],
+                        "p_iid": S.describe(d)["p"]}
         else:
-            fr[name] = {"n": n1, "estimate": float("nan"), "p": float("nan"),
+            fr[name] = {"n": len(d), "estimate": float("nan"), "p": float("nan"),
                         "halves": [float("nan")] * 2}
         if secondaries:
             st: Dict[str, int] = {}
@@ -202,7 +231,10 @@ def analyse(pool, bars_1h, bars_15m, B: int = 10_000, secondaries: bool = True,
             conf = [r[name]["trade"] for r in armed
                     if r[name]["trade"] is not None and r[name]["trade"].resolved]
             ps, _, pcl, _ = paired(rows, name)
+            uv, ug, ucl, _ = quality(rows, name)
             extra[name] = {"status": st, "vs_baseline": S.describe(d_base),
+                           "unpaired_vs_random_arm": S.cluster_bootstrap(uv, ug, ucl, "diff", B=B)
+                           if sum(ug) > 1 and len(ug) - sum(ug) > 1 else None,
                            "per_setup_vs_random": S.cluster_bootstrap(
                                ps, [0] * len(ps), pcl, "mean", B=B) if len(ps) > 1 else None,
                            "entry_rate": st.get("entered", 0) / max(1, len(armed)),
@@ -288,8 +320,8 @@ def render(s: Dict[str, Any]) -> str:
         L += ["Null calibration: " + ", ".join(
             f"{k} fired {v['fired']}/20, mean {fmt(v['mean'], 4)} +/- {fmt(v['se'], 4, False)}"
             for k, v in s["null"].items()), ""]
-    L += ["## B -- 15m confirmation: entry quality vs the same wait with random event times", "",
-          "| framing | arm trades | per-trade effect (arm - random) | 95% CI | p (week-cluster) | Holm p | halves | adds edge |",
+    L += ["## B -- 15m confirmation: each confirmed trade vs random entries after it, same geometry", "",
+          "| framing | confirmed trades | excess R over later random entries | 95% CI | p (week-cluster) | Holm p | halves | adds edge |",
           "|---|---|---|---|---|---|---|---|"]
     for k, v in s["framings"].items():
         L.append(f"| {k} | {v['n']} | {fmt(v['estimate'])} | [{fmt(v.get('ci_lo'))}, {fmt(v.get('ci_hi'))}] | "

@@ -233,3 +233,28 @@ class Amendment1(unittest.TestCase):
         rows[1]["B1_band_stop"]["trade"].outcome = "tp"
         vals, grp, _, _ = L.quality(rows, "B1_band_stop")
         self.assertEqual(sorted(zip(grp, vals)), [(0, -0.1), (0, 0.2), (1, 0.5)])
+
+
+class Amendment2(unittest.TestCase):
+    def test_controls_come_after_the_trade_with_its_geometry(self):
+        from unittest import mock
+        from research.backtest import engine
+        bars15 = C.random_walks(9, coins=1, n=900, interval_ms=Q)["NULL9_0"]
+        tr = trade(MARKET_CLOSE, 300, bars15[300]["c"], stop=bars15[300]["c"] * 0.97,
+                   tp=bars15[300]["c"] * 1.05)
+        seen = []
+        real = engine.simulate
+        with mock.patch.object(L, "simulate", side_effect=lambda b, o, c=None: (seen.append(o), real(b, o, c))[1]):
+            L.after_entry_control(bars15, tr)
+        self.assertTrue(seen)
+        for o in seen:
+            self.assertGreater(o.decided_i, 300)
+            self.assertLessEqual(o.decided_i, 300 + L.CONTROL_SPAN_15M)
+            c = bars15[o.decided_i]["c"]
+            self.assertAlmostEqual((c - o.stop) / c, 0.03, places=9)
+            self.assertAlmostEqual((o.tp - c) / c, 0.05, places=9)
+
+    def test_late_setups_are_not_armed(self):
+        self.assertGreater(L.CENSOR_GUARD, 0)
+        import inspect
+        self.assertIn("arm + WAIT + CENSOR_GUARD", inspect.getsource(L._coin))

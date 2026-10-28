@@ -134,3 +134,27 @@ over their own entries, with no conditioning on the other: on a martingale
 both equal the same per-trade expectancy, and neither rewards trading less.
 The calibration is re-run in full with this design and must pass before the
 real data is analysed. Nothing else changes.
+
+## Amendment 2 -- 2026-10-28, after the second null calibration, before any real data
+
+**Change:** the primary statistic for B1 and B2 is each confirmed trade's
+EXCESS over random 15m market entries drawn from the 240 15m bars AFTER that
+trade's entry, with the trade's own risk %, reward % and taker fee -- the
+design that calibrated for PREREG_rr_floor -- as a one-sample mean, week-
+clustered. Setups armed within the last 5 days (plus the 48h wait) of the 15m
+window are excluded, so trades and controls alike have room to resolve.
+
+**Why, from the second null calibration:** the unpaired comparison of
+Amendment 1 fired on 14 of 20 random-walk datasets for B1 (mean +0.203) and
+11 of 20 for B2 (+0.464). The two arms' trades are not comparable: B1 enters
+further from the stop (median risk 4.37% against the random arm's 3.23%) and
+at different reward:risk, and -- most likely, though not established -- the
+random arm's farther targets resolve more slowly, so more of its trades are
+still open when the 52-day window ends and are dropped, leaving its resolved
+trades skewed toward quick stops. Cost scaling was checked and explains
+little (2% of random-arm entries sit under 0.5% risk). The geometry-matched
+after-entry control does not depend on which explanation is right: on 5 null
+datasets it gave B1 +0.020 +/- 0.068 and B2 -0.029 +/- 0.078. The calibration
+is re-run in full with this design and must pass before the real data is
+analysed. Amendment 1's unpaired comparison and the per-setup comparison
+remain as secondaries.

@@ -1,0 +1,226 @@
+{
+ "datasets": 20,
+ "framings": {
+  "B1_band_stop": {
+   "fired": 14,
+   "mean": 0.20319010858528902,
+   "se": 0.017426490350426063,
+   "centred": false,
+   "miscalibrated": true
+  },
+  "B2_ltf_stop": {
+   "fired": 11,
+   "mean": 0.46403194879569776,
+   "se": 0.0732349099056666,
+   "centred": false,
+   "miscalibrated": true
+  }
+ },
+ "miscalibrated": {
+  "B1_band_stop": true,
+  "B2_ltf_stop": true
+ },
+ "per_dataset": [
+  {
+   "B1_band_stop": {
+    "estimate": 0.2625776913021397,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 1.1650813496803958,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.0685005679392609,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.31451354733036274,
+    "adds_edge": true
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.27504670818042154,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.11440766699712111,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.18861389723525365,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.15253391462446017,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.11656263825743254,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.478996001177839,
+    "adds_edge": true
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.24368504397626214,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.37064962141536856,
+    "adds_edge": true
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.28401800135575606,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": -0.014900665944552222,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.24295653542269852,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.4083022111094954,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.09126827597126363,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.9271606012295013,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.14297525944388248,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.3159838854424849,
+    "adds_edge": true
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.17341321292655587,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.2646365408031357,
+    "adds_edge": true
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.19759463679524505,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.30199245964000676,
+    "adds_edge": true
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.29425989797768026,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.48905891028503495,
+    "adds_edge": true
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.24193348754036126,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 1.0885466918706568,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.2507810091899001,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.2047477554328952,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.3453297284798559,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.4858388775550873,
+    "adds_edge": true
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.08622914124687261,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.47142389475726465,
+    "adds_edge": true
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.15837347909970725,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.9952511981451589,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.14483119922905188,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.3282860725312812,
+    "adds_edge": true
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": 0.2548517601361792,
+    "adds_edge": true
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.41812844183095765,
+    "adds_edge": true
+   }
+  }
+ ],
+ "runtime_sec": 177.3
+}
