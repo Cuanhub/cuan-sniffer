@@ -1,0 +1,226 @@
+{
+ "datasets": 20,
+ "framings": {
+  "B1_band_stop": {
+   "fired": 0,
+   "mean": -0.24398308523751083,
+   "se": 0.016908109318632434,
+   "centred": false,
+   "miscalibrated": true
+  },
+  "B2_ltf_stop": {
+   "fired": 0,
+   "mean": -0.012550315484709047,
+   "se": 0.07527538779338931,
+   "centred": true,
+   "miscalibrated": false
+  }
+ },
+ "miscalibrated": {
+  "B1_band_stop": true,
+  "B2_ltf_stop": false
+ },
+ "per_dataset": [
+  {
+   "B1_band_stop": {
+    "estimate": -0.18748485193610737,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": -0.003221484142136129,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.30544409896409175,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.015445448001292548,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.2483539195408356,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": -0.4868278316449511,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.17456719819366281,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": -0.2382336799801192,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.3368881408773864,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.05326226918025571,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.34052296296147977,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": -0.08272941425302459,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.24775673807319853,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": -0.7056713049997148,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.20149507416639897,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": -0.22041860882094283,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.3744707789610849,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.753313801296606,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.2047491032290265,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": -0.06131031112027471,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.2832353441937823,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": -0.12249176475655342,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.13192267694111243,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.03490759832892645,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.2731686382710584,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.04474403407394199,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.3006416321832224,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.8197241099739762,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.2681026999702234,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": -0.15351404666186522,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.1398401503884258,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": -0.017792996994307874,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.343523640987897,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.05325913659421264,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.17926127127515137,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": -0.06009108456049282,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.21152302097524375,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.006881078487228916,
+    "adds_edge": false
+   }
+  },
+  {
+   "B1_band_stop": {
+    "estimate": -0.1267097626608283,
+    "adds_edge": false
+   },
+   "B2_ltf_stop": {
+    "estimate": 0.11975874230376109,
+    "adds_edge": false
+   }
+  }
+ ],
+ "runtime_sec": 189.2
+}

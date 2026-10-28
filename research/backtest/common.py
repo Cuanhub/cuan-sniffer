@@ -22,7 +22,7 @@ import numpy as np
 
 from research.backtest import data as D
 from research.backtest.costs import MEASURED, Costs
-from research.backtest.engine import MARKET_CLOSE, Order, simulate
+from research.backtest.engine import LIMIT, MARKET_CLOSE, Order, Trade, simulate
 
 SEED = 20261027
 WARMUP = 799                     # zones.ZONE_MIN_BARS - 1
@@ -76,6 +76,43 @@ def matched_control(bars: List[Dict[str, Any]], coin: str, entry_i: int,
         c = bars[int(u)]["c"]
         o = Order(coin, int(u), MARKET_CLOSE, c * (1 - risk_pct / 100),
                   c * (1 + reward_pct / 100), entry_fee="maker" if maker else "taker")
+        tr = simulate(bars, o, costs)
+        if tr is not None and tr.resolved:
+            rs.append(tr.r_net)
+    return float(np.mean(rs)) if len(rs) >= MIN_CONTROL else None
+
+
+BID_TTL_BARS = 12        # band.BID_TTL_BARS; kept here to avoid an import cycle
+
+
+def same_order_control(bars: List[Dict[str, Any]], trade: Trade,
+                       costs: Costs = MEASURED) -> Optional[float]:
+    """Mean net R of random orders of the trade's OWN type, placed AFTER its
+    entry with its geometry (rr_floor PREREG Amendment 1).
+
+    A bid gets bids: at a random later decision bar, a limit the same
+    distance below that bar's close as the trade's bid sat below its own
+    decision close, resting BID_TTL_BARS, with the trade's stop and target
+    distances from the bid -- only the ones that fill count. That way the
+    engine's conservative fill-hour rule (stop counted, target not) applies
+    to trade and control alike. A market entry gets market entries.
+    """
+    coin = trade.coin
+    risk = (trade.entry_px - trade.stop) / trade.entry_px
+    reward = (trade.tp - trade.entry_px) / trade.entry_px
+    if trade.kind == LIMIT:
+        dec_c = bars[trade.decided_i]["c"]
+        offset = (dec_c - trade.entry_px) / dec_c if dec_c > 0 else 0.0
+    rs = []
+    for u in draws_after(len(bars), trade.entry_i, rng_for(coin, trade.entry_i, 2)):
+        u = int(u)
+        c = bars[u]["c"]
+        if trade.kind == LIMIT:
+            lim = c * (1 - offset)
+            o = Order(coin, u, LIMIT, lim * (1 - risk), lim * (1 + reward), limit=lim,
+                      ttl=BID_TTL_BARS)
+        else:
+            o = Order(coin, u, MARKET_CLOSE, c * (1 - risk), c * (1 + reward))
         tr = simulate(bars, o, costs)
         if tr is not None and tr.resolved:
             rs.append(tr.r_net)

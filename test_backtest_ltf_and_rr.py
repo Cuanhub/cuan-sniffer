@@ -194,3 +194,42 @@ class RrBuckets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Amendment1(unittest.TestCase):
+    def test_bid_life_matches_the_strategy_s(self):
+        from research.backtest import band
+        self.assertEqual(C.BID_TTL_BARS, band.BID_TTL_BARS)
+
+    def test_a_bid_s_control_is_bids_at_the_same_offset(self):
+        """Every control must be a LIMIT that rests at the trade's offset."""
+        from unittest import mock
+        from research.backtest import engine
+        bars = C.random_walks(5, coins=1, n=1400)["NULL5_0"]
+        t = trade(LIMIT, 900, bars[899]["c"] * 0.98, stop=bars[899]["c"] * 0.95,
+                  tp=bars[899]["c"] * 1.03, decided_i=899)
+        seen = []
+        real = engine.simulate
+
+        def spy(b, o, costs=None):
+            seen.append(o)
+            return real(b, o, costs) if costs is not None else real(b, o)
+        with mock.patch.object(C, "simulate", side_effect=spy):
+            C.same_order_control(bars, t)
+        self.assertTrue(seen)
+        for o in seen:
+            self.assertEqual(o.kind, LIMIT)
+            self.assertGreater(o.decided_i, t.entry_i)
+            self.assertAlmostEqual(o.limit / bars[o.decided_i]["c"], 0.98, places=9)
+            self.assertAlmostEqual((o.limit - o.stop) / o.limit,
+                                   (t.entry_px - t.stop) / t.entry_px, places=9)
+
+    def test_the_15m_primary_does_not_pair_on_setups(self):
+        """Group 0 must include setups where the arm did NOT enter."""
+        base = trade(LIMIT, 1, 100.0, t=1_700_006_400_000)
+        rows = [{"base": base, "B1_band_stop": {"trade": None, "ctrl_entered_mean": -0.1}},
+                {"base": base, "B1_band_stop": {"trade": trade(MARKET_CLOSE, 2, 100.0, r=0.5),
+                                                "ctrl_entered_mean": 0.2}}]
+        rows[1]["B1_band_stop"]["trade"].outcome = "tp"
+        vals, grp, _, _ = L.quality(rows, "B1_band_stop")
+        self.assertEqual(sorted(zip(grp, vals)), [(0, -0.1), (0, 0.2), (1, 0.5)])

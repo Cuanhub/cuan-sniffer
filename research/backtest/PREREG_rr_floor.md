@@ -92,3 +92,25 @@ As the trendline test, amended design: 20 random-walk datasets, 12 coins x
 - Portfolio rails not modelled: low floors take more trades than the account
   could hold at once (max 4), so their totals overstate what is achievable.
 - One regime: the halves check.
+
+## Amendment 1 -- 2026-10-28, after the null calibration, before any real data
+
+**Change:** each trade's control uses the trade's OWN order type. A resting
+bid gets random bids -- placed at random decision bars after the trade's
+fill, at the same distance below that bar's close as the trade's bid sat
+below its decision close, resting 12 bars, with the same stop and target
+distances from the bid -- and only filled controls count. An in-band market
+entry keeps random market entries.
+
+**Why, from the pre-registered null calibration:** E_mid's null mean was
+-0.042R +/- 0.008 and E_low's -0.021R +/- 0.008 (E_live -0.031 +/- 0.016,
+inside the limit). The engine judges a bid's fill hour conservatively --
+the stop counts there, the target does not, because the high may have come
+before the dip that filled it -- while a market-entry control has no fill
+hour at all. The closer the target, the more often the fill hour reaches it:
+on 6 null datasets the rr 0.3-1 bucket lost 218 fill-hour targets this way.
+With same-order-type controls the null excess went from -0.027 +/- 0.016 to
++0.004 +/- 0.016 (E_low) and, on 10 further datasets, -0.017 +/- 0.017 for
+bids and +0.018 +/- 0.041 for market entries (E_mid). The calibration is
+re-run in full with this design and must pass before the real data is
+analysed. Nothing else changes.

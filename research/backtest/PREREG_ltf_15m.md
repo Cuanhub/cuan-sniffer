@@ -110,3 +110,27 @@ keep the calibration measuring the DESIGN.)
   slippage (the sensitivity above).
 - B2 tightens stops, which this strategy has paid for before; its stop/ATR
   is reported so a "win" from tighter stops in one regime is visible.
+
+## Amendment 1 -- 2026-10-28, after the null calibration, before any real data
+
+**Change:** the primary statistic for B1 and B2 is the difference between
+two per-trade means, unpaired: the mean net R of the arm's trades (one per
+setup where it entered) minus the mean, over ALL armed setups, of each
+setup's mean net R of the random arm's entered trades (at least 10 of 100).
+Week-clustered bootstrap of that difference.
+
+**Why, from the pre-registered null calibration:** B1's null mean was
+-0.244R +/- 0.017. The paired "entry quality" statistic compared each
+confirmed trade only with the random arm on the SAME setups -- the setups
+where a 15m break happened, which are the setups where price rallied after
+arming. The random arm's entries on those setups came at random times, many
+before the rally, so they rode it: median rr at entry 2.40 for the random
+arm against 1.53 for B1, and 37% of random entries above rr 3 against 8%.
+The control was being handed the move that defines the signal (the same
+error as the trendline's first control window, in a different form).
+
+Unpaired, the arm's trades and the random arm's trades are each averaged
+over their own entries, with no conditioning on the other: on a martingale
+both equal the same per-trade expectancy, and neither rewards trading less.
+The calibration is re-run in full with this design and must pass before the
+real data is analysed. Nothing else changes.

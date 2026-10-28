@@ -45,9 +45,9 @@ def _run(args) -> List[Trade]:
 
 
 def _excess(args) -> Tuple[int, Optional[float]]:
+    """Net R minus same-order-type random controls (PREREG Amendment 1)."""
     idx, coin, t = args
-    m = C.matched_control(C.BARS[coin], coin, t.entry_i, t.risk_pct,
-                          (t.tp - t.entry_px) / t.entry_px * 100, t.kind == LIMIT)
+    m = C.same_order_control(C.BARS[coin], t)
     return idx, (t.r_net - m) if m is not None else None
 
 

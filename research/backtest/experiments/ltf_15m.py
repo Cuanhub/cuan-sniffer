@@ -121,17 +121,32 @@ def _coin(args) -> List[Dict[str, Any]]:
 
 
 def quality(rows, name: str):
-    """PRIMARY: per entered setup, the trade's net R minus the random arm's
-    mean ENTERED net R. Rate-free, so abstention cannot score."""
-    d, cl, tm = [], [], []
+    """PRIMARY (PREREG Amendment 1): two per-trade means, UNPAIRED.
+
+    Group 1: the arm's trades, one per setup where it entered. Group 0: for
+    EVERY armed setup, the mean net R of the random arm's entered trades.
+    Pairing them on the same setups selected setups where price rallied after
+    arming, and the random arm's early entries on those rode the rally -- a
+    -0.244R bias on random walks. Neither group here conditions on the other,
+    and per-trade means cannot reward entering less often.
+    """
+    vals, grp, cl, tm = [], [], [], []
     for r in rows:
         x = r.get(name)
-        if not x or x["trade"] is None or not x["trade"].resolved or x["ctrl_entered_mean"] is None:
+        if not x:
             continue
-        d.append(x["trade"].r_net - x["ctrl_entered_mean"])
-        cl.append(S.week_of(r["base"].entry_t))
-        tm.append(r["base"].entry_t)
-    return d, cl, tm
+        week, t = S.week_of(r["base"].entry_t), r["base"].entry_t
+        if x["trade"] is not None and x["trade"].resolved:
+            vals.append(x["trade"].r_net)
+            grp.append(1)
+            cl.append(week)
+            tm.append(t)
+        if x["ctrl_entered_mean"] is not None:
+            vals.append(x["ctrl_entered_mean"])
+            grp.append(0)
+            cl.append(week)
+            tm.append(t)
+    return vals, grp, cl, tm
 
 
 def paired(rows, name: str):
@@ -164,17 +179,21 @@ def analyse(pool, bars_1h, bars_15m, B: int = 10_000, secondaries: bool = True,
     fr: Dict[str, Dict[str, Any]] = {}
     extra: Dict[str, Any] = {}
     for name in FRAMINGS:
-        d, cl, tm = quality(rows, name)
+        vals, grp, cl, tm = quality(rows, name)
         _, d_base, _, _ = paired(rows, name)
-        if len(d) >= 2:
-            boot = S.cluster_bootstrap(d, [0] * len(d), cl, "mean", B=B)
-            hv = C.halves(d, tm)
-            fr[name] = {"n": len(d), **{k: boot[k] for k in ("estimate", "se", "ci_lo", "ci_hi",
-                                                             "p", "clusters")},
-                        "halves": [float(np.mean(h)) if h else float("nan") for h in hv],
-                        "p_iid": S.describe(d)["p"]}
+        n1 = sum(grp)
+        n0 = len(grp) - n1
+        if n1 >= 2 and n0 >= 2:
+            boot = S.cluster_bootstrap(vals, grp, cl, "diff", B=B)
+            g1 = [v for v, g in zip(vals, grp) if g]
+            g0 = [v for v, g in zip(vals, grp) if not g]
+            fr[name] = {"n": n1, "n_ctrl_setups": n0,
+                        **{k: boot[k] for k in ("estimate", "se", "ci_lo", "ci_hi", "p", "clusters")},
+                        "halves": [h["diff"] for h in S.split_half(vals, grp, tm)],
+                        "p_iid": S.welch(g1, g0)["p"],
+                        "arm_mean": float(np.mean(g1)), "random_mean": float(np.mean(g0))}
         else:
-            fr[name] = {"n": len(d), "estimate": float("nan"), "p": float("nan"),
+            fr[name] = {"n": n1, "estimate": float("nan"), "p": float("nan"),
                         "halves": [float("nan")] * 2}
         if secondaries:
             st: Dict[str, int] = {}
@@ -270,7 +289,7 @@ def render(s: Dict[str, Any]) -> str:
             f"{k} fired {v['fired']}/20, mean {fmt(v['mean'], 4)} +/- {fmt(v['se'], 4, False)}"
             for k, v in s["null"].items()), ""]
     L += ["## B -- 15m confirmation: entry quality vs the same wait with random event times", "",
-          "| framing | entered setups | per-trade effect | 95% CI | p (week-cluster) | Holm p | halves | adds edge |",
+          "| framing | arm trades | per-trade effect (arm - random) | 95% CI | p (week-cluster) | Holm p | halves | adds edge |",
           "|---|---|---|---|---|---|---|---|"]
     for k, v in s["framings"].items():
         L.append(f"| {k} | {v['n']} | {fmt(v['estimate'])} | [{fmt(v.get('ci_lo'))}, {fmt(v.get('ci_hi'))}] | "
