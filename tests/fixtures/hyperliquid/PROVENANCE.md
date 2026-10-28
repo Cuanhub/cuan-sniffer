@@ -59,3 +59,4 @@ two facts this whole rewrite turned on -- are untouched.
 | file | source |
 |---|---|
 | `candle_snapshot_1h_eth.json` | `candleSnapshot` ETH 1h, last 30 hours, recorded verbatim with the request and the fetch time in ms. Public market data, so nothing is scrubbed. The final candle was still forming at fetch time, which is what `test_backtest_data` uses it for. |
+| `candle_snapshot_15m_eth.json` | `candleSnapshot` ETH 15m, the last ~700 bars, recorded verbatim with the request and fetch time (2026-10-28). Real 15m bars for the lower-timeframe tests' causality checks; the final candle was still forming. |
