@@ -23,11 +23,14 @@ cd {baseDir}/../../lab && .venv/bin/python lab.py new <slug>     # -> experiment
 - **Controls:** remove the information, keep every mechanic identical.
   - filter on baseline trades -> `stat: diff` between kept (group 1) and
     refused (group 0), plus a `must_agree` framing on excess R over
-    `controls.draws_after` random entries;
+    `research.backtest.common.same_order_control` -- random orders of the
+    trade's OWN type (a bid's control is a bid) drawn after its entry;
   - a new entry rule or a wait-for-confirmation rule -> compare against the
     SAME rule with its events moved to random times
     (`controls.circular_shift`), never against the baseline (that rewards
-    trading less whenever the baseline loses);
+    trading less whenever the baseline loses) -- and compare UNPAIRED
+    per-trade means, never only the setups where the signal fired (that
+    selects the setups where price moved, and the control rides the move);
   - a standalone signal -> excess over `controls.draws_after` random entries
     with the same stop/target rule.
 - **What would make this wrong:** at least the stop/ATR confound (stratify

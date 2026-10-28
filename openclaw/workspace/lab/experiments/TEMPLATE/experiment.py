@@ -22,10 +22,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from labcore import controls, pool
-from research.backtest.costs import MEASURED
-from research.backtest.engine import (LIMIT, MARKET_CLOSE, Order, atr_pct_series,
-                                      simulate)
+from labcore import pool
+from research.backtest.common import same_order_control
+from research.backtest.engine import atr_pct_series
 
 TITLE = "EXAMPLE: band trades in high- vs low-volatility regimes"
 
@@ -64,21 +63,12 @@ def _coin(args) -> List[Dict[str, Any]]:
         g = regime[tr.decided_i]            # the feature AT the decision, never later
         rows.append({"framing": "high_vol_minus_low_vol", "t": tr.entry_t,
                      "coin": coin, "value": tr.r_net, "group": g})
-        # Must-agree: the same comparison after subtracting what random entries
-        # with this trade's geometry earned in the 240 bars AFTER it -- removes
-        # drift and regime without letting the control see the signal.
-        risk = tr.risk_pct / 100
-        reward = (tr.tp - tr.entry_px) / tr.entry_px
-
-        def outcome(u: int):
-            c = bars[u]["c"]
-            o = Order(coin, u, MARKET_CLOSE, c * (1 - risk), c * (1 + reward),
-                      entry_fee="maker" if tr.kind == LIMIT else "taker")
-            r = simulate(bars, o, MEASURED)
-            return r.r_net if r is not None and r.resolved else None
-
-        cm = controls.control_mean(outcome, controls.draws_after(
-            len(bars), tr.entry_i, coin=coin, first_allowed=799))
+        # Must-agree: the same comparison after subtracting what random orders
+        # OF THE TRADE'S OWN TYPE earned after it, with its geometry -- a bid's
+        # control is a bid, at the same offset, with the same life. Market
+        # controls for bids were biased by -0.04R on random walks (the bid's
+        # fill hour is judged conservatively; a market entry has none).
+        cm = same_order_control(bars, tr)
         if cm is not None:
             rows.append({"framing": "same_vs_random_entries", "t": tr.entry_t,
                          "coin": coin, "value": tr.r_net - cm, "group": g})

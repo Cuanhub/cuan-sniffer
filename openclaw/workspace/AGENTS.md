@@ -109,6 +109,16 @@ before the guard existed. They are why the rules above are rules.
 - **A bias that never fires.** A test biased AWAY from "edge" passes a
   false-positive count perfectly. The null calibration also checks the
   mean.
+- **A control of a different order type.** A resting bid's fill hour is
+  judged conservatively (its stop counts, its target does not); a market
+  entry has no fill hour. Market-entry controls for bids biased the
+  reward:risk test by -0.04R on random walks. A bid's control is a bid:
+  `research.backtest.common.same_order_control`.
+- **A control paired on setups the signal selected.** Comparing confirmed
+  entries with the random arm only on setups where the signal fired selects
+  the setups where price moved -- and the control's earlier entries ride
+  that move (-0.24R on random walks in the 15m test). Compare unpaired
+  per-trade means, or per-setup over ALL setups.
 - **Constant or near-constant splits.** A median split on a zero-variance
   column splits by list position, which is time. It once scored identically
   to a timestamp.
