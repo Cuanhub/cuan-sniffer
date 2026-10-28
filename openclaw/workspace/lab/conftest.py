@@ -18,6 +18,7 @@ def isolated_lab(tmp_path, monkeypatch):
     root = tmp_path / "lab"
     monkeypatch.setattr(paths, "DATA", root / "data")
     monkeypatch.setattr(paths, "ARCHIVE", root / "data" / "archive" / "1h")
+    monkeypatch.setattr(paths, "ARCHIVE_15M", root / "data" / "archive" / "15m")
     monkeypatch.setattr(paths, "ARCHIVE_MANIFEST", root / "data" / "archive" / "manifest.json")
     monkeypatch.setattr(paths, "REVISIONS", root / "data" / "archive" / "revisions.jsonl")
     monkeypatch.setattr(paths, "LIVE", root / "data" / "live")

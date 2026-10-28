@@ -17,6 +17,12 @@ Two kinds of job, on purpose:
 00:20 UTC sits after the hourly candle close and before the agent job, so
 the agent always sees fresh bars.
 
+A refresh takes about 15 minutes, and that is deliberate: it fetches 1h AND
+15m bars for 45 coins one request every 10 seconds (CUAN_LAB_FETCH_GAP_SEC).
+If the lab shares a machine or IP with the live bot, they share the venue's
+per-IP request budget, and a full-speed refresh is what rate-limited the live
+trader on 2026-10-27. Do not lower the gap to make it faster.
+
 ## Creating them
 
 The automation CLI has changed across OpenClaw versions (`openclaw cron add`

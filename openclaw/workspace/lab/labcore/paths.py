@@ -8,6 +8,7 @@ from pathlib import Path
 LAB = Path(os.getenv("CUAN_LAB_ROOT", Path(__file__).resolve().parents[1]))
 DATA = LAB / "data"
 ARCHIVE = DATA / "archive" / "1h"
+ARCHIVE_15M = DATA / "archive" / "15m"
 ARCHIVE_MANIFEST = DATA / "archive" / "manifest.json"
 REVISIONS = DATA / "archive" / "revisions.jsonl"
 LIVE = DATA / "live"                     # read-only replica of the live CSVs

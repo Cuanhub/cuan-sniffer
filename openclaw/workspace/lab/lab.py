@@ -105,6 +105,11 @@ def cmd_refresh(a) -> int:
     known = [p.stem for p in paths.ARCHIVE.glob("*.json")]
     coins = sorted(set(coins) | set(known))      # keep archiving coins that left the top 45
     rep = archive.update(coins, client, log=lambda *_: None)
+    # 15m too: the 15m test (H-LTF15M) was limited to 52 days, the venue's
+    # ceiling, and could not rule out a material effect. Archived daily, the
+    # same pre-registered test has three times the trades in six months.
+    rep15 = archive.update(coins, client, log=lambda *_: None, interval="15m")
+    rep["failed"].update({f"{c} (15m)": w for c, w in rep15["failed"].items()})
     syn = sync.sync_live()
     man = json.loads(paths.ARCHIVE_MANIFEST.read_text())
     newest = max(c["last_t"] for c in man["coins"].values()) + 3_600_000

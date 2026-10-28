@@ -81,6 +81,30 @@ def main() -> int:
             "prereg": "research/backtest/PREREG_trendline_breakout.md",
             "report": "research/backtest/results/trendline_breakout/report.md",
             "source": "CuanSniffer repo, pre-registered 2026-10-27"})
+    res = HERE.parent / "research" / "backtest" / "results"
+    later = [
+        ("H-RRFLOOR", "Reward:risk floor -- do refused bands carry edge?", "rr_floor",
+         "has_edge", "NO EDGE in any bucket (live rr>=2 +0.055 p 0.60; rr 1-2 -0.060; rr 0.3-1 "
+         "-0.024). Every floor loses money; lowering it loses more.",
+         "research/backtest/PREREG_rr_floor.md"),
+        ("H-LTF15M", "15m break-of-structure confirmation (band stop / 15m stop)", "ltf_15m",
+         "adds_edge", "NO EDGE (B1 -0.067 p 0.53; B2 -0.006 p 0.95) on 52 days -- cannot rule "
+         "out a material effect; re-test when the 15m archive has ~6 months. As measurement: "
+         "0 of 281 outcomes change at 15m.", "research/backtest/PREREG_ltf_15m.md"),
+    ]
+    for hid, title, folder, flag, verdict, prereg in later:
+        f = res / folder / "summary.json"
+        if not f.exists():
+            continue
+        s = json.loads(f.read_text())
+        fr = s["framings"]
+        ledger.append("historical", hid, {
+            "title": title, "hypotheses": len(fr), "verdict": verdict,
+            "evidence": {k: {"estimate": v.get("estimate"), "ci": [v.get("ci_lo"), v.get("ci_hi")],
+                             "p": v.get("p"), "n": v.get("n")} for k, v in fr.items()},
+            "edge": {k: s["decision"][k][flag] for k in fr},
+            "prereg": prereg, "report": f"research/backtest/results/{folder}/report.md",
+            "source": "CuanSniffer repo, pre-registered 2026-10-27"})
     print(f"seeded {len(ledger.entries())} entries; hypotheses to date: {ledger.tested_count()}; "
           f"chain {'intact' if ledger.verify() is None else 'BROKEN'}")
     return 0

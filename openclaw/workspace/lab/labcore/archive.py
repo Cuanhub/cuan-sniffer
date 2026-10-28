@@ -20,6 +20,7 @@ Rules, each one a way an archive can quietly stop being real data:
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -28,18 +29,30 @@ from labcore import paths
 from research.backtest import data as D
 
 FIELDS = ("o", "h", "l", "c", "v")
+INTERVAL_MS = {"1h": D.HOUR_MS, "15m": D.HOUR_MS // 4}
+# A 5000-candle request costs about 100 weight against Hyperliquid's per-IP
+# budget of roughly 1200 a minute. If this lab runs on the same machine as the
+# live bot, they share that budget: at full speed a 45-coin refresh is ~4,500
+# weight in seconds, which rate-limited the live trader on 2026-10-27. One
+# request every FETCH_GAP_SEC keeps the lab far below the bot's share.
+FETCH_GAP_SEC = float(os.getenv("CUAN_LAB_FETCH_GAP_SEC", "10"))
 
 
-def _path(coin: str):
-    return paths.ARCHIVE / f"{coin}.json"
+def _dir(interval: str):
+    return {"1h": paths.ARCHIVE, "15m": paths.ARCHIVE_15M}[interval]
 
 
-def load(coin: str) -> List[Dict[str, Any]]:
-    p = _path(coin)
+def _path(coin: str, interval: str = "1h"):
+    return _dir(interval) / f"{coin}.json"
+
+
+def load(coin: str, interval: str = "1h") -> List[Dict[str, Any]]:
+    p = _path(coin, interval)
     return json.loads(p.read_text()) if p.exists() else []
 
 
-def merge(old: List[Dict[str, Any]], new: List[Dict[str, Any]], coin: str = ""
+def merge(old: List[Dict[str, Any]], new: List[Dict[str, Any]], coin: str = "",
+          interval_ms: int = D.HOUR_MS
           ) -> Tuple[List[Dict[str, Any]], Dict[str, int], List[Dict[str, Any]]]:
     """(merged, counts, revisions). Pure, so it can be tested exactly."""
     by_t = {b["t"]: b for b in old}
@@ -57,46 +70,53 @@ def merge(old: List[Dict[str, Any]], new: List[Dict[str, Any]], coin: str = ""
             by_t[b["t"]] = b
             revised += 1
     merged = [by_t[t] for t in sorted(by_t)]
-    v = D.validate(merged)
+    v = D.validate(merged, interval_ms)
     return merged, {"added": added, "revised": revised, "bars": len(merged),
                     "gaps": v["gaps"], "missing_bars": v["missing_bars"]}, revisions
 
 
-def update(coins: List[str], client=None, log=print) -> Dict[str, Any]:
+def update(coins: List[str], client=None, log=print, interval: str = "1h",
+           gap_sec: Optional[float] = None, sleep=time.sleep) -> Dict[str, Any]:
     if client is None:
         from research.levels.venue_client import HyperliquidReadOnlyClient
         client = HyperliquidReadOnlyClient()
-    paths.ARCHIVE.mkdir(parents=True, exist_ok=True)
-    fetched_ms = int(time.time() * 1000)
-    report: Dict[str, Any] = {"fetched_at_utc": datetime.fromtimestamp(
-        fetched_ms / 1000, timezone.utc).isoformat(timespec="seconds"),
-        "coins": {}, "failed": {}}
-    for coin in coins:
+    gap = FETCH_GAP_SEC if gap_sec is None else gap_sec
+    ims = INTERVAL_MS[interval]
+    _dir(interval).mkdir(parents=True, exist_ok=True)
+    report: Dict[str, Any] = {"interval": interval, "coins": {}, "failed": {}}
+    for k, coin in enumerate(coins):
+        if k:
+            sleep(gap)
+        fetched_ms = int(time.time() * 1000)
         try:
-            raw = client.get_candles(coin, "1h",
-                                     fetched_ms - (D.MAX_BARS + 2) * D.HOUR_MS,
-                                     fetched_ms)
+            raw = client.get_candles(coin, interval,
+                                     fetched_ms - (D.MAX_BARS + 2) * ims, fetched_ms)
         except Exception as e:                                  # noqa: BLE001
             report["failed"][coin] = str(e)[:120]
             continue
-        rows = D.normalise(raw, fetched_ms)
-        v = D.validate(rows)
+        rows = D.normalise(raw, fetched_ms, ims)
+        v = D.validate(rows, ims)
         if not v["usable"]:
             report["failed"][coin] = f"invalid bars from venue: {v}"
             continue
-        merged, counts, revs = merge(load(coin), rows, coin)
+        merged, counts, revs = merge(load(coin, interval), rows, coin, ims)
         if revs:
             paths.REVISIONS.parent.mkdir(parents=True, exist_ok=True)
             with paths.REVISIONS.open("a") as f:
                 for r in revs:
                     f.write(json.dumps(r) + "\n")
-        tmp = _path(coin).with_suffix(".tmp")
+        tmp = _path(coin, interval).with_suffix(".tmp")
         tmp.write_text(json.dumps(merged))
-        tmp.replace(_path(coin))
+        tmp.replace(_path(coin, interval))
         report["coins"][coin] = counts
-    manifest = manifest_now()
-    manifest["last_update"] = report
-    paths.ARCHIVE_MANIFEST.write_text(json.dumps(manifest, indent=1))
+    report["finished_at_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if interval == "1h":
+        manifest = manifest_now()
+        manifest["last_update"] = report
+        paths.ARCHIVE_MANIFEST.write_text(json.dumps(manifest, indent=1))
+    else:
+        (_dir(interval) / "_manifest.json").write_text(json.dumps(
+            {"interval": interval, "last_update": report}, indent=1))
     return report
 
 

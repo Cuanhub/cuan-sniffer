@@ -212,6 +212,32 @@ class TestArchive:
         assert max(b["t"] + H for b in snap.bars["X"]) <= cut
 
 
+class TestFetchPacing:
+    class Venue:
+        def __init__(self, step_ms):
+            self.calls, self.step = [], step_ms
+
+        def get_candles(self, coin, interval, start, end):
+            self.calls.append((coin, interval))
+            base = (end // self.step) * self.step - 1200 * self.step
+            return [{"t": base + k * self.step, "o": "10", "h": "11", "l": "9", "c": "10",
+                     "v": "1", "n": 1} for k in range(1200)]
+
+    def test_requests_are_spaced_to_spare_the_live_bot(self):
+        """Full speed on a shared IP rate-limited the live trader (2026-10-27)."""
+        slept = []
+        v = self.Venue(3_600_000)
+        archive.update(["A", "B", "C"], v, log=lambda *_: None, gap_sec=10, sleep=slept.append)
+        assert slept == [10, 10] and len(v.calls) == 3
+
+    def test_15m_bars_go_to_their_own_archive_without_false_gaps(self):
+        v = self.Venue(900_000)
+        rep = archive.update(["A"], v, log=lambda *_: None, interval="15m", sleep=lambda *_: None)
+        assert v.calls == [("A", "15m")]
+        assert (paths.ARCHIVE_15M / "A.json").exists() and not (paths.ARCHIVE / "A.json").exists()
+        assert rep["coins"]["A"]["gaps"] == 0, "15m bars validated with 1h spacing"
+
+
 # -------------------------------------------------------- controls --
 class TestControls:
     def test_draws_are_strictly_after_the_signal(self):

@@ -16,11 +16,11 @@ grounding. Remove an item when it is registered (note the experiment id).
    352 trades vs +17.1R/491 uncapped -- untested properly, and a far target
    is also a slow one (more exposure to the 3-loss stand-down).
 
-3. **MIN_RR from the operator's boundary labels.** Do refusals at rr
-   1.5-2.0 lose? Needs `labels.csv` rows on boundary cases (tools/boundary).
-   Grounding: the rr floor was set by inference from a different strategy's
-   episodes. This one needs the operator to label first -- ask, don't
-   guess.
+3. **Bids vs market entries within a reward:risk bucket.** Descriptive in
+   H-RRFLOOR: filled bids in rr 1-2 did worse than random bids (-0.095R,
+   iid p 0.014) while market entries did not (+0.046). Untested -- a
+   question about adverse selection when a bid fills on a falling price.
+   (The floor itself is settled: H-RRFLOOR found no edge in any bucket.)
 
 4. **Re-entry cooldown on the bid path.** The 6h post-loss cooldown only
    applies to market entries; ~90% of entries are bids. Measure whether
@@ -64,5 +64,9 @@ grounding. Remove an item when it is registered (note the experiment id).
     funding field has earned evidence. Grounding: the basis veto (perp
     above oracle) is the only context feature that has.
 
+12. **15m confirmation, re-test.** H-LTF15M's design, unchanged, once the 15m
+    archive holds ~6 months (the first test had 52 days and could not rule
+    out a material effect).
+
 Do NOT queue without new reasoning: killzone timing, HTF bias, per-coin
-selection -- see graveyard.md.
+selection, lowering the reward:risk floor -- see graveyard.md.

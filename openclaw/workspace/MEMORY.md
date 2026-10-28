@@ -78,6 +78,31 @@ from a flawed scratch harness. (H-TRENDLINE baseline, 2026-10-27.)
   p 0.47 (iid said 0.04 -- the clustering is not optional). Dead.
 Report: lab/research/backtest/results/trendline_breakout/.
 
+## Reward:risk floor (H-RRFLOOR, pre-registered, 2026-10-27): no edge anywhere
+
+Edge per trade against random orders of the trade's own type placed after
+it: live trades (rr >= 2) +0.055R p 0.60; refused rr 1-2 -0.060R; refused
+rr 0.3-1 -0.024R. Every floor from 0.3 to 3.0 loses money on 30 weeks;
+lowering the floor loses MORE (1.0: -166.9R vs -79.1R at 2.0), raising it
+loses less only by trading less (rr >= 3 shows +0.002R of edge). The live
+recorder's "33 of 37 refused bands won" was one four-hour rally.
+
+## 15m read (H-LTF15M, pre-registered, 2026-10-27): no edge, no measurement gain
+
+15m break-of-structure confirmation inside the band: -0.067R (band stop),
+-0.006R (15m stop) against later random entries with the same geometry;
+neither changes per-setup results against the live strategy. Replayed on
+15m, 0 of 281 live-strategy outcomes change: the 1h engine is accurate for
+this strategy. Only 52 days of 15m history existed; the lab archives 15m
+daily now -- re-test the same design at ~6 months.
+
+## Live recorder (fixed 2026-10-27)
+
+Band outcomes are resolved by research.backtest.engine (conservative, net of
+measured costs), once per band (band_id), and recorded hourly even when the
+book is full. Before that the record counted each band again every hour,
+was gross, and sampled only ~8% of hours.
+
 ## How this lab came to be
 
 Built 2026-10-27 after a week in which five analytical errors were caught
