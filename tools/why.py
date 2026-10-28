@@ -78,7 +78,11 @@ def joined() -> List[Dict[str, Any]]:
         r: Dict[str, Any] = dict(e)
         r["_won"] = flag(o.get("won"))
         r["_filled"] = flag(o.get("filled"))
-        r["_r"] = num(o, "outcome_r")
+        # NET R, after this account's measured fees and slippage, whenever
+        # the conservative resolver wrote it. Gross R reads every trade as
+        # better than it was, and the closer the target the bigger the lie:
+        # a win at rr 0.02 is +0.02 gross and a loss once fees are paid.
+        r["_r"] = num(o, "r_net") if str(o.get("r_net", "")).strip() else num(o, "outcome_r")
         r["_mae"] = num(o, "mae_pct")
         r["_taken"] = flag(e.get("taken"))
         rows.append(r)

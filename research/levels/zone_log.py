@@ -43,6 +43,32 @@ def episode_id(plan: Plan) -> str:
     return f"zone:{z.coin}:{z.base_i}:{z.lo:.10g}"
 
 
+HOUR_MS = 3_600_000
+
+
+def band_id(coin: str, base_t: int, lo: float) -> str:
+    """A band's identity that survives the window sliding: coin, the base
+    candle's TIMESTAMP, the band low. (episode_id above uses the base
+    candle's INDEX, which moves by one each hour as the 1200-bar window
+    slides, so it named the same band afresh every hour.)"""
+    return f"band:{str(coin).upper()}:{int(base_t)}:{float(lo):.10g}"
+
+
+def band_key(row: Dict[str, Any]) -> Optional[str]:
+    """band_id for a recorded row -- from its own column, or, for rows
+    written before that column existed, from fields every row has: the
+    detection bar's timestamp and how many bars back the base sat."""
+    if row.get("band_id"):
+        return str(row["band_id"])
+    try:
+        ts = int(float(row["bar_ts_ms"]))
+        since = int(float(row["bars_since_base"]))
+        lo = float(row["zone_lo"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return band_id(row.get("coin", ""), ts - (since - 1) * HOUR_MS, lo)
+
+
 def _f(v: Any) -> Any:
     """A float rounded for the file, or "" so a missing value stays missing
     rather than becoming a zero somebody later averages."""
@@ -99,6 +125,8 @@ def episode_row(plan: Plan, bars: Sequence[Dict[str, Any]], px: float,
         "basis_bps": basis,
         "taken": bool(taken),
         "refused_reason": refused or "",
+        "band_id": (band_id(z.coin, int(bars[z.base_i].get("t") or 0), z.lo)
+                    if bars and 0 <= z.base_i < len(bars) else ""),
     }
 
 
@@ -155,24 +183,38 @@ def record_pass(found: Dict[str, List[Plan]],
 
 
 # ── resolving what happened ────────────────────────────────────────────────
+#
+# Delegated to research.backtest.engine, so a recorded outcome and a
+# backtested one are produced by ONE implementation and cannot drift apart.
+# What that changed, from the rules this file used to apply itself
+# (2026-10-27):
+#   - a target touched in the same hour a bid filled no longer counts as a
+#     win: the high may have printed before the dip that filled it. 6 of the
+#     first 23 recorded "wins" were that;
+#   - a bid fills only within its 12h life, as the live one does, instead of
+#     at any later bar;
+#   - an in-band market entry starts at its recorded price and is judged
+#     from the NEXT hour, not by the hour it happened in;
+#   - stops pay the measured slippage, gaps through a stop exit at the
+#     open, and r_net is after this account's measured fees.
+# And each BAND resolves once, at its first sighting -- not once per hourly
+# re-sighting.
 
-MIN_BARS_TO_RESOLVE = 24     # a winner's median time-to-target was 5 bars
+RESOLVER = "engine-v1"
+BID_TTL_BARS = 12        # = core.protect.BID_TTL_HOURS; test_backtest_live_parity pins it
 
 
-def resolve_one(ep: Dict[str, Any], fwd: Sequence[Dict[str, Any]]
+def resolve_one(ep: Dict[str, Any], bars: Sequence[Dict[str, Any]]
                 ) -> Optional[Dict[str, Any]]:
-    """One episode's outcome from the bars that followed it, or None if it
-    cannot be resolved yet.
+    """One episode's outcome, or None if it cannot be resolved yet.
 
-    `fwd` must START at the bar after detection. The entry fills when a low
-    reaches it -- the same mechanic as the resting bid -- and only then can
-    the stop or target be touched.
-
-    A bar that touches BOTH the stop and the target counts as a LOSS. The
-    data cannot say which came first inside a bar, and assuming the good one
-    is how a backtest flatters itself; the scanner's own resolver makes the
-    same choice.
+    `bars` are CLOSED 1h bars beginning AT the detection bar (the bar whose
+    open time is the episode's bar_ts_ms). That bar is where the decision
+    was made; nothing about the exit is read from it.
     """
+    from research.backtest.costs import MEASURED
+    from research.backtest.engine import LIMIT, MARKET_AT, Order, simulate
+
     def g(k: str) -> Optional[float]:
         try:
             v = float(ep.get(k, ""))
@@ -185,81 +227,96 @@ def resolve_one(ep: Dict[str, Any], fwd: Sequence[Dict[str, Any]]
         return None
     if not (entry > stop > 0) or tp <= entry:
         return None
-    if len(fwd) < MIN_BARS_TO_RESOLVE:
+    try:
+        ts = int(float(ep.get("bar_ts_ms") or 0))
+    except (TypeError, ValueError):
         return None
-
-    fill_i = next((k for k, b in enumerate(fwd) if b["l"] <= entry), None)
+    if not bars or int(bars[0].get("t", -1)) != ts:
+        return None                      # the detection bar is not closed yet
+    immediate = str(ep.get("immediate", "")).strip().lower() in ("true", "1")
+    o = Order(str(ep.get("coin", "")), 0, MARKET_AT if immediate else LIMIT,
+              stop, tp, limit=entry, ttl=BID_TTL_BARS)
+    tr = simulate(list(bars), o, MEASURED)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    base = {"zone_episode_id": ep["zone_episode_id"], "coin": ep.get("coin", ""),
-            "resolved_at_utc": now, "bars_elapsed": len(fwd)}
-    if fill_i is None:
-        # Never filled. Recorded rather than dropped: a band price never
-        # reached is a different outcome from one that filled and lost, and
-        # collapsing them hides how often the strategy simply waits.
-        return {**base, "filled": False, "bars_to_fill": -1,
-                "hit_stop": "", "hit_tp": "", "bars_to_stop": -1,
-                "bars_to_tp": -1, "won": "", "outcome_r": "",
-                "mae_pct": "", "mfe_pct": ""}
-
-    after = fwd[fill_i:]
-    s_i = next((k for k, b in enumerate(after) if b["l"] <= stop), None)
-    t_i = next((k for k, b in enumerate(after) if b["h"] >= tp), None)
-    if s_i is None and t_i is None:
+    base = {"zone_episode_id": ep.get("zone_episode_id", ""),
+            "coin": ep.get("coin", ""), "resolved_at_utc": now,
+            "bars_elapsed": len(bars) - 1, "band_id": band_key(ep) or "",
+            "resolver": RESOLVER}
+    if tr is None:
+        if immediate or len(bars) - 1 < BID_TTL_BARS:
+            return None                  # a bid still inside its life
+        # Never filled within the bid's life. Recorded, not dropped: a band
+        # price never reached is a different outcome from one that filled
+        # and lost, and collapsing them hides how often the strategy waits.
+        return {**base, "filled": False, "bars_to_fill": -1, "hit_stop": "",
+                "hit_tp": "", "bars_to_stop": -1, "bars_to_tp": -1, "won": "",
+                "outcome_r": "", "mae_pct": "", "mfe_pct": "", "r_gross": "",
+                "r_net": "", "cost_r": "", "exit": "expired",
+                "fill_bar_tp": "", "ambiguous": ""}
+    if not tr.resolved or tr.exit_i is None:
         return None                      # still open: resolve it later
-    won = t_i is not None and (s_i is None or t_i < s_i)
-    rr = (tp - entry) / (entry - stop)
-    lo = min(b["l"] for b in after)
-    hi = max(b["h"] for b in after)
-    return {**base, "filled": True, "bars_to_fill": fill_i,
-            "hit_stop": s_i is not None, "hit_tp": t_i is not None,
-            "bars_to_stop": s_i if s_i is not None else -1,
-            "bars_to_tp": t_i if t_i is not None else -1,
-            "won": bool(won),
-            "outcome_r": round(rr if won else -1.0, 4),
+    exit_i = tr.exit_i
+    held = bars[tr.entry_i + (1 if immediate else 0): exit_i + 1]
+    lo = min(b["l"] for b in held) if held else entry
+    hi = max(b["h"] for b in held) if held else entry
+    won = tr.outcome == "tp"
+    k = exit_i - tr.entry_i
+    return {**base, "filled": True, "bars_to_fill": tr.entry_i,
+            "hit_stop": tr.outcome == "stop", "hit_tp": won or tr.ambiguous,
+            "bars_to_stop": k if not won else -1, "bars_to_tp": k if won else -1,
+            "won": won, "outcome_r": round(tr.r_gross, 4),
             "mae_pct": round((lo - entry) / entry * 100, 4),
-            "mfe_pct": round((hi - entry) / entry * 100, 4)}
+            "mfe_pct": round((hi - entry) / entry * 100, 4),
+            "r_gross": round(tr.r_gross, 4), "r_net": round(tr.r_net, 4),
+            "cost_r": round(tr.cost_r, 4), "exit": tr.outcome,
+            "fill_bar_tp": bool(tr.fill_bar_tp), "ambiguous": bool(tr.ambiguous)}
+
+
+def first_sightings(eps: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """band_id -> the band's FIRST recorded episode. Later re-sightings of a
+    band are the same opportunity seen again, not new trades."""
+    out: Dict[str, Dict[str, Any]] = {}
+    order = sorted(eps, key=lambda e: (str(e.get("detected_at_utc", "")),
+                                       str(e.get("bar_ts_ms", ""))))
+    for e in order:
+        k = band_key(e)
+        if k and k not in out:
+            out[k] = e
+    return out
 
 
 def resolve(client, hours: int = 1200) -> int:
-    """Resolve every unresolved band episode. Returns rows written.
-
-    Reads only, apart from appending outcomes, and one candle fetch per coin
-    that has something unresolved.
-    """
-    eps = [e for e in storage.load_zone_episodes()
-           if e.get("zone_episode_id") not in storage.zone_resolved_ids()]
-    if not eps:
+    """Resolve every band whose first sighting has no outcome yet. Returns
+    rows written. Reads only, apart from appending outcomes, and one candle
+    fetch per coin with something pending."""
+    from research.backtest import data as D
+    done = storage.zone_resolved_bands()
+    pending = [e for k, e in first_sightings(storage.load_zone_episodes()).items()
+               if k not in done]
+    if not pending:
         return 0
     import time as _t
     now_ms = int(_t.time() * 1000)
     by_coin: Dict[str, List[Dict[str, Any]]] = {}
-    for e in eps:
+    for e in pending:
         by_coin.setdefault(str(e.get("coin", "")).upper(), []).append(e)
     written = 0
     for coin, rows in by_coin.items():
         if not coin:
             continue
         try:
-            raw = client.get_candles(coin, "1h",
-                                     now_ms - hours * 3600_000, now_ms)
+            raw = client.get_candles(coin, "1h", now_ms - hours * HOUR_MS, now_ms)
         except Exception as exc:                               # noqa: BLE001
             print(f"[ZONE_LOG] {coin}: bars unavailable "
                   f"({str(exc)[:70]}) -- leaving its episodes unresolved")
             continue
-        bars = []
-        for b in raw or []:
-            try:
-                bars.append({"t": int(b["t"]), "h": float(b["h"]),
-                             "l": float(b["l"]), "c": float(b["c"])})
-            except (KeyError, TypeError, ValueError):
-                continue
+        bars = D.normalise(raw, now_ms)          # closed bars only
         for e in rows:
             try:
                 ts = int(float(e.get("bar_ts_ms") or 0))
             except (TypeError, ValueError):
                 continue
-            fwd = [b for b in bars if b["t"] > ts]
-            out = resolve_one(e, fwd)
+            out = resolve_one(e, [b for b in bars if b["t"] >= ts])
             if out and storage.append_zone_outcome(out):
                 written += 1
     return written

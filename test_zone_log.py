@@ -90,82 +90,127 @@ def test_recording_never_raises_into_the_pass():
     assert zone_log.record_pass({"SOL": [plan()]}, 2.0, {}) >= 0
 
 
-# ── resolving: `won` is decided once, here ─────────────────────────────────
+# ── resolving: through the backtest engine, once per band ──────────────────
 
-def test_the_target_before_the_stop_is_a_win():
-    fwd = ([{"t": 1, "h": 102.0, "l": 101.0, "c": 101.5}] * 25
-           + [{"t": 2, "h": 113.0, "l": 101.0, "c": 112.5}])
-    out = zone_log.resolve_one(
-        zone_log.episode_row(plan(), bars(), 101.0, taken=True), fwd)
-    assert out and out["won"] is True
-    assert out["outcome_r"] == pytest.approx((112.0 - 101.5) / (101.5 - 97.0),
-                                             abs=1e-3)
+H = 3_600_000
 
 
-def test_the_stop_before_the_target_is_a_loss_of_exactly_one_R():
-    fwd = ([{"t": 1, "h": 102.0, "l": 101.0, "c": 101.5}] * 25
-           + [{"t": 2, "h": 102.0, "l": 96.0, "c": 96.5}])
-    out = zone_log.resolve_one(
-        zone_log.episode_row(plan(), bars(), 101.0, taken=True), fwd)
-    assert out and out["won"] is False
-    assert out["outcome_r"] == -1.0
+def ep(p=None, **kw):
+    """An episode recorded at the last bar of bars() (t = 949 h)."""
+    return zone_log.episode_row(p or plan(**kw), bars(), 101.0, taken=True)
+
+
+def seq(*rest, ts=949 * H):
+    """Closed bars from the detection bar onward: the detection bar first."""
+    det = {"t": ts, "o": 101.0, "h": 102.0, "l": 100.0, "c": 101.0}
+    return [det] + [dict(b, t=ts + (k + 1) * H) for k, b in enumerate(rest)]
+
+
+QUIET = {"o": 101.5, "h": 102.0, "l": 101.0, "c": 101.5}
+
+
+def test_the_target_before_the_stop_is_a_win_net_of_costs():
+    out = zone_log.resolve_one(ep(), seq(QUIET, {"o": 101.5, "h": 113.0, "l": 101.0, "c": 112.5}))
+    assert out and out["won"] is True and out["exit"] == "tp"
+    gross = (112.0 - 101.5) / (101.5 - 97.0)
+    assert out["r_gross"] == pytest.approx(gross, abs=1e-3)
+    assert out["r_net"] < out["r_gross"], "fees were not charged"
+    assert out["resolver"] == zone_log.RESOLVER
+
+
+def test_a_stop_loses_slightly_more_than_one_R_from_measured_slippage():
+    out = zone_log.resolve_one(ep(), seq(QUIET, {"o": 101.5, "h": 102.0, "l": 96.0, "c": 96.5}))
+    assert out["won"] is False and out["exit"] == "stop"
+    assert -1.1 < out["r_gross"] < -1.0
+    assert out["r_net"] < out["r_gross"]
 
 
 def test_a_bar_touching_BOTH_counts_as_a_loss():
-    """The data cannot say which came first inside a bar, and assuming the
-    good one is how a backtest flatters itself. This is the single trap that
-    contaminated the first pass of the 2026-10-26 analysis -- hit_tp and
-    hit_stop were both true on hundreds of episodes.
-    """
-    fwd = ([{"t": 1, "h": 102.0, "l": 101.0, "c": 101.5}] * 25
-           + [{"t": 2, "h": 113.0, "l": 96.0, "c": 100.0}])
-    out = zone_log.resolve_one(
-        zone_log.episode_row(plan(), bars(), 101.0, taken=True), fwd)
-    assert out["hit_tp"] is True and out["hit_stop"] is True
-    assert out["won"] is False, "a both-touched bar was scored as a win"
-    assert out["outcome_r"] == -1.0
+    """The data cannot say which came first inside a bar."""
+    out = zone_log.resolve_one(ep(), seq(QUIET, {"o": 101.5, "h": 113.0, "l": 96.0, "c": 100.0}))
+    assert out["won"] is False and out["ambiguous"] is True
+
+
+def test_a_target_in_the_hour_a_bid_filled_is_not_a_win():
+    """The high may have printed before the dip that filled the bid. The old
+    resolver counted these -- 6 of the first 23 recorded wins."""
+    e = ep(entry=100.5, immediate=False)
+    out = zone_log.resolve_one(e, seq({"o": 102.0, "h": 113.0, "l": 100.0, "c": 101.0},
+                                      {"o": 101.0, "h": 101.5, "l": 96.0, "c": 96.5}))
+    assert out["won"] is False and out["fill_bar_tp"] is True
+
+
+def test_an_in_band_entry_is_not_judged_by_its_own_hour():
+    """Its recorded price came partway through the detection bar."""
+    det_dipped = {"t": 949 * H, "o": 101.0, "h": 102.0, "l": 90.0, "c": 101.0}
+    out = zone_log.resolve_one(ep(), [det_dipped] + seq(QUIET, {"o": 101.5, "h": 113.0,
+                                                               "l": 101.0, "c": 112.5})[1:])
+    assert out["won"] is True
+
+
+def test_a_bid_fills_only_within_its_twelve_hour_life():
+    e = ep(entry=99.0, immediate=False)
+    late = [QUIET] * 12 + [{"o": 101.0, "h": 101.0, "l": 98.0, "c": 99.5}]
+    out = zone_log.resolve_one(e, seq(*late))
+    assert out and out["filled"] is False and out["exit"] == "expired"
+    assert zone_log.resolve_one(e, seq(*([QUIET] * 5))) is None, "resolved inside its life"
 
 
 def test_won_is_stored_so_no_consumer_can_re_derive_it_wrongly():
-    fwd = ([{"t": 1, "h": 102.0, "l": 101.0, "c": 101.5}] * 25
-           + [{"t": 2, "h": 113.0, "l": 96.0, "c": 100.0}])
-    out = zone_log.resolve_one(
-        zone_log.episode_row(plan(), bars(), 101.0, taken=True), fwd)
-    assert "won" in storage.ZONE_OUTCOME_FIELDNAMES
-    assert out["won"] in (True, False)
-
-
-def test_a_band_price_never_reached_is_recorded_not_dropped():
-    """A band price never reached is a different outcome from one that
-    filled and lost, and collapsing them hides how often the strategy simply
-    waits."""
-    p = plan(entry=90.0, stop=85.0, tp=110.0, immediate=False)
-    fwd = [{"t": 1, "h": 102.0, "l": 95.0, "c": 101.0}] * 30
-    out = zone_log.resolve_one(
-        zone_log.episode_row(p, bars(), 101.0, taken=True), fwd)
-    assert out and out["filled"] is False
-    assert out["won"] == "" and out["outcome_r"] == ""
+    assert {"won", "r_net", "band_id", "resolver"} <= set(storage.ZONE_OUTCOME_FIELDNAMES)
 
 
 def test_an_unfinished_trade_is_left_unresolved():
-    """Neither stop nor target touched: resolve it later, do not guess."""
-    fwd = [{"t": 1, "h": 102.0, "l": 101.0, "c": 101.5}] * 40
-    assert zone_log.resolve_one(
-        zone_log.episode_row(plan(), bars(), 101.0, taken=True), fwd) is None
+    assert zone_log.resolve_one(ep(), seq(*([QUIET] * 40))) is None
 
 
-def test_too_few_bars_is_unresolved_rather_than_a_loss():
-    """A winner's median time to target was 5 bars, so a handful of bars
-    cannot distinguish a loser from an open trade."""
-    fwd = [{"t": 1, "h": 102.0, "l": 96.0, "c": 96.5}] * 3
-    assert zone_log.resolve_one(
-        zone_log.episode_row(plan(), bars(), 101.0, taken=True), fwd) is None
+def test_an_unclosed_detection_bar_is_unresolved():
+    assert zone_log.resolve_one(ep(), seq(QUIET, ts=948 * H)) is None
 
 
 def test_broken_geometry_is_refused_not_resolved():
-    for p in (plan(entry=97.0, stop=101.0), plan(tp=95.0)):
-        row = zone_log.episode_row(p, bars(), 101.0, taken=True)
-        assert zone_log.resolve_one(row, bars(40)) is None
+    for p_ in (plan(entry=97.0, stop=101.0), plan(tp=95.0)):
+        assert zone_log.resolve_one(ep(p_), seq(QUIET)) is None
+
+
+def test_the_resolver_is_the_engine():
+    """One implementation: the recorded R IS the engine's R on the same bars."""
+    from research.backtest.costs import MEASURED
+    from research.backtest.engine import MARKET_AT, Order, simulate
+    b = seq(QUIET, {"o": 101.5, "h": 113.0, "l": 101.0, "c": 112.5})
+    out = zone_log.resolve_one(ep(), b)
+    tr = simulate(b, Order("SOL", 0, MARKET_AT, 97.0, 112.0, limit=101.5), MEASURED)
+    assert out["r_net"] == round(tr.r_net, 4)
+
+
+# ── one band, one record ───────────────────────────────────────────────────
+
+def test_the_band_id_survives_the_window_sliding():
+    """The SAME base candle an hour later sits one index lower in the
+    window. episode_id changes; band_id must not."""
+    b0 = bars(950)
+    # the next hour's window: drop the oldest bar, add a new one at the end
+    b1 = [dict(b, t=b0[i + 1]["t"]) for i, b in enumerate(b0[1:])] + [dict(b0[-1], t=950 * H)]
+    r0 = zone_log.episode_row(plan(base_i=900), b0, 101.0, taken=True)
+    r1 = zone_log.episode_row(plan(base_i=899), b1, 101.0, taken=True)
+    assert r0["zone_episode_id"] != r1["zone_episode_id"]
+    assert r0["band_id"] == r1["band_id"] != ""
+    assert zone_log.band_key(r0) == zone_log.band_key({**r0, "band_id": ""})
+
+
+def test_a_band_is_recorded_once_across_passes():
+    b0 = bars(950)
+    b1 = [dict(b, t=b0[i + 1]["t"]) for i, b in enumerate(b0[1:])] + [dict(b0[-1], t=950 * H)]
+    assert zone_log.record_pass({"SOL": [plan(base_i=900)]}, 2.0, {"SOL": b0}) == 1
+    assert zone_log.record_pass({"SOL": [plan(base_i=899)]}, 2.0, {"SOL": b1}) == 0
+
+
+def test_each_band_resolves_once_at_its_first_sighting():
+    first = {**ep(), "detected_at_utc": "2026-10-27T00:00:00Z"}
+    later = {**ep(), "zone_episode_id": "zone:SOL:899:100", "bar_ts_ms": 950 * H,
+             "bars_since_base": 51, "detected_at_utc": "2026-10-27T01:00:00Z", "band_id": ""}
+    picks = zone_log.first_sightings([later, first])
+    assert list(picks.values()) == [first]
 
 
 # ── which bands are worth a human verdict ──────────────────────────────────
@@ -228,3 +273,72 @@ def test_an_unparseable_rr_is_skipped_not_crashed():
 def test_the_limit_is_a_sitting_not_a_mailing_list():
     rows = [_row(rr=2.0 + i * 0.001, eid=f"e{i}") for i in range(80)]
     assert len(zone_log.boundary_cases(rows, 2.0, limit=10)) == 10
+
+
+def test_resolve_writes_one_outcome_per_band_from_closed_bars_only():
+    """End to end: two sightings of one band, candles in the venue's string
+    format, the newest one still forming."""
+    import time as _time
+    now = int(_time.time() * 1000)
+    ts = (now // H) * H - 30 * H                       # detection 30 h ago
+    first = {**ep(), "bar_ts_ms": ts, "detected_at_utc": "2026-10-27T00:00:00Z",
+             "band_id": "band:SOL:1:100"}
+    again = {**first, "zone_episode_id": "zone:SOL:899:100", "bar_ts_ms": ts + H,
+             "detected_at_utc": "2026-10-27T01:00:00Z"}
+    for row in (first, again):
+        storage._append("zone_episodes.csv", storage.ZONE_EPISODE_FIELDNAMES, row,
+                        "zone_episode_id")
+    candles = [{"t": ts + k * H, "o": "101.5", "h": "102", "l": "101", "c": "101.5"}
+               for k in range(31)]
+    candles[3].update({"h": "113", "c": "112.5"})       # the target, 3 h after detection
+    candles[-1].update({"l": "50"})                     # the FORMING bar: must be ignored
+
+    class Venue:
+        def get_candles(self, coin, interval, start, end):
+            return candles
+
+    assert zone_log.resolve(Venue()) == 1
+    outs = list(__import__("csv").DictReader(open(storage.DATA_DIR / "zone_outcomes.csv")))
+    assert len(outs) == 1
+    assert outs[0]["zone_episode_id"] == first["zone_episode_id"]
+    assert outs[0]["won"] == "True" and outs[0]["band_id"] == "band:SOL:1:100"
+    assert zone_log.resolve(Venue()) == 0, "the band resolved twice"
+
+
+def _stored(row):
+    storage._append("zone_episodes.csv", storage.ZONE_EPISODE_FIELDNAMES, row, "zone_episode_id")
+
+
+def test_the_forming_bar_cannot_resolve_a_trade():
+    """Still open on every CLOSED bar; only the still-forming bar reaches the
+    stop. Its low is not final, so nothing may be resolved from it."""
+    import time as _time
+    now = int(_time.time() * 1000)
+    ts = (now // H) * H - 20 * H
+    _stored({**ep(), "bar_ts_ms": ts, "band_id": "band:SOL:2:100"})
+    candles = [{"t": ts + k * H, "o": "101.5", "h": "102", "l": "101", "c": "101.5"}
+               for k in range(21)]
+    candles[-1].update({"l": "90"})                      # forming: t + 1h > now
+
+    class Venue:
+        def get_candles(self, coin, interval, start, end):
+            return candles
+    assert candles[-1]["t"] + H > now
+    assert zone_log.resolve(Venue()) == 0
+
+
+def test_a_band_already_resolved_under_another_episode_id_is_not_resolved_again():
+    """Band-level, not just id-level: storage's id check alone would let the
+    same band resolve twice under two different episode ids."""
+    import time as _time
+    now = int(_time.time() * 1000)
+    ts = (now // H) * H - 30 * H
+    _stored({**ep(), "bar_ts_ms": ts, "band_id": "band:SOL:3:100"})
+    storage.append_zone_outcome({"zone_episode_id": "zone:SOL:OTHER", "band_id": "band:SOL:3:100",
+                                 "coin": "SOL", "won": "False"})
+    candles = [{"t": ts + k * H, "o": "101.5", "h": "113", "l": "101", "c": "112"} for k in range(31)]
+
+    class Venue:
+        def get_candles(self, coin, interval, start, end):
+            return candles
+    assert zone_log.resolve(Venue()) == 0

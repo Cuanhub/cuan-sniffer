@@ -103,6 +103,14 @@ ZONE_EPISODE_FIELDNAMES = [
     "mark_px", "oracle_px", "basis_bps",
     # what the pass actually did, and why not
     "taken", "refused_reason",
+    # 2026-10-27: the band's STABLE identity -- coin, the base candle's
+    # timestamp, the band low. zone_episode_id uses the base candle's INDEX
+    # in the sliding 1200-bar window, which moves by one every hour, so the
+    # same band was recorded again every hour under a new id: 501 rows held
+    # 111 bands. Recording and resolving now key on this. (zone_episode_id
+    # is kept as is: it is also the executor's per-trade id, and two trades
+    # on one band must stay two records.)
+    "band_id",
 ]
 
 ZONE_OUTCOME_FIELDNAMES = [
@@ -115,6 +123,15 @@ ZONE_OUTCOME_FIELDNAMES = [
     # single biggest trap in the 2026-10-26 analysis, and storing the ordered
     # result means it cannot be made twice.
     "won", "outcome_r", "mae_pct", "mfe_pct",
+    # 2026-10-27: resolved by research.backtest.engine -- the backtest's own
+    # conservative rules, one implementation for both -- with costs measured
+    # from this account's fills. Before this, a target touched in the hour a
+    # bid filled counted as a win, a bid could fill days after the live one
+    # would have expired, and R was gross. `outcome_r` is now the engine's
+    # gross R (slippage in, fees out); `r_net` is after fees -- the number to
+    # judge money by. `won` = the target was reached first under those rules.
+    "band_id", "r_gross", "r_net", "cost_r", "exit", "fill_bar_tp",
+    "ambiguous", "resolver",
 ]
 
 LABEL_FIELDNAMES = [
@@ -198,8 +215,9 @@ def append_label(row: Dict[str, Any]) -> bool:
 
 
 def append_zone_episode(row: Dict[str, Any]) -> bool:
+    """One row per BAND (band_id), not per hourly re-sighting of it."""
     return _append("zone_episodes.csv", ZONE_EPISODE_FIELDNAMES, row,
-                   "zone_episode_id")
+                   "band_id" if row.get("band_id") else "zone_episode_id")
 
 
 def append_zone_outcome(row: Dict[str, Any]) -> bool:
@@ -217,6 +235,11 @@ def load_zone_episodes() -> List[Dict[str, Any]]:
 
 def zone_resolved_ids() -> Set[str]:
     return _existing_ids(_path("zone_outcomes.csv"), "zone_episode_id")
+
+
+def zone_resolved_bands() -> Set[str]:
+    """band_ids that already have an outcome: each band resolves once."""
+    return _existing_ids(_path("zone_outcomes.csv"), "band_id")
 
 
 def load_episodes() -> List[Dict[str, Any]]:

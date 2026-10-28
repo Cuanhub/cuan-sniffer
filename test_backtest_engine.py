@@ -211,3 +211,21 @@ class NoLookahead(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MarketAtAKnownPrice(unittest.TestCase):
+    """A live in-band entry: filled at a recorded price mid-bar."""
+
+    def test_fills_at_the_recorded_price_and_skips_the_entry_bar(self):
+        from research.backtest.engine import MARKET_AT
+        bars = [bar(100, 112, 90, 101),        # entry bar: its range is NOT used
+                bar(101, 111, 100, 110)]
+        tr = simulate(bars, Order("X", 0, MARKET_AT, 95, 110, limit=100.5), FRICTIONLESS)
+        self.assertEqual((tr.entry_i, tr.entry_px, tr.outcome, tr.exit_i), (0, 100.5, "tp", 1))
+
+    def test_pays_the_taker_fee(self):
+        from research.backtest.engine import MARKET_AT
+        bars = [bar(100, 100, 100, 100), bar(100, 111, 99, 110)]
+        at = simulate(bars, Order("X", 0, MARKET_AT, 95, 110, limit=100.0))
+        bid_like = simulate(bars, Order("X", 0, MARKET_AT, 95, 110, limit=100.0, entry_fee="maker"))
+        self.assertGreater(at.cost_r, bid_like.cost_r)

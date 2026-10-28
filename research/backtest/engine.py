@@ -17,6 +17,10 @@ Entry
   LIMIT             a resting bid at `limit` for bars i+1 .. i+ttl (maker),
                     filled at the limit the first time a bar's low reaches
                     it. Production's PROTECT_BID_TTL_HOURS is 12.
+  MARKET_AT         a market entry at a KNOWN price (`limit`) somewhere inside
+                    bar i -- a live entry recorded mid-hour (taker). Bar i is
+                    not used to resolve the exit: part of its range happened
+                    before the entry, and the order within it is unknown.
 
 Exit (stop and target are both trigger -> market orders: taker)
   - a bar that reaches the stop and the target is a LOSS;
@@ -42,6 +46,7 @@ from research.backtest.costs import Costs, MEASURED
 MARKET_CLOSE = "market_close"
 MARKET_NEXT_OPEN = "market_next_open"
 LIMIT = "limit"
+MARKET_AT = "market_at"
 
 
 @dataclass(frozen=True)
@@ -109,6 +114,10 @@ def _fill(bars: List[Dict[str, Any]], o: Order, costs: Costs):
         px = bars[i + 1]["o"] * (1 + costs.market_entry_slip_pct / 100)
         fee = costs.taker_fee_pct
         entry_i, first = i + 1, i + 1
+    elif o.kind == MARKET_AT:
+        px = o.limit * (1 + costs.market_entry_slip_pct / 100)
+        fee = costs.taker_fee_pct
+        entry_i, first = i, i + 1
     elif o.kind == LIMIT:
         for j in range(i + 1, min(i + 1 + o.ttl, n)):
             if bars[j]["l"] <= o.limit:

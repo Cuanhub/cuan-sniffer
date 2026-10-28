@@ -155,7 +155,8 @@ def score() -> int:
         w = won_of(o)
         if w is None:
             continue
-        rows.append((lab["verdict"].strip().lower(), w, _num(o, "outcome_r"),
+        r_val = _num(o, "r_net") if str(o.get("r_net", "")).strip() else _num(o, "outcome_r")
+        rows.append((lab["verdict"].strip().lower(), w, r_val,
                      "band" if eid.startswith("zone:") else "level"))
     if not rows:
         print(f"  {len(labs)} labels, none with a resolved outcome yet")

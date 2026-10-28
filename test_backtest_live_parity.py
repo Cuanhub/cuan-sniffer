@@ -16,6 +16,10 @@ class LiveParity(unittest.TestCase):
     def test_bid_ttl_is_production_s(self):
         self.assertEqual(band.BID_TTL_BARS, protect.BID_TTL_HOURS)
 
+    def test_the_outcome_recorder_uses_the_live_bid_life(self):
+        from research.levels import zone_log
+        self.assertEqual(zone_log.BID_TTL_BARS, protect.BID_TTL_HOURS)
+
 
 if __name__ == "__main__":
     unittest.main()
