@@ -1152,3 +1152,32 @@ class CloseAlertsAreArmedOnly(unittest.TestCase):
         src = inspect.getsource(T.main)
         call = src[:src.index("announce_closes(venue, state)")]
         self.assertRegex(call.rsplit("\n", 2)[-2].strip(), r"^if armed:$")
+
+
+class BandsAreRecordedWhileBlocked(unittest.TestCase):
+    """The pass is blocked most of the time (a full book), and a blocked pass
+    used to record nothing: the band record sampled ~8% of hours."""
+
+    def test_hourly_when_blocked(self):
+        self.assertTrue(T.should_record_while_blocked(
+            "holding 1 and bidding on 3, max 4", last_record=0.0, now=4000.0))
+        self.assertFalse(T.should_record_while_blocked(
+            "holding 1 and bidding on 3, max 4", last_record=1000.0, now=4000.0))
+
+    def test_never_while_the_venue_is_unreadable(self):
+        """Scanning 45 coins during a rate limit only deepens it."""
+        self.assertFalse(T.should_record_while_blocked(
+            "venue unreadable -- not opening blind", last_record=0.0, now=10_000.0))
+
+    def test_the_blocked_branch_actually_records(self):
+        src = inspect.getsource(T.main)
+        blocked = src[src.index("not opening this pass"):src.index("give_up_if_unreadable")]
+        self.assertIn("should_record_while_blocked", blocked)
+        self.assertIn("scan_and_record", blocked)
+
+    def test_one_scan_path_for_both(self):
+        """The normal pass and the blocked branch share one function, so they
+        cannot record different things."""
+        src = inspect.getsource(T.main)
+        self.assertEqual(src.count("zone_log.record_pass"), 0)
+        self.assertGreaterEqual(src.count("scan_and_record("), 2)

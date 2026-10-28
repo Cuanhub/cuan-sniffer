@@ -572,6 +572,7 @@ def main():
         return rest_one_bid(venue, meta, ro, universe, coin, level,
                             equity, available, state)
 
+    last_record = 0.0                 # when bands were last recorded
     while not _stop:
         # Before anything else in the pass, so a queued halt takes effect on
         # this pass rather than the next one.
@@ -627,6 +628,9 @@ def main():
                 print(f"[LEVELS_LIVE] not opening this pass: {why}")
                 if args.once:
                     return 0
+                if should_record_while_blocked(why, last_record, time.time()):
+                    scan_and_record(ro, universe, venue)
+                    last_record = time.time()
                 # Self-heal. Refusing to open blind is correct and it is what
                 # the line above does, but refusing for ever is not a
                 # recovery: on 2026-10-19 this process lost DNS after 25
@@ -651,43 +655,10 @@ def main():
             eq = venue.equity()
             if eq is not None:
                 equity, available = eq.usdc_total, eq.available
-        # The 1h bars the scan already fetched, handed straight on so the
-        # entry checks make no second request. One dict per pass: what the
-        # bar-break check asks is what price did in THIS hour.
-        bars_cache: Dict[str, Any] = {}
-        # Read by the basis veto at entry. One contexts call per pass.
-        ctx_cache: Dict[str, Any] = {}
-        mids: Dict[str, float] = {}
-        try:
-            cx = ro.get_perp_contexts()
-            ctx_cache.update(cx)
-            mids = {k: v["mid_px"] for k, v in cx.items() if v.get("mid_px")}
-        except Exception as e:
-            # A veto that cannot read its input must abstain, not refuse, and
-            # the scan falls back to each series' own last close for price.
-            print(f"[LEVELS_LIVE] context fetch failed ({str(e)[:80]}) -- "
-                  f"basis veto inactive this pass")
-        intents, rejected, found = zone_pass.plans_by_coin(
-            ro, universe, min_rr=MIN_RR, bars_out=bars_cache, mids=mids)
+        intents, rejected, found, bars_cache, ctx_cache, mids = scan_and_record(
+            ro, universe, venue)
+        last_record = time.time()
         save_state(state)
-        # Record what this pass SAW, taken or refused, so the strategy
-        # accumulates its own evidence. The level scanner's episode log is
-        # the only reason the 2026-10-26 stop finding could be measured at
-        # all, and bands had no equivalent -- so that finding had to rest on
-        # a different strategy's data. Refusals are recorded too, because
-        # "why are we losing" needs the counterfactual, and nothing else here
-        # can say whether a refusal was right.
-        #
-        # Reads nothing back and decides nothing. zone_log swallows its own
-        # failures; a recorder that can break the pass is worse than none.
-        _rec = zone_log.record_pass(
-            found, MIN_RR, bars_cache, mids=mids, universe=universe,
-            leverage={c: lv for c in found
-                      if (lv := venue.max_leverage_for(c)) is not None}
-            if venue is not None else None,
-            ctx=ctx_cache)
-        if _rec:
-            print(f"[ZONE_LOG] recorded {_rec} new band episode(s)")
         # The candidate table, every pass, before anything is sent. The
         # operator asked for it and the reason is in the measurement: no
         # selection rule reproduced his own band choice better than 9 of 12,
@@ -805,6 +776,63 @@ def main():
                 break
             time.sleep(1)
     return 0
+
+
+# Bands change only when an hour closes, so while the pass is blocked from
+# opening anything, recording once an hour sees every band there is to see.
+RECORD_EVERY_SEC = 3600
+
+
+def should_record_while_blocked(why: str, last_record: float, now: float) -> bool:
+    """Record bands on a blocked pass? Hourly, and never while the venue is
+    unreadable -- scanning 45 coins then only adds load to a rate limit.
+
+    Before 2026-10-27 a blocked pass recorded nothing, and the pass is
+    blocked most of the time (348 of the last 379, mostly a full book). So
+    the band record sampled about 8% of the hours, and only the hours the
+    bot had room -- which bands got recorded depended on the bot's own state.
+    """
+    if "unreadable" in why:
+        return False
+    return now - last_record >= RECORD_EVERY_SEC
+
+
+def scan_and_record(ro, universe, venue):
+    """Plan every coin's bands and record every band seen, taken or refused.
+
+    Returns (intents, rejected, found, bars_cache, ctx_cache, mids). Records
+    only: it decides nothing and sends nothing, and zone_log swallows its own
+    failures -- a recorder that can break the pass is worse than none.
+
+    Refusals are recorded too, because "why are we losing" needs the
+    counterfactual, and nothing else here can say whether a refusal was right.
+    """
+    # The 1h bars the scan already fetched, handed straight on so the entry
+    # checks make no second request.
+    bars_cache: Dict[str, Any] = {}
+    # Read by the basis veto at entry. One contexts call per scan.
+    ctx_cache: Dict[str, Any] = {}
+    mids: Dict[str, float] = {}
+    try:
+        cx = ro.get_perp_contexts()
+        ctx_cache.update(cx)
+        mids = {k: v["mid_px"] for k, v in cx.items() if v.get("mid_px")}
+    except Exception as e:
+        # A veto that cannot read its input must abstain, not refuse, and the
+        # scan falls back to each series' own last close for price.
+        print(f"[LEVELS_LIVE] context fetch failed ({str(e)[:80]}) -- "
+              f"basis veto inactive this pass")
+    intents, rejected, found = zone_pass.plans_by_coin(
+        ro, universe, min_rr=MIN_RR, bars_out=bars_cache, mids=mids)
+    _rec = zone_log.record_pass(
+        found, MIN_RR, bars_cache, mids=mids, universe=universe,
+        leverage={c: lv for c in found
+                  if (lv := venue.max_leverage_for(c)) is not None}
+        if venue is not None else None,
+        ctx=ctx_cache)
+    if _rec:
+        print(f"[ZONE_LOG] recorded {_rec} new band episode(s)")
+    return intents, rejected, found, bars_cache, ctx_cache, mids
 
 
 def preflight(venue, state: Dict[str, Any], halt: "safety.HaltState",
