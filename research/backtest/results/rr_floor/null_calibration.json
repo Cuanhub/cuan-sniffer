@@ -3,312 +3,312 @@
  "framings": {
   "E_live": {
    "fired": 0,
-   "mean": -0.03056167508982775,
-   "se": 0.016087769634450074,
+   "mean": -0.01059428479979291,
+   "se": 0.019761947415019535,
    "centred": true,
    "miscalibrated": false
   },
   "E_mid": {
    "fired": 0,
-   "mean": -0.04196470618933639,
-   "se": 0.007804663572066148,
-   "centred": false,
-   "miscalibrated": true
+   "mean": -0.019948912962779262,
+   "se": 0.0093788679734237,
+   "centred": true,
+   "miscalibrated": false
   },
   "E_low": {
    "fired": 0,
-   "mean": -0.021348429373511064,
-   "se": 0.007470127267101034,
-   "centred": false,
-   "miscalibrated": true
+   "mean": 0.006981336603187232,
+   "se": 0.007177991359553481,
+   "centred": true,
+   "miscalibrated": false
   }
  },
  "miscalibrated": {
   "E_live": false,
-  "E_mid": true,
-  "E_low": true
+  "E_mid": false,
+  "E_low": false
  },
  "per_dataset": [
   {
    "E_live": {
-    "estimate": -0.07126286194945383,
+    "estimate": -0.048211296312120795,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.10296009789861695,
+    "estimate": -0.08809568823471743,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.017288981100505803,
+    "estimate": 0.018183340756983787,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": -0.08962762710226023,
+    "estimate": -0.07292870245056586,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.022921566604210523,
+    "estimate": -0.02249642886983177,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": 0.020849681754723078,
+    "estimate": 0.04537817263086918,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": 0.08912309343062363,
+    "estimate": 0.20111304318496454,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.03634237573884242,
+    "estimate": 0.010795666145864424,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.09172448346812288,
+    "estimate": -0.05149661020575028,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": 0.04403376021378359,
+    "estimate": 0.040136872003155646,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": 0.029259318569684164,
+    "estimate": 0.06152351925917267,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": 0.0021721839314219242,
+    "estimate": 0.03680953495408613,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": -0.09167027372832903,
+    "estimate": -0.048357449698418244,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.08480919287916959,
+    "estimate": -0.0515696527273224,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.035691233252363994,
+    "estimate": -0.001860912163745855,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": 0.02938633635589861,
+    "estimate": -0.054039557797199086,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": 0.024892981221907917,
+    "estimate": 0.04090856979707932,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.0010583978138172367,
+    "estimate": 0.018587499397634186,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": 0.051835157798137375,
+    "estimate": 0.01428094111313324,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.024793941704352215,
+    "estimate": 0.0067731651541572775,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.08369467468006384,
+    "estimate": -0.060295399872086326,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": -0.1275595506864277,
+    "estimate": -0.12662127898975883,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.08018703214550298,
+    "estimate": -0.042733393759711656,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.04267057949083255,
+    "estimate": -0.01047973237779489,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": -0.05526723052605297,
+    "estimate": -0.0485602463632475,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.04222170373343738,
+    "estimate": -0.036552447915394484,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.00029659534527535917,
+    "estimate": 0.020168483618263792,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": -0.06635165886053818,
+    "estimate": 0.0025906283016325594,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.09401173787826203,
+    "estimate": -0.0875564342908023,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.050724724710130016,
+    "estimate": -0.02358005819812171,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": -0.048635349701909455,
+    "estimate": -0.0020855964225584313,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.028624138972293135,
+    "estimate": -0.03760704325550532,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.04701599083426122,
+    "estimate": -0.024414644571041692,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": -0.022188534283574805,
+    "estimate": 0.08410958276298121,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.07144399783226552,
+    "estimate": -0.029000843961527908,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.01833745738534606,
+    "estimate": -0.0055068964437465975,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": 0.0018468283918470262,
+    "estimate": -0.0050876060205476544,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.038836878342063626,
+    "estimate": -0.035030728644217746,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.040456108815360686,
+    "estimate": -0.004394175567811328,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": 0.09836758074597089,
+    "estimate": 0.08993543312971262,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.028511302653434423,
+    "estimate": -0.007925211828221682,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.013578493893848834,
+    "estimate": 0.024534460677785037,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": 0.008424244105703162,
+    "estimate": 0.0675982382295923,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.03872584399880244,
+    "estimate": -0.019924677935839193,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": 0.033640106696453745,
+    "estimate": 0.052386939556531315,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": -0.1243097295090779,
+    "estimate": -0.1512448317821754,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.019791973720903,
+    "estimate": 0.047514457641655114,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.026762697088806808,
+    "estimate": 0.010585900427006028,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": -0.0392336906275377,
+    "estimate": 0.04426914309116901,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.04247616345551111,
+    "estimate": -0.00261482819991364,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": 0.006153245880445471,
+    "estimate": 0.031717860293467556,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": -0.16792768003779793,
+    "estimate": -0.17974577671817832,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.07602788847774876,
+    "estimate": -0.05773580267188659,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.020275059794702063,
+    "estimate": 0.011630477870171622,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": -0.008104755657587647,
+    "estimate": -0.009323816965963771,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.033550868779578864,
+    "estimate": -0.06465369121878926,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": -0.03035404084050523,
+    "estimate": -0.009657119260188802,
     "adds_edge": false
    }
   },
   {
    "E_live": {
-    "estimate": -0.022111560167972045,
+    "estimate": -0.009713418291465402,
     "adds_edge": false
    },
    "E_mid": {
-    "estimate": -0.027209718763324887,
+    "estimate": 0.017003236260167434,
     "adds_edge": false
    },
    "E_low": {
-    "estimate": 0.030145712780677084,
+    "estimate": 0.06132961054123352,
     "adds_edge": false
    }
   }
  ],
- "runtime_sec": 1019.3
+ "runtime_sec": 832.4
 }
