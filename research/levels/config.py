@@ -796,8 +796,14 @@ HALT_AUTO_RELEASE = _b("LEVELS_HALT_AUTO_RELEASE", True)
 # slots, and 3/24h was chosen as the best of nine combinations tried. The
 # direction is well supported; the exact pair is partly fitted. Re-measure at
 # about 150 closes.
+#
+# 2026-10-30: 12h, on the operator's instruction, as a trial. The replay above
+# reports 3/24h, 4/12h and 4/6h; 3 losses / 12h is not among them, so this is
+# untested here, not a finding. The live rail reads core/streak.py
+# (STREAK_TRIGGER, STREAK_COOLDOWN_HOURS). Nothing imports these two; they are
+# the record, and must match it.
 LOSS_STREAK_TRIGGER = _i("LEVELS_LOSS_STREAK_TRIGGER", 3)
-LOSS_STREAK_COOLDOWN_HOURS = _f("LEVELS_LOSS_STREAK_COOLDOWN_HOURS", 24.0)
+LOSS_STREAK_COOLDOWN_HOURS = _f("LEVELS_LOSS_STREAK_COOLDOWN_HOURS", 12.0)
 # 450s, halved from 900 on 2026-09-19.
 #
 # The bot sends a marketable order when the trigger fires and refuses it if

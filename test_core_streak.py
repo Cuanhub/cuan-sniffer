@@ -179,7 +179,8 @@ def test_three_losses_in_a_row_stand_the_bot_down(now_ms):
     fake.fills_override = losses(3, now_ms - 60_000)
     sd = streak.current(build_venue(fake), now_ms=now_ms)
     assert sd is not None
-    assert len(sd.run) == 3 and sd.hours_left == pytest.approx(24.0, abs=0.1)
+    assert len(sd.run) == 3 and sd.hours_left == pytest.approx(
+        streak.COOLDOWN_HOURS, abs=0.1)
     assert "3 losing trades in a row" in sd.reason
 
 
@@ -196,6 +197,16 @@ def test_the_stand_down_expires_on_its_own(now_ms):
     old = now_ms - int((streak.COOLDOWN_HOURS + 1) * 3_600_000)
     fake.fills_override = losses(3, old)
     assert streak.current(build_venue(fake), now_ms=now_ms) is None
+
+
+def test_the_stand_down_lasts_the_whole_cooldown(now_ms):
+    """Still in force half an hour before the cooldown ends. With the test
+    above, this brackets the duration from both sides."""
+    fake = FakeHL()
+    last = now_ms - int((streak.COOLDOWN_HOURS - 0.5) * 3_600_000)
+    fake.fills_override = losses(3, last)
+    sd = streak.current(build_venue(fake), now_ms=now_ms)
+    assert sd is not None and sd.hours_left == pytest.approx(0.5, abs=0.05)
 
 
 def test_a_win_after_the_run_ends_it_immediately(now_ms):

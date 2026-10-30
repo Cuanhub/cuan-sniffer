@@ -29,7 +29,10 @@ from typing import Any, Dict, List, Optional
 from core.venue import Venue
 
 TRIGGER = int(os.getenv("STREAK_TRIGGER", "3"))
-COOLDOWN_HOURS = float(os.getenv("STREAK_COOLDOWN_HOURS", "24"))
+# 12h from 2026-10-30, the operator's trial; it was 24h. The replay behind the
+# 24h is beside LOSS_STREAK_COOLDOWN_HOURS in research/levels/config.py, and it
+# reports no 3-loss/12h result, so this value is untested.
+COOLDOWN_HOURS = float(os.getenv("STREAK_COOLDOWN_HOURS", "12"))
 # How far back to ask for fills. Long enough that a slow run of losses is
 # still visible, short enough to stay one cheap request.
 LOOKBACK_HOURS = float(os.getenv("STREAK_LOOKBACK_HOURS", "336"))
