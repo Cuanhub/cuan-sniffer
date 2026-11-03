@@ -116,6 +116,42 @@ Spearman correlation of each score with net R; approval rates; D by entry
 kind; the 24h close's mean absolute error against a no-change forecast; net R
 by score quintile; unscored count.
 
+## Amendment 1 (2026-11-03, before any Kronos forecast on real data)
+
+What prompted it: an interim read of the first 8 null datasets, from the
+run's own cached scores (no real data has been read by Kronos). Every mean
+sat near zero and K1 fired on 1 of 8, both inside the rules above. But D
+swung between datasets more than its week-clustered SE allowed: the spread
+of D across the 8 was 1.39x the root-mean-square SE for K1 on raw R, 1.53x
+for K1 on excess, 1.21x and 1.27x for K2 (95% chance band for 8 datasets:
+0.49-1.51). The cause, on the same 8: on a random walk a coin's drift lasts
+for weeks, Kronos reads it, and the band's trades win or lose with it, so a
+coin's trades are not independent from week to week. Clustering by coin
+widens the SE (raw R: K1 0.077 -> 0.092, K2 0.084 -> 0.090). With an SE
+that small, a p-value overstates the evidence and the test can pass a
+fake edge. The registered rule (more than 2 of 20 fires) is too blunt to
+catch a miss this size.
+
+The change, which can only remove a verdict:
+
+- For each D, the SE is also computed clustered by coin and by coin-week.
+  These are combined with the week SE as Cameron, Gelbach & Miller (2011)
+  combine one-way variances, and the result is never below either one-way
+  SE. This is the two-way SE.
+- `--spread` re-analyses the 20 null datasets from their cached scores.
+  For each statistic, r = (spread of D across the 20) / (root-mean-square
+  two-way SE).
+- **Information** additionally requires Holm p < 0.05 across K1 and K2,
+  computed on D / (two-way SE x max(1, r)). Material and worth-wiring
+  follow from information as before.
+- The real run refuses to start until `--spread` covers all 20 null
+  datasets, built with the registered configuration.
+- The report gives both verdicts: as first registered, and amended. The
+  amended verdict decides.
+
+Nothing else changes: the model, data, trades, readings, D, the null and its
+miscalibration rule, the fallback to excess R, and the 0.10R materiality bar.
+
 ## Not modelled
 
 - Portfolio rails (4 slots, 60 min spacing), as in band.py.

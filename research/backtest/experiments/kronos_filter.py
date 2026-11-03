@@ -4,7 +4,11 @@ trades. See PREREG_kronos.md.
 Runs in research/kronos/.venv, because the forecasts need PyTorch:
 
     research/kronos/.venv/bin/python -m research.backtest.experiments.kronos_filter --null
+    research/kronos/.venv/bin/python -m research.backtest.experiments.kronos_filter --spread
     research/kronos/.venv/bin/python -m research.backtest.experiments.kronos_filter
+
+--spread (PREREG Amendment 1) needs no model and can run while --null is
+still scoring; the real run refuses to start until it covers all 20.
 
 Replaying the strategy and drawing the controls is CPU work, done in a
 process pool while the forecasts run on the GPU in this process. Workers
@@ -21,6 +25,7 @@ import math
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -187,22 +192,47 @@ def assign(scores: Sequence[float]) -> Tuple[List[int], str]:
     return [1 if s > med else 0 for s in scores], "median"
 
 
+def two_way(values: Sequence[float], groups: Sequence[int], weeks: Sequence[Any],
+            coins: Sequence[str], se_week: float, B: int) -> Dict[str, float]:
+    """PREREG Amendment 1: the bootstrap SE clustered by coin and by
+    coin-week as well as by week, combined as Cameron, Gelbach & Miller
+    (2011) combine one-way variances, and never below either one-way SE."""
+    se_coin = S.cluster_bootstrap(values, groups, list(coins), "diff", B=B)["se"]
+    se_cell = S.cluster_bootstrap(values, groups, list(zip(coins, weeks)), "diff", B=B)["se"]
+    var = max(se_week ** 2 + se_coin ** 2 - se_cell ** 2, se_week ** 2, se_coin ** 2)
+    return {"se_coin": se_coin, "se_coin_week": se_cell, "se_2way": math.sqrt(var)}
+
+
 def diff_stats(values: Sequence[float], groups: Sequence[int], times: Sequence[int],
-               B: int) -> Dict[str, Any]:
+               B: int, coins: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     g = np.asarray(groups)
     v = np.asarray(values, float)
     if len(v) < 4 or g.sum() < 2 or (1 - g).sum() < 2:
         return {"n": len(v), "estimate": float("nan"), "p": float("nan"),
-                "halves": [float("nan")] * 2}
-    boot = S.cluster_bootstrap(values, groups, [S.week_of(t) for t in times], "diff", B=B)
+                "se_2way": float("nan"), "halves": [float("nan")] * 2}
+    weeks = [S.week_of(t) for t in times]
+    boot = S.cluster_bootstrap(values, groups, weeks, "diff", B=B)
     order = np.argsort(np.asarray(times))
     h = len(order) // 2
     halves = []
     for part in (order[:h], order[h:]):
         a, r = v[part][g[part] == 1], v[part][g[part] == 0]
         halves.append(float(a.mean() - r.mean()) if len(a) and len(r) else float("nan"))
-    return {"n": len(v), "n_approved": int(g.sum()), "halves": halves,
-            **{k: boot[k] for k in ("estimate", "se", "ci_lo", "ci_hi", "p", "clusters")}}
+    out = {"n": len(v), "n_approved": int(g.sum()), "halves": halves,
+           **{k: boot[k] for k in ("estimate", "se", "ci_lo", "ci_hi", "p", "clusters")}}
+    if coins is not None:
+        out.update(two_way(values, groups, weeks, coins, boot["se"], B))
+    return out
+
+
+def p_two_way(st: Dict[str, Any], widen: float = 1.0) -> float:
+    """Two-sided normal p of D on its two-way SE times max(1, widen); 1.0
+    when that SE is missing, so a statistic without one can never pass."""
+    se = st.get("se_2way", float("nan")) * max(1.0, widen)
+    est = st["estimate"]
+    if not (math.isfinite(se) and se > 0 and math.isfinite(est)):
+        return 1.0
+    return S.normal_two_sided_p(est / se)
 
 
 def hypothesis(trades: Sequence[Trade], scores: Dict[str, Dict[str, Any]],
@@ -214,11 +244,12 @@ def hypothesis(trades: Sequence[Trade], scores: Dict[str, Dict[str, Any]],
         return {"scored": len(rows), "raw": diff_stats([], [], [], B),
                 "excess": diff_stats([], [], [], B)}
     g, mode = assign([s for _, s in rows])
-    raw = diff_stats([t.r_net for t, _ in rows], g, [t.entry_t for t, _ in rows], B)
+    raw = diff_stats([t.r_net for t, _ in rows], g, [t.entry_t for t, _ in rows], B,
+                     [t.coin for t, _ in rows])
     ex = [(t, gi, x) for (t, _), gi in zip(rows, g)
           if (x := excess.get(key_of(t))) is not None]
     exs = diff_stats([x for _, _, x in ex], [gi for _, gi, _ in ex],
-                     [t.entry_t for t, _, _ in ex], B)
+                     [t.entry_t for t, _, _ in ex], B, [t.coin for t, _, _ in ex])
     app = [t.r_net for (t, _), gi in zip(rows, g) if gi]
     rej = [t.r_net for (t, _), gi in zip(rows, g) if not gi]
     return {"scored": len(rows), "split": mode, "raw": raw, "excess": exs,
@@ -228,10 +259,12 @@ def hypothesis(trades: Sequence[Trade], scores: Dict[str, Dict[str, Any]],
             "spearman": K.spearman([s for _, s in rows], [t.r_net for t, _ in rows])}
 
 
-def fires(h: Dict[str, Dict[str, Any]], stat: str) -> Dict[str, bool]:
+def fires(h: Dict[str, Dict[str, Any]], stat: str, two_way_se: bool = False) -> Dict[str, bool]:
     """The decision rule's "carries information", ignoring calibration: Holm
-    across the hypotheses, positive, positive in both halves."""
-    holm = S.holm({n: h[n][stat]["p"] if math.isfinite(h[n][stat]["p"]) else 1.0 for n in h})
+    across the hypotheses, positive, positive in both halves. two_way_se:
+    Holm on the two-way SE's p instead (Amendment 1, not widened)."""
+    holm = S.holm({n: p_two_way(h[n][stat]) if two_way_se else
+                   h[n][stat]["p"] if math.isfinite(h[n][stat]["p"]) else 1.0 for n in h})
     pos = lambda x: isinstance(x, float) and math.isfinite(x) and x > 0   # noqa: E731
     return {n: bool(holm[n]["reject"]) and pos(h[n][stat]["estimate"])
             and all(pos(x) for x in h[n][stat]["halves"]) for n in h}
@@ -239,35 +272,51 @@ def fires(h: Dict[str, Dict[str, Any]], stat: str) -> Dict[str, bool]:
 
 def analyse(trades, scores, excess, B: int) -> Dict[str, Any]:
     h = {n: hypothesis(trades, scores, excess, n, B) for n in HYPOTHESES}
-    return {"hypotheses": h, "fires": {s: fires(h, s) for s in ("raw", "excess")}}
+    return {"hypotheses": h, "fires": {s: fires(h, s) for s in ("raw", "excess")},
+            "fires_2way": {s: fires(h, s, two_way_se=True) for s in ("raw", "excess")}}
 
 
-def decide(a: Dict[str, Any], miscal: Dict[str, bool]) -> Dict[str, Any]:
+def decide(a: Dict[str, Any], miscal: Dict[str, bool],
+           widen: Dict[str, float]) -> Dict[str, Any]:
     """PREREG decision rules. The statistic is D on raw net R if the null
     calibrated it, else D on excess over controls if that calibrated, else
-    the hypothesis is untestable by this design."""
+    the hypothesis is untestable by this design.
+
+    Amendment 1: Holm must also reject on D's two-way SE, widened by
+    widen["<hypothesis>:<statistic>"] (the null's spread ratio) when that is
+    above 1. The verdict without it is kept as "as_first_registered"."""
     h = a["hypotheses"]
     used = {n: ("raw" if not miscal[f"{n}:raw"] else
                 "excess" if not miscal[f"{n}:excess"] else None) for n in HYPOTHESES}
     testable = [n for n in HYPOTHESES if used[n]]
     holm = S.holm({n: (h[n][used[n]]["p"] if math.isfinite(h[n][used[n]]["p"]) else 1.0)
                    for n in testable}) if testable else {}
+    by = {n: max(1.0, widen[f"{n}:{used[n]}"]) for n in testable}
+    holm2 = S.holm({n: p_two_way(h[n][used[n]], by[n]) for n in testable}) if testable else {}
     pos = lambda x: isinstance(x, float) and math.isfinite(x) and x > 0   # noqa: E731
+    no = {"information": False, "material": False, "deployable": False}
     out: Dict[str, Any] = {}
     for n in HYPOTHESES:
         if not used[n]:
-            out[n] = {"statistic": None, "information": False, "material": False,
-                      "deployable": False, "note": "null calibration failed both statistics"}
+            out[n] = {"statistic": None, **no, "as_first_registered": dict(no),
+                      "note": "null calibration failed both statistics"}
             continue
         st = h[n][used[n]]
         crit = {"calibrated": True, "holm_rejected": bool(holm[n]["reject"]),
                 "positive": pos(st["estimate"]),
                 "both_halves_positive": all(pos(x) for x in st["halves"])}
-        info = all(crit.values())
-        material = info and st["estimate"] >= 0.10
-        out[n] = {"statistic": used[n], "criteria": crit, "p_holm": holm[n]["p_holm"],
-                  "information": info, "material": material,
-                  "deployable": material and pos(h[n]["approved_mean_net_r"])}
+        verdict = {}
+        for label, c in (("as_first_registered", crit),
+                         ("amended", {**crit, "holm_rejected_two_way": bool(holm2[n]["reject"])})):
+            info = all(c.values())
+            material = info and st["estimate"] >= 0.10
+            verdict[label] = {"information": info, "material": material,
+                              "deployable": material and pos(h[n]["approved_mean_net_r"])}
+        out[n] = {"statistic": used[n],
+                  "criteria": {**crit, "holm_rejected_two_way": bool(holm2[n]["reject"])},
+                  "p_holm": holm[n]["p_holm"], "p_holm_two_way": holm2[n]["p_holm"],
+                  "widened_by": by[n], **verdict["amended"],
+                  "as_first_registered": verdict["as_first_registered"]}
     return out
 
 
@@ -305,7 +354,87 @@ def null_calibration(model, B: int = 2000, log=print) -> Dict[str, Any]:
             "per_dataset": per, "config": cfg}
 
 
-def real_run(model, miscal: Dict[str, bool], B: int = 10_000, log=print) -> Dict[str, Any]:
+def chance_band(n: int) -> Tuple[float, float]:
+    """95% band of (SD of n draws) / sigma when the SE is right:
+    sqrt(chi-square(n-1) / (n-1)), Wilson-Hilferty."""
+    k = n - 1
+    z = NormalDist().inv_cdf(0.975)
+    q = lambda zz: k * (1 - 2 / (9 * k) + zz * math.sqrt(2 / (9 * k))) ** 3   # noqa: E731
+    return math.sqrt(q(-z) / k), math.sqrt(q(z) / k)
+
+
+def spread_summary(per: Sequence[Dict[str, Dict[str, Any]]]) -> Dict[str, Any]:
+    """Per statistic: how far D spreads across null datasets, against the
+    root-mean-square of the SE the test reported for it on each."""
+    out: Dict[str, Any] = {}
+    for name in (per[0] if per else {}):
+        rows = [r[name] for r in per if math.isfinite(r[name]["estimate"])]
+        if len(rows) < 3:
+            continue
+        sd = float(np.std([r["estimate"] for r in rows], ddof=1))
+        rms = {k: float(math.sqrt(np.mean([r[k] ** 2 for r in rows]))) for k in ("se", "se_2way")}
+        out[name] = {"datasets": len(rows), "spread": sd, "rms_se": rms["se"],
+                     "rms_se_2way": rms["se_2way"], "ratio_week": sd / rms["se"],
+                     "ratio_2way": sd / rms["se_2way"], "chance_band": list(chance_band(len(rows))),
+                     "fired": sum(bool(r["fires"]) for r in rows),
+                     "fired_2way": sum(bool(r["fires_2way"]) for r in rows)}
+    return out
+
+
+def null_spread(cfg: Dict[str, Any], B: int = 2000, path: Optional[Path] = None,
+                workers: int = 6, log=print) -> Dict[str, Any]:
+    """PREREG Amendment 1's measurement on the null. Re-analyses each null
+    dataset whose scores are all cached -- no model -- and keeps each one it
+    finishes in `path`, so it can run while the null is still being scored."""
+    path = path or RESULTS / "null_spread.json"
+    nc, nb = NULL_COINS, NULL_BARS
+    want = {**cfg, "coins": nc, "bars": nb}
+    done: Dict[str, Any] = {}
+    if path.exists():
+        saved = json.loads(path.read_text())
+        if saved.get("config") == want and saved.get("B") == B:
+            done = saved["per_dataset"]
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        for k in range(NULL_DATASETS):
+            cache = SCORES / f"null_{k:02}.json"
+            if str(k) in done or not cache.exists():
+                continue
+            try:
+                cached = json.loads(cache.read_text())
+            except json.JSONDecodeError:            # --null is writing it right now
+                continue
+            if cached.get("config") != want:
+                continue
+            futs = [pool.submit(_null_run, (k, nc, nb, c)) for c in sorted(null_bars(k, nc, nb))]
+            trades = ordered([t for f in futs for t in f.result()])
+            if any(key_of(t) not in cached["scores"] for t in trades):
+                log(f"  [SPREAD {k + 1:2}] still being scored")
+                continue
+            sc = {key_of(t): cached["scores"][key_of(t)] for t in trades}
+            excess = dict(pool.map(_null_ctrl, [(k, nc, nb, key_of(t), t) for t in trades],
+                                   chunksize=8))
+            a = analyse(trades, sc, excess, B)
+            done[str(k)] = {f"{n}:{s}": {"estimate": a["hypotheses"][n][s]["estimate"],
+                                         "se": a["hypotheses"][n][s].get("se", float("nan")),
+                                         "se_2way": a["hypotheses"][n][s]["se_2way"],
+                                         "fires": a["fires"][s][n],
+                                         "fires_2way": a["fires_2way"][s][n]}
+                            for n in HYPOTHESES for s in ("raw", "excess")}
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"config": want, "B": B, "per_dataset": done}, indent=1))
+            log(f"  [SPREAD {k + 1:2}] {len(trades)} trades  " + "  ".join(
+                f"{f} D {r['estimate']:+.3f} se {r['se']:.3f} two-way {r['se_2way']:.3f}"
+                for f, r in done[str(k)].items()))
+    out = {"config": want, "B": B, "per_dataset": done, "datasets": len(done),
+           "complete": len(done) == NULL_DATASETS,
+           "framings": spread_summary([done[k] for k in sorted(done, key=int)])}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=1, default=str))
+    return out
+
+
+def real_run(model, miscal: Dict[str, bool], widen: Dict[str, float], B: int = 10_000,
+             log=print) -> Dict[str, Any]:
     cfg = config()
     snap = D.Snapshot.load(SNAPSHOT)
     with C.pool(snap.bars) as pool:
@@ -316,7 +445,7 @@ def real_run(model, miscal: Dict[str, bool], B: int = 10_000, log=print) -> Dict
                           SCORES / "real.json", cfg, log=log)
         excess = dict(ctrl)
     a = analyse(trades, sc, excess, B)
-    a["decision"] = decide(a, miscal)
+    a["decision"] = decide(a, miscal, widen)
     a["descriptive"] = describe(trades, sc, excess)
     a.update({"data": {k: snap.manifest.get(k) for k in ("source", "fetched_at_utc", "excluded")},
               "coins": {c: m["sha256"] for c, m in snap.manifest["coins"].items()},
@@ -369,7 +498,12 @@ def fmt(x, d=3, sign=True):
     return f"{x:+.{d}f}" if sign else f"{x:.{d}f}"
 
 
-def render(s: Dict[str, Any], null: Dict[str, Any]) -> str:
+def verdict_of(d: Dict[str, Any]) -> str:
+    return ("deployable" if d["deployable"] else "material" if d["material"] else
+            "information" if d["information"] else "no")
+
+
+def render(s: Dict[str, Any], null: Dict[str, Any], spread: Dict[str, Any]) -> str:
     L = ["# Kronos as a reader of the band strategy's trades -- results", "",
          f"Pre-registration: `research/backtest/PREREG_kronos.md`. Data fetched "
          f"{s['data']['fetched_at_utc']}; {len(s['coins'])} coins; {s['trades']} trades.", "",
@@ -378,21 +512,33 @@ def render(s: Dict[str, Any], null: Dict[str, Any]) -> str:
     for k, v in null["framings"].items():
         L.append(f"| {k} | {v['fired']}/{null['datasets']} | {fmt(v['mean'], 4)} | "
                  f"{fmt(v['se'], 4, False)} | {'MISCALIBRATED' if v['miscalibrated'] else 'ok'} |")
+    L += ["", "## Null spread (Amendment 1)", "",
+          "How far D spreads across the null datasets, against the SE the test reports. "
+          "A ratio inside the chance band means the SE is the right size.", "",
+          "| statistic | datasets | spread of D | week SE | ratio | two-way SE | ratio | "
+          "chance band | fired (week) | fired (two-way) |", "|---|---|---|---|---|---|---|---|---|---|"]
+    for k, v in spread["framings"].items():
+        lo, hi = v["chance_band"]
+        L.append(f"| {k} | {v['datasets']} | {fmt(v['spread'], 3, False)} | "
+                 f"{fmt(v['rms_se'], 3, False)} | {fmt(v['ratio_week'], 2, False)} | "
+                 f"{fmt(v['rms_se_2way'], 3, False)} | {fmt(v['ratio_2way'], 2, False)} | "
+                 f"{lo:.2f}-{hi:.2f} | {v['fired']} | {v['fired_2way']} |")
     L += ["", "## Approved minus rejected trades (net R, real outcomes)", "",
-          "| hypothesis | statistic | split | scored | approved | D | 95% CI | p | Holm p | halves | "
-          "approved mean R | rejected mean R | verdict |",
-          "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+          "| hypothesis | statistic | split | scored | approved | D | 95% CI | p | Holm p | "
+          "two-way SE x widened | Holm p, two-way | halves | approved mean R | rejected mean R | "
+          "as first registered | verdict (amended) |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for n, d in s["decision"].items():
         h = s["hypotheses"][n]
         st = h[d["statistic"]] if d["statistic"] else h["raw"]
-        verdict = ("deployable" if d["deployable"] else "material" if d["material"] else
-                   "information" if d["information"] else "no")
         L.append(f"| {n} | {d['statistic']} | {h.get('split')} | {h['scored']} | "
                  f"{st.get('n_approved', 'n/a')} | {fmt(st['estimate'])} | "
                  f"[{fmt(st.get('ci_lo'))}, {fmt(st.get('ci_hi'))}] | {fmt(st['p'], 4, False)} | "
-                 f"{fmt(d.get('p_holm'), 4, False)} | {', '.join(fmt(x) for x in st['halves'])} | "
+                 f"{fmt(d.get('p_holm'), 4, False)} | {fmt(st.get('se_2way'), 3, False)} x "
+                 f"{fmt(d.get('widened_by'), 2, False)} | {fmt(d.get('p_holm_two_way'), 4, False)} | "
+                 f"{', '.join(fmt(x) for x in st['halves'])} | "
                  f"{fmt(h.get('approved_mean_net_r'))} | {fmt(h.get('rejected_mean_net_r'))} | "
-                 f"**{verdict}** |")
+                 f"{verdict_of(d['as_first_registered'])} | **{verdict_of(d)}** |")
     de = s["descriptive"]
     L += ["", "## Descriptive (no decisions)", "",
           f"- unscored decisions: {de['unscored']}; mean valid paths {fmt(de['mean_valid_paths'], 1, False)}"]
@@ -416,12 +562,30 @@ def render(s: Dict[str, Any], null: Dict[str, Any]) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--null", action="store_true")
+    ap.add_argument("--spread", action="store_true")
     args = ap.parse_args()
-    from research.kronos import forecast as Fk
     RESULTS.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    if args.spread:
+        sp = null_spread(config())
+        print(f"[SPREAD] {sp['datasets']}/{NULL_DATASETS} null datasets")
+        for k, v in sp["framings"].items():
+            lo, hi = v["chance_band"]
+            print(f"[SPREAD] {k}: D spreads {v['spread']:.3f}; week SE {v['rms_se']:.3f} "
+                  f"(x{v['ratio_week']:.2f}), two-way SE {v['rms_se_2way']:.3f} "
+                  f"(x{v['ratio_2way']:.2f}); chance band {lo:.2f}-{hi:.2f}")
+        return 0
+    if not args.null:
+        null = json.loads((RESULTS / "null_calibration.json").read_text())
+        p = RESULTS / "null_spread.json"
+        spread = json.loads(p.read_text()) if p.exists() else {}
+        if not spread.get("complete") or spread.get("config") != {
+                **config(), "coins": NULL_COINS, "bars": NULL_BARS}:
+            raise SystemExit("PREREG Amendment 1: run --spread over all "
+                             f"{NULL_DATASETS} null datasets before the real run")
+    from research.kronos import forecast as Fk
     model = Fk.load()
     print(f"[MODEL] Kronos-small on {model[2]}")
-    t0 = time.time()
     if args.null:
         cal = null_calibration(model)
         cal["runtime_sec"] = round(time.time() - t0, 1)
@@ -430,13 +594,14 @@ def main() -> int:
             print(f"[NULL] {k}: fired {v['fired']}/{NULL_DATASETS}, mean {v['mean']:+.4f} "
                   f"+/- {v['se']:.4f} -> {'MISCALIBRATED' if v['miscalibrated'] else 'ok'}")
         return 0
-    null = json.loads((RESULTS / "null_calibration.json").read_text())
-    out = real_run(model, null["miscalibrated"])
+    widen = {k: v["ratio_2way"] for k, v in spread["framings"].items()}
+    out = real_run(model, null["miscalibrated"], widen)
     s = out["summary"]
     s["runtime_sec"] = round(time.time() - t0, 1)
+    s["widen"] = widen
     (RESULTS / "summary.json").write_text(json.dumps(s, indent=1, default=str))
     (RESULTS / "trades.json").write_text(json.dumps(out["rows"], indent=0, default=str))
-    (RESULTS / "report.md").write_text(render(s, null))
+    (RESULTS / "report.md").write_text(render(s, null, spread))
     print(f"[DONE] {RESULTS}")
     return 0
 

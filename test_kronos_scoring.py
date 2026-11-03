@@ -225,15 +225,159 @@ def test_a_cache_from_another_configuration_is_not_reused(walk, tmp_path, monkey
     assert len(calls) == math.ceil(len(trades) / X.BATCH)
 
 
+FRAMINGS = [f"{n}:{s}" for n in X.HYPOTHESES for s in ("raw", "excess")]
+CALIBRATED = {f: False for f in FRAMINGS}
+NO_WIDEN = {f: 1.0 for f in FRAMINGS}
+
+
+def stat(estimate=0.2, p=0.001, se_2way=0.05):
+    return {"estimate": estimate, "p": p, "se_2way": se_2way, "halves": [0.1, 0.3]}
+
+
+def hyps(raw, excess=None):
+    return {"hypotheses": {n: {"raw": raw, "excess": excess or raw, "approved_mean_net_r": 0.05}
+                           for n in X.HYPOTHESES}}
+
+
 def test_decide_uses_raw_when_it_calibrated_and_excess_when_only_that_did():
-    st = {"estimate": 0.2, "p": 0.001, "halves": [0.1, 0.3]}
-    a = {"hypotheses": {n: {"raw": st, "excess": st, "approved_mean_net_r": 0.05}
-                        for n in X.HYPOTHESES}}
+    a = hyps(stat())
     miscal = {"K1_direction:raw": False, "K1_direction:excess": False,
               "K2_expected_r:raw": True, "K2_expected_r:excess": False}
-    d = X.decide(a, miscal)
+    d = X.decide(a, miscal, NO_WIDEN)
     assert d["K1_direction"]["statistic"] == "raw"
     assert d["K2_expected_r"]["statistic"] == "excess"
     assert d["K1_direction"]["deployable"]
+    assert d["K1_direction"]["as_first_registered"]["deployable"]
     miscal["K2_expected_r:excess"] = True
-    assert X.decide(a, miscal)["K2_expected_r"]["statistic"] is None
+    d = X.decide(a, miscal, NO_WIDEN)
+    assert d["K2_expected_r"]["statistic"] is None
+    assert not d["K2_expected_r"]["as_first_registered"]["information"]
+
+
+# ---------------------------------------------- PREREG Amendment 1 (spread) --
+def test_the_amendment_can_only_take_a_verdict_away():
+    """D that clears Holm on the week-clustered SE but not on the two-way SE
+    is information as first registered, and not under Amendment 1."""
+    d = X.decide(hyps(stat(se_2way=0.2)), CALIBRATED, NO_WIDEN)
+    for n in X.HYPOTHESES:
+        assert d[n]["as_first_registered"]["deployable"]
+        assert not d[n]["criteria"]["holm_rejected_two_way"]
+        assert not (d[n]["information"] or d[n]["material"] or d[n]["deployable"])
+
+
+def test_the_two_way_se_is_widened_by_the_null_spread_and_never_narrowed():
+    a = hyps(stat(se_2way=0.08))          # z 2.5: Holm p 0.025 over the two
+    assert X.decide(a, CALIBRATED, NO_WIDEN)["K1_direction"]["information"]
+    wide = X.decide(a, CALIBRATED, {f: 1.5 for f in FRAMINGS})["K1_direction"]
+    assert wide["widened_by"] == 1.5 and not wide["information"]
+    narrow = X.decide(a, CALIBRATED, {f: 0.5 for f in FRAMINGS})["K1_direction"]
+    assert narrow["widened_by"] == 1.0
+    assert narrow["p_holm_two_way"] == X.decide(a, CALIBRATED, NO_WIDEN)["K1_direction"][
+        "p_holm_two_way"]
+
+
+def test_a_statistic_without_a_two_way_se_can_never_pass():
+    assert X.p_two_way({"estimate": 0.5, "p": 1e-9, "halves": [0.5, 0.5]}) == 1.0
+    assert not X.decide(hyps({"estimate": 0.5, "p": 1e-9, "halves": [0.5, 0.5]}),
+                        CALIBRATED, NO_WIDEN)["K1_direction"]["information"]
+
+
+def coin_luck(seed, coins=30, weeks=20, per=4):
+    """A null in which a coin's luck outlasts a week, as a random walk's drift
+    does: each coin's results carry its own lasting luck u, while approval
+    follows a separate coin trait a, independent of u. D is zero on average
+    but swings with which coins happened to be lucky."""
+    rng = np.random.default_rng(seed)
+    week = 7 * 24 * 3600 * 1000
+    v, g, t, c = [], [], [], []
+    for k in range(coins):
+        u, a = rng.normal(), rng.normal()
+        for w in range(weeks):
+            for _ in range(per):
+                v.append(0.5 * u + rng.normal())
+                g.append(int(rng.random() < (0.8 if a > 0 else 0.2)))
+                t.append(1_782_000_000_000 + w * week + int(rng.integers(0, week)))
+                c.append(f"C{k}")
+    return v, g, t, c
+
+
+def test_the_two_way_se_is_never_below_either_one_way_se():
+    v, g, t, c = coin_luck(1)
+    st = X.diff_stats(v, g, t, B=400, coins=c)
+    assert st["se_2way"] >= max(st["se"], st["se_coin"])
+    assert "se_2way" not in X.diff_stats(v, g, t, B=50)
+
+
+def test_the_two_way_se_is_the_size_of_ds_real_swing_where_the_week_se_is_not():
+    """The failure Amendment 1 fixes, on a null built to have it."""
+    rows = []
+    for s in range(30):
+        v, g, t, c = coin_luck(100 + s)
+        rows.append(X.diff_stats(v, g, t, B=300, coins=c))
+    sd = float(np.std([r["estimate"] for r in rows], ddof=1))
+    rms = {k: math.sqrt(np.mean([r[k] ** 2 for r in rows])) for k in ("se", "se_2way")}
+    lo, hi = X.chance_band(len(rows))
+    assert sd / rms["se"] > hi, (sd, rms)
+    assert lo < sd / rms["se_2way"] < hi, (sd, rms)
+
+
+def test_the_chance_band_is_chi_squares():
+    lo, hi = X.chance_band(20)            # chi-square(19): 8.907 and 32.852
+    assert lo == pytest.approx(math.sqrt(8.907 / 19), abs=0.005)
+    assert hi == pytest.approx(math.sqrt(32.852 / 19), abs=0.005)
+
+
+def test_the_spread_summary_sets_the_spread_against_the_reported_se():
+    est = (-0.1, 0.0, 0.1, 0.2)
+    per = [{"K1_direction:raw": {"estimate": e, "se": 0.1, "se_2way": 0.2,
+                                 "fires": e > 0.15, "fires_2way": False}} for e in est]
+    s = X.spread_summary(per)["K1_direction:raw"]
+    sd = float(np.std(est, ddof=1))
+    assert s["spread"] == pytest.approx(sd)
+    assert (s["ratio_week"], s["ratio_2way"]) == (pytest.approx(sd / 0.1), pytest.approx(sd / 0.2))
+    assert (s["datasets"], s["fired"], s["fired_2way"]) == (4, 1, 0)
+
+
+def test_null_spread_reanalyses_finished_null_datasets_and_waits_for_the_rest(
+        tmp_path, monkeypatch):
+    nc, nb = 3, 1700
+    for name, value in (("NULL_DATASETS", 2), ("NULL_COINS", nc), ("NULL_BARS", nb),
+                        ("SCORES", tmp_path / "scores"), ("MIN_VALID", 4)):
+        monkeypatch.setattr(X, name, value)
+    cfg = {"c": 1}
+
+    def null_trades(k):
+        bars = X.null_bars(k, nc, nb)
+        return bars, X.ordered([t for c in sorted(bars) for t in X._null_run((k, nc, nb, c))])
+
+    for k in range(2):
+        bars, trades = null_trades(k)
+        X.score_trades(bars, trades, noise, 5, X.SCORES / f"null_{k:02}.json",
+                       {**cfg, "coins": nc, "bars": nb})
+    p1 = X.SCORES / "null_01.json"
+    whole = p1.read_text()
+    partial = json.loads(whole)
+    partial["scores"].pop(next(iter(partial["scores"])))
+    p1.write_text(json.dumps(partial))
+    path = tmp_path / "spread.json"
+    out = X.null_spread(cfg, B=100, path=path, workers=2, log=lambda *a: None)
+    assert list(out["per_dataset"]) == ["0"] and not out["complete"]
+
+    bars, trades = null_trades(0)
+    sc = X.score_trades(bars, trades, noise, 5, X.SCORES / "null_00.json",
+                        {**cfg, "coins": nc, "bars": nb})
+    excess = dict(X._null_ctrl((0, nc, nb, X.key_of(t), t)) for t in trades)
+    a = X.analyse(trades, sc, excess, 100)
+    for n in X.HYPOTHESES:
+        for s in ("raw", "excess"):
+            got = out["per_dataset"]["0"][f"{n}:{s}"]
+            assert got["estimate"] == a["hypotheses"][n][s]["estimate"]
+            assert got["se_2way"] == a["hypotheses"][n][s]["se_2way"]
+
+    p1.write_text(whole[:len(whole) // 2])          # caught mid-write by --null
+    assert not X.null_spread(cfg, B=100, path=path, workers=2, log=lambda *a: None)["complete"]
+    p1.write_text(whole)
+    out = X.null_spread(cfg, B=100, path=path, workers=2, log=lambda *a: None)
+    assert sorted(out["per_dataset"]) == ["0", "1"] and out["complete"]
+    assert X.null_spread({"c": 2}, B=100, path=path, workers=2,
+                         log=lambda *a: None)["datasets"] == 0
