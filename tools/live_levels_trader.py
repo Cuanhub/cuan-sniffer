@@ -44,7 +44,7 @@ import signal
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from dataclasses import dataclass
 
@@ -701,12 +701,11 @@ def main():
             # positions across $5,454 of notional on $775 of equity with no
             # stops on any of them. A reading of the venue cannot be emptied
             # by a bug in our own parsing, because there is no parsing.
-            held = venue.positions()
-            if held is None:
+            slots = slots_in_use(venue)
+            if slots is None:
                 print("[LEVELS_LIVE] venue unreadable mid-pass -- stopping here")
                 break
-            resting = venue.open_orders()
-            bids = {o.coin for o in (resting or []) if o.is_entry}
+            held, bids = slots
             if len(held) + len(bids) >= MAX_CONCURRENT:
                 print(f"[LEVELS_LIVE] concurrency cap reached "
                       f"({len(held)} held, {len(bids)} bid), stopping this pass")
@@ -747,6 +746,9 @@ def main():
             else:
                 rc = place_resting_bid(venue, meta, ep, equity, available,
                                        state)
+                if rc == BID_UNKNOWN:
+                    # Whether it rested is unknown, so the slot count is too.
+                    break
                 # A bid is a commitment, not a fill. Nothing to protect yet --
                 # the protection loop stops whatever it fills, and expire_bids
                 # pulls it after BID_TTL_HOURS if it never does.
@@ -835,6 +837,24 @@ def scan_and_record(ro, universe, venue):
     return intents, rejected, found, bars_cache, ctx_cache, mids
 
 
+def slots_in_use(venue) -> Optional[Tuple[Dict[str, Any], Set[str]]]:
+    """(positions, coins with a resting entry bid), or None if EITHER could
+    not be read.
+
+    Both are needed to count slots, and a book that cannot be read is not an
+    empty one. On 2026-11-03, in a burst of 429s, the open-orders read failed
+    mid-pass, `(resting or [])` counted that as no bids, and the pass rested a
+    fifth commitment against MAX_CONCURRENT 4.
+    """
+    positions = venue.positions()
+    if positions is None:
+        return None
+    orders = venue.open_orders()
+    if orders is None:
+        return None
+    return positions, {o.coin for o in orders if o.is_entry}
+
+
 def preflight(venue, state: Dict[str, Any], halt: "safety.HaltState",
               eqlog: "safety.EquityLog"):
     """Reasons not to open anything this pass. Returns a string, or None.
@@ -867,7 +887,11 @@ def preflight(venue, state: Dict[str, Any], halt: "safety.HaltState",
         safety.record_error("positions", "preflight could not read the venue")
         return "venue unreadable -- not opening blind"
     orders = venue.open_orders()
-    bidding = {o.coin for o in (orders or []) if o.is_entry}
+    if orders is None:
+        # Not "no bids". See slots_in_use.
+        safety.record_error("open_orders", "preflight could not read the book")
+        return "open orders unreadable -- not opening blind"
+    bidding = {o.coin for o in orders if o.is_entry}
     if len(positions) + len(bidding) >= MAX_CONCURRENT:
         return (f"holding {len(positions)} and bidding on {len(bidding)}, "
                 f"max {MAX_CONCURRENT}")
@@ -1307,6 +1331,11 @@ def rest_one_bid(venue, meta, client, universe, coin: str, level: str,
     return place_resting_bid(venue, meta, ep, equity, available, state)
 
 
+# place_resting_bid sent the bid and could not learn whether it rested: the
+# caller must stop the pass, because the slot count is unknown too.
+BID_UNKNOWN = 2
+
+
 def place_resting_bid(venue, meta, ep: Dict[str, Any], equity: float,
                       available: float,
                       state: Optional[Dict[str, Any]] = None) -> int:
@@ -1359,11 +1388,30 @@ def place_resting_bid(venue, meta, ep: Dict[str, Any], equity: float,
                              opened_at=now_iso(),
                              pending_episode=json.dumps(ep)))
     order = execute.rest_bid(venue, coin, usd=size_usd, px=entry)
-    if order is not None and state is not None:
+    unknown = False
+    if order is None:
+        # rest_bid answers None both when nothing rested and when it SENT the
+        # order but could not read the book back. Only the first may drop the
+        # plan. On 2026-11-03 an ETH bid rested in a burst of 429s while this
+        # logged "no bid rested" and dropped its stop and target, so a fill
+        # would have been adopted with the 3% default stop and no target.
+        book = venue.open_orders(coin)
+        if book is None:
+            unknown = True
+            print(f"[LEVELS_LIVE] {coin}: bid sent, book unreadable -- keeping "
+                  f"its plan and stopping this pass")
+        else:
+            order = next((o for o in book if o.is_entry), None)
+            if order is not None:
+                print(f"[LEVELS_LIVE] {coin}: bid confirmed on a second read")
+    if (order is not None or unknown) and state is not None:
         # Stamped at placement, not on fill: the commitment is made here, and
-        # a fill can happen while nothing is watching.
+        # a fill can happen while nothing is watching. A bid that may have
+        # rested is a commitment too.
         mark_entry(state)
         save_state(state)
+    if unknown:
+        return BID_UNKNOWN
     if order is None:
         meta.drop(coin)
         print(f"[LEVELS_LIVE] {coin}: no bid rested")

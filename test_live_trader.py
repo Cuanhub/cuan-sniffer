@@ -305,7 +305,11 @@ class ArmedPathTest(unittest.TestCase):
         """
         code = "\n".join(l.split("#")[0] for l in
                           inspect.getsource(T.main).splitlines())
-        self.assertIn("venue.positions()", code)
+        # The pass counts through slots_in_use, which reads both from the venue.
+        self.assertIn("slots_in_use(venue)", code)
+        reader = inspect.getsource(T.slots_in_use)
+        self.assertIn("venue.positions()", reader)
+        self.assertIn("venue.open_orders()", reader)
         self.assertNotIn('state.get("owned"', code)
         self.assertNotIn('state["owned"]', code)
         self.assertNotIn('state["pending"]', code)
@@ -1181,3 +1185,98 @@ class BandsAreRecordedWhileBlocked(unittest.TestCase):
         src = inspect.getsource(T.main)
         self.assertEqual(src.count("zone_log.record_pass"), 0)
         self.assertGreaterEqual(src.count("scan_and_record("), 2)
+
+
+class UnreadableBooksAreNotEmpty(unittest.TestCase):
+    """2026-11-03, in a burst of 429s. An ETH bid was sent, its read-back
+    failed, and the trader logged "no bid rested" and dropped the plan -- but
+    the bid had rested. The next candidate's open-orders read failed too,
+    `(resting or [])` counted that as no bids, and XRP rested as a fifth
+    commitment against MAX_CONCURRENT 4."""
+
+    def setUp(self):
+        self._tmp = Path(tempfile.mkdtemp(prefix="unreadable_"))
+        self._orig = (T.STATE_PATH, T.TRADE_LOG, execute.SETTLE_SEC, T.notify.send)
+        T.STATE_PATH = self._tmp / "state.json"
+        T.TRADE_LOG = self._tmp / "trades.csv"
+        execute.SETTLE_SEC = 0.0
+        self.sent = []
+        T.notify.send = lambda text, **kw: (self.sent.append(text), True)[1]
+        self.meta = MetaStore(self._tmp / "meta.json")
+        self.fake = FakeHL(mid=100.0, usdc=1000.0)
+        self.venue = build_venue(self.fake)
+        self.state = {"opened_today": 0, "day": "d"}
+
+    def tearDown(self):
+        T.STATE_PATH, T.TRADE_LOG, execute.SETTLE_SEC, T.notify.send = self._orig
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def bid(self, fail_reads=()):
+        """place_resting_bid with the Nth open-orders read (1-based) failing
+        for each N in fail_reads. Read 1 is rest_bid's `before`, read 2 its
+        read-back after sending, read 3 the second check."""
+        real = type(self.venue).open_orders
+        n = [0]
+
+        def flaky(v, coin="", urgent=False):
+            n[0] += 1
+            return None if n[0] in fail_reads else real(v, coin, urgent)
+
+        with mock.patch.object(type(self.venue), "open_orders", flaky):
+            return T.place_resting_bid(self.venue, self.meta,
+                                       episode("HYPE", entry=95.0, stop=92.0, tp=104.0),
+                                       1000.0, 1000.0, self.state)
+
+    def resting_bids(self):
+        return [o for o in self.fake.resting
+                if o["coin"] == "HYPE" and not o.get("reduceOnly")]
+
+    def test_a_normal_bid_rests_and_keeps_its_plan(self):
+        self.assertEqual(self.bid(), 0)
+        self.assertIsNotNone(self.meta.get("HYPE"))
+        self.assertEqual(len(self.resting_bids()), 1)
+
+    def test_a_bid_sent_blind_keeps_its_plan_and_stops_the_pass(self):
+        rc = self.bid(fail_reads=(2, 3))
+        self.assertEqual(rc, T.BID_UNKNOWN)
+        self.assertEqual(len(self.resting_bids()), 1, "the bid did rest")
+        row = self.meta.get("HYPE")
+        self.assertIsNotNone(row, "a bid that may be live must keep its stop")
+        self.assertAlmostEqual(row.planned_stop, 92.0)
+        self.assertIn("last_entry_at", self.state, "it is a commitment: spacing applies")
+
+    def test_a_bid_confirmed_on_a_second_read_counts_as_placed(self):
+        self.assertEqual(self.bid(fail_reads=(2,)), 0)
+        self.assertIsNotNone(self.meta.get("HYPE"))
+        self.assertTrue(any("Bid resting on HYPE" in s for s in self.sent))
+
+    def test_only_a_readable_empty_book_drops_the_plan(self):
+        with mock.patch.object(self.fake, "rest_plain_order", lambda *a, **k: None):
+            self.assertEqual(self.bid(), 1)
+        self.assertIsNone(self.meta.get("HYPE"))
+
+    def test_an_unreadable_book_is_not_an_empty_one(self):
+        with mock.patch.object(type(self.venue), "open_orders", return_value=None):
+            self.assertIsNone(T.slots_in_use(self.venue))
+        with mock.patch.object(type(self.venue), "positions", return_value=None):
+            self.assertIsNone(T.slots_in_use(self.venue))
+        self.fake.rest_plain_order("SOL", 1.0, 90.0, is_buy=True)
+        held, bids = T.slots_in_use(self.venue)
+        self.assertEqual(bids, {"SOL"})
+
+    def test_preflight_will_not_open_on_a_book_it_cannot_read(self):
+        v = _venue()
+        with mock.patch.object(type(v), "open_orders", return_value=None):
+            reason = T.preflight(v, {"opened_today": 0, "day": "d"}, _halt(), _eqlog())
+        self.assertIsNotNone(reason)
+        self.assertIn("unreadable", reason)
+        self.assertFalse(T.should_record_while_blocked(reason, 0.0, 10_000.0),
+                         "a rate limit is no time to scan 45 coins")
+
+    def test_the_pass_counts_slots_through_the_fail_closed_reader(self):
+        strip = lambda f: "\n".join(l.split("#")[0]                  # noqa: E731
+                                    for l in inspect.getsource(f).splitlines())
+        main, pre = strip(T.main), strip(T.preflight)
+        self.assertIn("slots_in_use(venue)", main)
+        self.assertIn("rc == BID_UNKNOWN", main)
+        self.assertNotIn("or [])", main + pre)
