@@ -67,3 +67,6 @@ research/levels/data/archive/
 # Backtest data snapshots and trade dumps: regenerable, and the digests
 # that identify them are in the committed results.
 research/backtest/cache/
+
+# Kronos weights, fetched by research/kronos/setup.sh (pinned, hash-checked)
+research/kronos/hf/
