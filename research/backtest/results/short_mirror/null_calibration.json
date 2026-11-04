@@ -1,0 +1,138 @@
+{
+ "datasets": 20,
+ "framings": {
+  "S_live": {
+   "fired": 0,
+   "mean": -0.03246701990918911,
+   "se": 0.031490016449226464,
+   "centred": true,
+   "miscalibrated": false
+  }
+ },
+ "miscalibrated": {
+  "S_live": false
+ },
+ "per_dataset": [
+  {
+   "S_live": {
+    "estimate": -0.1116552536283883,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": 0.14523319107374827,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": -0.2633458440562822,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": 0.020565704227711434,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": 0.10726418296078007,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": -0.00043531613346849287,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": 0.0915317395644127,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": -0.22232376765113818,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": -0.01806373893015932,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": -0.19217309429100057,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": 0.03508464565782326,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": 0.12796211754535466,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": -0.01935655446909239,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": 0.004465071380720524,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": 0.04857765030085829,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": -0.06172490621372861,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": 0.04331577461794345,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": -0.3005737178005362,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": 0.14268747159656828,
+    "adds_edge": false
+   }
+  },
+  {
+   "S_live": {
+    "estimate": -0.22637575393590875,
+    "adds_edge": false
+   }
+  }
+ ],
+ "runtime_sec": 342.1
+}
