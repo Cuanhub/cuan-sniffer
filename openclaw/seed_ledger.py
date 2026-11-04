@@ -105,6 +105,29 @@ def main() -> int:
             "edge": {k: s["decision"][k][flag] for k in fr},
             "prereg": prereg, "report": f"research/backtest/results/{folder}/report.md",
             "source": "CuanSniffer repo, pre-registered 2026-10-27"})
+    kr = res / "kronos" / "summary.json"
+    if kr.exists():
+        s = json.loads(kr.read_text())
+        dec = s["decision"]
+        ledger.append("historical", "H-KRONOS", {
+            "title": "Kronos-small (pre-trained candlestick model) reading the band strategy's "
+                     "trades: K1 24h direction / K2 expected R on its sampled futures",
+            "hypotheses": len(dec),
+            "verdict": "NO EDGE as registered and as amended (K1 +0.193R, Holm p 0.41, two-way "
+                       "0.47; K2 +0.080R, p 0.63, and +0.001R against same-geometry controls). "
+                       "24h forecasts 1.85x no-change's error on real bars and on random walks. "
+                       "K1 not ruled out at a material size; forward re-test queued, low power.",
+            "evidence": {k: {"estimate": s["hypotheses"][k][d["statistic"]]["estimate"],
+                             "ci": [s["hypotheses"][k][d["statistic"]]["ci_lo"],
+                                    s["hypotheses"][k][d["statistic"]]["ci_hi"]],
+                             "p": s["hypotheses"][k][d["statistic"]]["p"],
+                             "p_holm_two_way": d["p_holm_two_way"],
+                             "n": s["hypotheses"][k][d["statistic"]]["n"]}
+                         for k, d in dec.items()},
+            "edge": {k: d["information"] for k, d in dec.items()},
+            "prereg": "research/backtest/PREREG_kronos.md",
+            "report": "research/backtest/results/kronos/report.md",
+            "source": "CuanSniffer repo, pre-registered 2026-11-03"})
     print(f"seeded {len(ledger.entries())} entries; hypotheses to date: {ledger.tested_count()}; "
           f"chain {'intact' if ledger.verify() is None else 'BROKEN'}")
     return 0

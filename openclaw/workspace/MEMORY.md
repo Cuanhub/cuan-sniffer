@@ -96,6 +96,20 @@ neither changes per-setup results against the live strategy. Replayed on
 this strategy. Only 52 days of 15m history existed; the lab archives 15m
 daily now -- re-test the same design at ~6 months.
 
+## Kronos as a trade reader (H-KRONOS, pre-registered, 2026-11-03): no edge
+
+Kronos-small, a model pre-trained on candlesticks, read 16 sampled 48h
+futures at each of the strategy's 876 replayed trades. Approved minus
+rejected net R: K1 (24h direction) +0.193R, CI -0.076 to +0.525, Holm p
+0.41 (0.47 on the two-way SE); K2 (the trade replayed on the futures)
++0.080R, p 0.63, and +0.001R against same-geometry controls. K1's approved
+trades average +0.010R. Its 24h forecast is 1.85x no-change's error on real
+bars, as on random walks. A direction gap that looks like z = 2.7 is mostly
+the strategy's own selection: random walks produce +0.051 of its +0.087.
+K1 is not ruled out at a material size, but confirming it needs ~4,800
+trades. The lab cannot run Kronos (no PyTorch in the package); a re-test
+runs from the repo. Report: lab/research/backtest/results/kronos/.
+
 ## Live recorder (fixed 2026-10-27)
 
 Band outcomes are resolved by research.backtest.engine (conservative, net of

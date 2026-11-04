@@ -1,0 +1,335 @@
+{
+ "hypotheses": {
+  "K1_direction": {
+   "scored": 876,
+   "split": "sign",
+   "raw": {
+    "n": 876,
+    "n_approved": 422,
+    "halves": [
+     0.3136909501620702,
+     0.12875948321703312
+    ],
+    "estimate": 0.19255225163641174,
+    "se": 0.15212668101202448,
+    "ci_lo": -0.07611569649705588,
+    "ci_hi": 0.5246360521121869,
+    "p": 0.2056075328467491,
+    "clusters": 26,
+    "se_coin": 0.1223881596847168,
+    "se_coin_week": 0.10926174834421475,
+    "se_2way": 0.16181241934879867
+   },
+   "excess": {
+    "n": 555,
+    "n_approved": 292,
+    "halves": [
+     0.13621403247947375,
+     0.24086089696601842
+    ],
+    "estimate": 0.2067606643775354,
+    "se": 0.1674475634267685,
+    "ci_lo": -0.10606368732750564,
+    "ci_hi": 0.5516571312097133,
+    "p": 0.2169129218231531,
+    "clusters": 26,
+    "se_coin": 0.16074752047038604,
+    "se_coin_week": 0.1374460989848457,
+    "se_2way": 0.18704818018036648
+   },
+   "approved_mean_net_r": 0.009514364740547196,
+   "rejected_mean_net_r": -0.1830378868958645,
+   "approved_total_net_r": 4.015061920510917,
+   "spearman": -0.14515546015035247
+  },
+  "K2_expected_r": {
+   "scored": 876,
+   "split": "sign",
+   "raw": {
+    "n": 876,
+    "n_approved": 306,
+    "halves": [
+     0.12079517510321829,
+     0.06643000470974691
+    ],
+    "estimate": 0.07987651467710606,
+    "se": 0.16623196392482853,
+    "ci_lo": -0.2233126311262711,
+    "ci_hi": 0.4310428693973555,
+    "p": 0.630863110632059,
+    "clusters": 26,
+    "se_coin": 0.11907787942051903,
+    "se_coin_week": 0.12131278426360163,
+    "se_2way": 0.16623196392482853
+   },
+   "excess": {
+    "n": 555,
+    "n_approved": 212,
+    "halves": [
+     -0.06487773429697695,
+     0.04180194447721098
+    ],
+    "estimate": 0.0008185224358929974,
+    "se": 0.16987333626772938,
+    "ci_lo": -0.321104117789842,
+    "ci_hi": 0.3454603140189234,
+    "p": 0.9961554655869925,
+    "clusters": 26,
+    "se_coin": 0.16218291465754964,
+    "se_coin_week": 0.15183581551933756,
+    "se_2way": 0.17918184424523814
+   },
+   "approved_mean_net_r": -0.03830425269892817,
+   "rejected_mean_net_r": -0.11818076737603428,
+   "approved_total_net_r": -11.72110132587202,
+   "spearman": -0.11013051831777877
+  }
+ },
+ "fires": {
+  "raw": {
+   "K1_direction": false,
+   "K2_expected_r": false
+  },
+  "excess": {
+   "K1_direction": false,
+   "K2_expected_r": false
+  }
+ },
+ "fires_2way": {
+  "raw": {
+   "K1_direction": false,
+   "K2_expected_r": false
+  },
+  "excess": {
+   "K1_direction": false,
+   "K2_expected_r": false
+  }
+ },
+ "decision": {
+  "K1_direction": {
+   "statistic": "raw",
+   "criteria": {
+    "calibrated": true,
+    "holm_rejected": false,
+    "positive": true,
+    "both_halves_positive": true,
+    "holm_rejected_two_way": false
+   },
+   "p_holm": 0.4112150656934982,
+   "p_holm_two_way": 0.4681147784360879,
+   "widened_by": 1.0,
+   "information": false,
+   "material": false,
+   "deployable": false,
+   "as_first_registered": {
+    "information": false,
+    "material": false,
+    "deployable": false
+   }
+  },
+  "K2_expected_r": {
+   "statistic": "raw",
+   "criteria": {
+    "calibrated": true,
+    "holm_rejected": false,
+    "positive": true,
+    "both_halves_positive": true,
+    "holm_rejected_two_way": false
+   },
+   "p_holm": 0.630863110632059,
+   "p_holm_two_way": 0.6313032801174151,
+   "widened_by": 1.0012900549865629,
+   "information": false,
+   "material": false,
+   "deployable": false,
+   "as_first_registered": {
+    "information": false,
+    "material": false,
+    "deployable": false
+   }
+  }
+ },
+ "descriptive": {
+  "unscored": 0,
+  "mean_valid_paths": 15.996575342465754,
+  "close_24h_abs_error_pct": {
+   "kronos": 7.655358731384474,
+   "no_change": 4.1297645299335555,
+   "n": 875
+  },
+  "K1_direction": {
+   "approval_rate": 0.4817351598173516,
+   "by_kind": {
+    "limit": {
+     "n": 719,
+     "split": "sign",
+     "approved": 0.04632233847425604,
+     "rejected": -0.21282261416391762
+    },
+    "market_close": {
+     "n": 157,
+     "split": "sign",
+     "approved": -0.115479379396839,
+     "rejected": 0.00885388058519905
+    }
+   },
+   "quintiles": [
+    {
+     "mean_score": -0.13086410805062923,
+     "mean_net_r": -0.0701231090359426,
+     "n": 176
+    },
+    {
+     "mean_score": -0.042211006232757566,
+     "mean_net_r": -0.18903618300339634,
+     "n": 175
+    },
+    {
+     "mean_score": -0.0032123766654778363,
+     "mean_net_r": -0.25417142824420036,
+     "n": 175
+    },
+    {
+     "mean_score": 0.03479139284264694,
+     "mean_net_r": -0.017850310866986442,
+     "n": 175
+    },
+    {
+     "mean_score": 0.1275316505741938,
+     "mean_net_r": 0.0796723704580936,
+     "n": 175
+    }
+   ]
+  },
+  "K2_expected_r": {
+   "approval_rate": 0.3493150684931507,
+   "by_kind": {
+    "limit": {
+     "n": 719,
+     "split": "sign",
+     "approved": -0.004323381244661427,
+     "rejected": -0.14178072138941056
+    },
+    "market_close": {
+     "n": 157,
+     "split": "sign",
+     "approved": -0.1693733283082427,
+     "rejected": 0.0013253827342541637
+    }
+   },
+   "quintiles": [
+    {
+     "mean_score": -1.0888197980410077,
+     "mean_net_r": -0.0016251542188906807,
+     "n": 176
+    },
+    {
+     "mean_score": -0.6152530071404844,
+     "mean_net_r": -0.2819949450543184,
+     "n": 175
+    },
+    {
+     "mean_score": -0.032705046111921175,
+     "mean_net_r": -0.08094929167721035,
+     "n": 219
+    },
+    {
+     "mean_score": 0.15825622951075494,
+     "mean_net_r": 0.03435704620492677,
+     "n": 131
+    },
+    {
+     "mean_score": 0.9587058933224535,
+     "mean_net_r": -0.09269642502124242,
+     "n": 175
+    }
+   ]
+  }
+ },
+ "data": {
+  "source": "https://api.hyperliquid.xyz/info candleSnapshot (mainnet, public, read-only)",
+  "fetched_at_utc": "2026-10-28T00:46:11.551000+00:00",
+  "excluded": {
+   "XTEN": "only 18 closed bars (< 1000)"
+  }
+ },
+ "coins": {
+  "BTC": "9dd4e2a9efe5962ff192bf783ef6f309e8c0fde0caa0b987edf755fbd7cdd0dc",
+  "ETH": "1770dab072ada102834960cd28a8c34c3aaeecf4ecaf4756e2ce10273cd17420",
+  "HYPE": "4404b7514aa1b9c2272d4baf394bf2316b770cfac3b7ce590ac489e477049bce",
+  "ZEC": "223b44ff898ef6e8978355c8199f7aaf4348f97becc2fecf24d4d93b14d7b22a",
+  "NEAR": "c9a8a8ac0780bb4beef85fa141405b3555512bc9d5a291a93e544a85d82c3b7b",
+  "SOL": "8401d9bfc1fabbda82c0d1e6f43dbc72359bae4aa3c9a20fafb740bf701679d4",
+  "XRP": "458038ec726002efcc8cb583c992ebd86271a608e9ca6d03daab817ca245bdde",
+  "ENA": "fa29039e96798c380ecd53e728f0c28e37a0f7b82459a525d5bd5e1429033310",
+  "PUMP": "bf5f14f599ebed7f3c547936da03cb47520fe95a0dad0beac8e5277f9bb0f01e",
+  "XMR": "124b1a2c4c70d1c2d4343b3538c5c0c3abb0f85c83db0275ef36222eea988d48",
+  "WLD": "b31635fb5a2baa908446bc22f61af7b4d1e0bbba0f55c3a309c7825634ddf85d",
+  "LIT": "a873f32ac35d8fc863ec0845ea99a712ce3fa6a5ffdafb45a646015e014a40e4",
+  "VVV": "c96e23f3b8810fab842bb89a9494979da7e7bbceaedbfb54cb2d6e3612fdff2f",
+  "SUI": "9d0317fa3adeb75e3e1748576790487d2e1c1ea72e5f799d76c8a22d6bd1f5d8",
+  "CASHCAT": "4fab86a3ce607141398c280cf42731cffbeb6d536fa2cfa1c9f347e63b3e0565",
+  "GRASS": "2256eb228ebc16ce460f360ec47f47160e015b559b62cdcaf9e89d1f724ecda5",
+  "CHIP": "7866979ec0f91f5ce6c8ed29cadeb1ec2fd34293a3af63b678b7892aa8ee9c0e",
+  "UNI": "9253313252c175430ad9d7434b8bc20506d81782b5e970b94349af20f22122bd",
+  "NIL": "2f92f0b44a37619716c0fae35f27532ea318a28cbad146a6550618c01f269c03",
+  "PONS": "6bce7936d9d6851eff2ebc3afb276eb73cdebd836cfc2bd443d7b462e82519bf",
+  "AAVE": "10f79cea5c474432f8cc7869ae6df9bd5e9164fe9579597c35875a825913646f",
+  "BNB": "9047834adfe397bb15839b9265f849ec0f2042dec1727fe352e7a18edf00c00a",
+  "ZRO": "234c268231da1b85285ec452cd52c616dc992017f96f3cb41abcec1ee82ea973",
+  "XPL": "f382703066a0b83c2081b07e96720f4b399e3953aca10be98c0b0c5fbb695955",
+  "DOGE": "f2bb1ab3531be9621cec09ffcc166d520d28be792c59ece528e693615796cfb9",
+  "FARTCOIN": "c798facdc6dd4a45d0262d78fd20e3fe7379c391e86b941285f6fef1cea90c22",
+  "INJ": "c7a289b731535ab7750c0547273d8ab4ad8391f0b5cdccc90c38fa4cf23320c5",
+  "LINK": "422042a8221d5078e951e280d131da18ebf51e76a8117fd44c9d2ca2b2aca46b",
+  "ONDO": "67778548146f172a9721fe8a8ebaaa90445771c110fc7e4d4738a480438b6aff",
+  "TAO": "1f65db7a42eb2485aa57515b922194a79db67acd3aefda86baa3b475f6efbf9c",
+  "CRV": "8c37e1521284364ed72a2ccb3848eaddf460cbb3fa5549421fc5792e06d50090",
+  "MON": "7e76e87b794f6091ef9e9b9b90d365386b4a1f68f803cac95f5ca078213259a3",
+  "AERO": "c2fa31f3e6c64221c84266bdbd0e06e55f298feef4015a8144cb69079d5030d1",
+  "INIT": "71765be0c57ecafa474e31ebf9f49d23788cb5db446555ed2b6419cd273b9ad8",
+  "STRK": "83f7ab8006778ba4842532ae3d81b109426b70adc764b066dc0ac3c70b08b75c",
+  "ARB": "6799009126eac15c2f8f708398b5b15b4b35887b8a2ea39ca62719482db30bbb",
+  "ADA": "5c94c7437cd219a15e1d9ea37dd6f30aacbbc7db20ac4d43d999f4d833e67355",
+  "AVAX": "b94f3aed17f4ac236e61ea954f65849374dbd473dbe0075f1a321cf8c9aa6420",
+  "TRUMP": "9b56ff8af5a0bbbb81c332c71f75a125ff1a623c71f12f40d2d10bdf923b6536",
+  "BCH": "73fd98a7660992d57e252b91e7c57ea8604d770cdafbfd9047d88db0eb351f5a",
+  "TRX": "5605bb5e0bcbf65fd72b884b523d6988e560a64a988a5ac67b4b93de10532c70",
+  "DOT": "6937291e44c801957f216b2d4740feaca042250115676018eba8cd90091e3eee",
+  "SKR": "e43e221be7739b1d31e4b34c7571d4c6cd7f502784b063035057a5dc43ed2ef3",
+  "TIA": "fec8e715eb0f431336b6e28a0fae3aa19ecfe4f44c219d9e24b2dfdbbde6b8ca"
+ },
+ "costs": {
+  "maker_fee_pct": 0.0144,
+  "taker_fee_pct": 0.0432,
+  "stop_slip_pct": 0.1193,
+  "tp_slip_pct": 0.0,
+  "market_entry_slip_pct": 0.0
+ },
+ "config": {
+  "lookback": 464,
+  "horizon": 48,
+  "samples": 16,
+  "batch": 8,
+  "dir_step": 24,
+  "seed": 20261103,
+  "min_rr": 2.0,
+  "revisions": {
+   "NeoQuasar/Kronos-small": "901c26c1332695a2a8f243eb2f37243a37bea320",
+   "NeoQuasar/Kronos-Tokenizer-base": "0e0117387f39004a9016484a186a908917e22426"
+  },
+  "sampler": "fast.sample",
+  "T": 1.0,
+  "top_p": 0.9,
+  "top_k": 0,
+  "torch": "2.15.0"
+ },
+ "trades": 876,
+ "runtime_sec": 668.3,
+ "widen": {
+  "K1_direction:raw": 0.9407399976092853,
+  "K1_direction:excess": 1.0846373715578912,
+  "K2_expected_r:raw": 1.0012900549865629,
+  "K2_expected_r:excess": 1.144575158926787
+ }
+}

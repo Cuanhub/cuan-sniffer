@@ -68,5 +68,13 @@ grounding. Remove an item when it is registered (note the experiment id).
     archive holds ~6 months (the first test had 52 days and could not rule
     out a material effect).
 
+13. **Kronos K1, forward re-test.** H-KRONOS's K1 alone -- same model,
+    settings and rule (research/backtest/experiments/kronos_filter.py) -- on
+    trades from bars after 2026-10-27, once ~900 exist (~6 months).
+    Grounding: +0.193R, positive in both halves, not established (Holm p
+    0.41). A long shot: at that size six months detect it about one time in
+    four, and its approved trades were break-even (+0.010R). Runs from the
+    repo (research/kronos/.venv), not the lab: the package has no PyTorch.
+
 Do NOT queue without new reasoning: killzone timing, HTF bias, per-coin
 selection, lowering the reward:risk floor -- see graveyard.md.

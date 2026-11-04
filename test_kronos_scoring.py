@@ -19,6 +19,7 @@ from research.backtest import common as C
 from research.backtest.costs import MEASURED
 from research.backtest.engine import LIMIT, MARKET_CLOSE, Order, simulate
 from research.backtest.experiments import kronos_filter as X
+from research.backtest.experiments import kronos_posthoc as P
 from research.kronos import inputs as I
 from research.kronos import score as K
 
@@ -381,3 +382,47 @@ def test_null_spread_reanalyses_finished_null_datasets_and_waits_for_the_rest(
     assert sorted(out["per_dataset"]) == ["0", "1"] and out["complete"]
     assert X.null_spread({"c": 2}, B=100, path=path, workers=2,
                          log=lambda *a: None)["datasets"] == 0
+
+
+# ---------------------------------------------------------------- post hoc --
+def test_post_hoc_reads_the_bar_the_run_scored(walk, monkeypatch):
+    """The oracle's paths ARE the future, so its K1 is the real 24h move and
+    its error zero; an error the run stored from any other bar is refused."""
+    bars, trades = walk
+    monkeypatch.setattr(X, "MIN_VALID", 4)
+    sc = X.score_trades(bars, trades, oracle, seed_base=1)
+    rs = P.readings(sc, bars)
+    assert len(rs) == sum(s["k1"] is not None and "err_pct" in s for s in sc.values()) > 50
+    assert all(r["k1"] == pytest.approx(r["move"]) for r in rs)
+    fe = P.forecast_error(rs)
+    assert fe["kronos_pct"] == pytest.approx(0, abs=1e-9) and fe["closer"] == 1.0
+    key = next(k for k, s in sc.items() if "err_pct" in s)
+    coin, i = key.rsplit(":", 1)
+    b, i = bars[coin], int(i)
+    late = abs(b[i]["c"] - b[i + X.DIR_STEP + 1]["c"]) / b[i]["c"] * 100
+    with pytest.raises(ValueError):
+        P.readings({**sc, key: {**sc[key], "naive_err_pct": late}}, bars)
+
+
+def test_post_hoc_direction_finds_the_oracle_and_not_noise(walk, monkeypatch):
+    bars, trades = walk
+    monkeypatch.setattr(X, "MIN_VALID", 4)
+    seen = P.direction(P.readings(X.score_trades(bars, trades, oracle, seed_base=1), bars), B=500)
+    assert seen["estimate"] == 1.0 and (seen["up_if_k1_up"], seen["up_if_k1_down"]) == (1.0, 0.0)
+    blind = P.direction(P.readings(X.score_trades(bars, trades, noise, seed_base=1), bars), B=500)
+    assert abs(blind["estimate"]) < 3 * blind["se_2way"] and blind["se_2way"] >= blind["se"], blind
+
+
+def test_post_hoc_ranks_split_by_outcome():
+    rows = [{"k1": 0.1, "r_net": -1.2, "outcome": "stop"},
+            {"k1": 0.2, "r_net": -1.3, "outcome": "stop"},
+            {"k1": -0.1, "r_net": -1.0, "outcome": "stop"},
+            {"k1": 0.3, "r_net": 2.5, "outcome": "tp"},
+            {"k1": 0.4, "r_net": 3.0, "outcome": "tp"},
+            {"k1": 0.5, "r_net": 3.5, "outcome": "tp"},
+            {"k1": None, "r_net": 2.0, "outcome": "tp"}]
+    r = P.ranks(rows)
+    assert (r["stop"]["n"], r["tp"]["n"]) == (3, 3)
+    assert r["stop"]["spearman"] == pytest.approx(-1.0) and r["tp"]["spearman"] == pytest.approx(1.0)
+    assert (r["n_k1_up"], r["n_k1_down"]) == (5, 1)
+    assert (r["win_rate_k1_up"], r["win_rate_k1_down"]) == (pytest.approx(0.6), 0.0)
