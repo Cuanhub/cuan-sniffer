@@ -14,6 +14,13 @@ Mirrored from production
     is what is mirrored; `cooldown_on_bids=True` models the rail as its own
     comment describes it.
 
+The short-side mirror (side=SHORT; PREREG_short_mirror.md)
+  The same planner run on the bars turned upside down (`invert`), each order
+  mapped back and simulated as a short on the real bars. Its entries are
+  therefore `zones.supply_zones` bands, its stops sit above them and its
+  targets below -- every rule mirrored by construction rather than by a second
+  copy of the strategy that could drift from the first.
+
 NOT modelled, and why it matters
   - the portfolio rails: max 4 concurrent, 20/day, 60 min between entries.
     Each coin is simulated alone, so this takes more trades than the live
@@ -28,8 +35,8 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional
 
 from research.backtest.costs import Costs, MEASURED
-from research.backtest.engine import (LIMIT, MARKET_CLOSE, Order, Trade,
-                                      simulate)
+from research.backtest.engine import (LIMIT, LONG, MARKET_CLOSE, SHORT, Order,
+                                      Trade, simulate)
 from research.levels import zone_pass
 from research.levels import zones as Z
 from research.levels.config import COIN_REENTRY_COOLDOWN_HOURS, MIN_RR
@@ -73,25 +80,72 @@ def order_at(coin: str, bars: List[Dict[str, Any]], i: int,
                  tag="band", features=feats)
 
 
+def invert_k(bars: List[Dict[str, Any]]) -> float:
+    """The constant `invert` divides into: the first close squared, so the
+    inverted series starts at the same price and nothing scale-sensitive moves."""
+    return float(bars[0]["c"]) ** 2 if bars else 1.0
+
+
+def invert(bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The same bars upside down: every price p becomes K/p.
+
+    A high becomes a low and a fall becomes a rise, so a demand band found on
+    these is a supply band on the real bars, a stop under it is a stop above,
+    and a target over it is a target below. Inverting twice gives the bars
+    back. Volume and timestamps are untouched.
+    """
+    k = invert_k(bars)
+    return [{**b, "o": k / b["o"], "h": k / b["l"], "l": k / b["h"], "c": k / b["c"]}
+            for b in bars]
+
+
+def mirror_order(o: Order, k: float) -> Order:
+    """An order planned on inverted bars, as the SHORT it is on the real ones.
+
+    The planner's own numbers (rr, risk_pct, atr_pct, stop_atr_x) are kept as
+    it computed them -- they are what decided the trade -- and the band edges
+    are mapped back so they read as real prices.
+    """
+    f = dict(o.features)
+    if "zone_lo" in f and "zone_hi" in f:
+        f["zone_lo"], f["zone_hi"] = k / f["zone_hi"], k / f["zone_lo"]
+    if "target_lo" in f:
+        f["target_near"] = k / f.pop("target_lo")    # the top edge of the demand band below
+    return Order(o.coin, o.decided_i, o.kind, k / o.stop, k / o.tp,
+                 limit=k / o.limit if o.kind == LIMIT else 0.0, ttl=o.ttl,
+                 tag=o.tag + "_short", entry_fee=o.entry_fee, features=f, side=SHORT)
+
+
 def run(coin: str, bars: List[Dict[str, Any]], costs: Costs = MEASURED,
         min_rr: float = MIN_RR, window: int = WINDOW, ttl: int = BID_TTL_BARS,
         cooldown_h: float = COIN_REENTRY_COOLDOWN_HOURS,
         cooldown_on_bids: bool = False,
         features: Optional[FeatureFn] = None,
         start_i: Optional[int] = None,
-        gate: Optional[Callable[[Order], bool]] = None) -> List[Trade]:
+        gate: Optional[Callable[[Order], bool]] = None,
+        side: str = LONG) -> List[Trade]:
     """Every trade the strategy takes on one coin, in time order.
 
     `gate`, when given, may refuse an order the strategy would have made --
     a candidate filter, applied where the live pass would apply it: at the
     decision, before anything is sent. A refused order leaves the coin free.
+
+    side=SHORT trades the mirror: orders are planned on `invert(bars)` and
+    simulated, mapped back, on `bars`. A `features` function then sees the
+    inverted bars, since those are what the planner saw.
     """
+    if side not in (LONG, SHORT):
+        raise ValueError(f"unknown side {side!r}")
+    plan_bars = invert(bars) if side == SHORT else bars
+    k = invert_k(bars)
     trades: List[Trade] = []
     n = len(bars)
     i = max(Z.ZONE_MIN_BARS - 1, start_i or 0)
     cooled_until = -1               # first bar index a market entry may use
     while i < n - 1:
-        o = order_at(coin, bars, i, min_rr, window, ttl, features)
+        o = order_at(coin, plan_bars, i, min_rr, window, ttl, features)
+        if o is not None and side == SHORT:
+            o = mirror_order(o, k)
         if o is None or (gate is not None and not gate(o)):
             i += 1
             continue

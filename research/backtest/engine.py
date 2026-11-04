@@ -34,6 +34,13 @@ Exit (stop and target are both trigger -> market orders: taker)
 
 R is measured against the PLANNED stop distance from the actual fill, net of
 fees, so a gap through the stop reads as worse than -1R, as it is.
+
+Shorts (side=SHORT) mirror every rule: the stop sits above the entry and the
+target below; a resting sell fills at its limit the first time a bar's HIGH
+reaches it; on that fill bar the stop counts and the target does not (the
+low may have printed before the rally that filled it); a bar that opens
+through the stop exits at that open; slippage makes every taker price worse
+for the short -- a lower sell, a higher buy-back.
 """
 
 from __future__ import annotations
@@ -47,6 +54,8 @@ MARKET_CLOSE = "market_close"
 MARKET_NEXT_OPEN = "market_next_open"
 LIMIT = "limit"
 MARKET_AT = "market_at"
+LONG = "long"
+SHORT = "short"
 
 
 @dataclass(frozen=True)
@@ -64,6 +73,7 @@ class Order:
     # the trade it is a control for.
     entry_fee: Optional[str] = None
     features: Mapping[str, Any] = field(default_factory=dict)
+    side: str = LONG
 
 
 @dataclass
@@ -86,6 +96,7 @@ class Trade:
     ambiguous: bool = False     # one bar reached both stop and target
     fill_bar_tp: bool = False   # target reached on the fill bar, not counted
     features: Dict[str, Any] = field(default_factory=dict)
+    side: str = LONG
 
     @property
     def resolved(self) -> bool:
@@ -93,34 +104,38 @@ class Trade:
 
     @property
     def planned_rr(self) -> float:
-        risk = self.entry_px - self.stop
-        return (self.tp - self.entry_px) / risk if risk > 0 else 0.0
+        s = 1.0 if self.side == LONG else -1.0
+        risk = s * (self.entry_px - self.stop)
+        return s * (self.tp - self.entry_px) / risk if risk > 0 else 0.0
 
     @property
     def risk_pct(self) -> float:
-        return (self.entry_px - self.stop) / self.entry_px * 100.0
+        s = 1.0 if self.side == LONG else -1.0
+        return s * (self.entry_px - self.stop) / self.entry_px * 100.0
 
 
 def _fill(bars: List[Dict[str, Any]], o: Order, costs: Costs):
     """(entry_i, entry_px, entry_fee_pct, first_exit_bar) or None."""
     i, n = o.decided_i, len(bars)
+    long = o.side == LONG
+    slip = 1 + (1 if long else -1) * costs.market_entry_slip_pct / 100   # a worse price either way
     if o.kind == MARKET_CLOSE:
-        px = bars[i]["c"] * (1 + costs.market_entry_slip_pct / 100)
+        px = bars[i]["c"] * slip
         fee = costs.taker_fee_pct
         entry_i, first = i, i + 1
     elif o.kind == MARKET_NEXT_OPEN:
         if i + 1 >= n:
             return None
-        px = bars[i + 1]["o"] * (1 + costs.market_entry_slip_pct / 100)
+        px = bars[i + 1]["o"] * slip
         fee = costs.taker_fee_pct
         entry_i, first = i + 1, i + 1
     elif o.kind == MARKET_AT:
-        px = o.limit * (1 + costs.market_entry_slip_pct / 100)
+        px = o.limit * slip
         fee = costs.taker_fee_pct
         entry_i, first = i, i + 1
     elif o.kind == LIMIT:
         for j in range(i + 1, min(i + 1 + o.ttl, n)):
-            if bars[j]["l"] <= o.limit:
+            if (bars[j]["l"] <= o.limit) if long else (bars[j]["h"] >= o.limit):
                 px, fee, entry_i, first = o.limit, costs.maker_fee_pct, j, j
                 break
         else:
@@ -142,9 +157,11 @@ def simulate(bars: List[Dict[str, Any]], o: Order,
     if got is None:
         return None
     entry_i, entry_px, entry_fee, first = got
-    if not (o.stop < entry_px < o.tp):
+    long = o.side == LONG
+    s = 1.0 if long else -1.0
+    if not (s * (entry_px - o.stop) > 0 and s * (o.tp - entry_px) > 0):
         return None
-    risk = entry_px - o.stop
+    risk = s * (entry_px - o.stop)
 
     exit_i: Optional[int] = None
     exit_px = bars[-1]["c"]
@@ -152,33 +169,33 @@ def simulate(bars: List[Dict[str, Any]], o: Order,
     ambiguous = fill_bar_tp = False
     for j in range(first, len(bars)):
         b = bars[j]
-        hit_stop = b["l"] <= o.stop
-        hit_tp = b["h"] >= o.tp
+        hit_stop = b["l"] <= o.stop if long else b["h"] >= o.stop
+        hit_tp = b["h"] >= o.tp if long else b["l"] <= o.tp
         if o.kind == LIMIT and j == entry_i:
             if hit_tp and not hit_stop:
                 fill_bar_tp = True
             hit_tp = False
         if hit_stop:
             ambiguous = ambiguous or hit_tp
-            raw = min(o.stop, b["o"])
-            exit_px = raw * (1 - costs.stop_slip_pct / 100)
+            raw = min(o.stop, b["o"]) if long else max(o.stop, b["o"])
+            exit_px = raw * (1 - s * costs.stop_slip_pct / 100)
             outcome, exit_i = "stop", j
             break
         if hit_tp:
-            raw = max(o.tp, b["o"])
-            exit_px = raw * (1 - costs.tp_slip_pct / 100)
+            raw = max(o.tp, b["o"]) if long else min(o.tp, b["o"])
+            exit_px = raw * (1 - s * costs.tp_slip_pct / 100)
             outcome, exit_i = "tp", j
             break
 
     exit_fee = costs.taker_fee_pct if outcome != "open" else 0.0
-    r_gross = (exit_px - entry_px) / risk
+    r_gross = s * (exit_px - entry_px) / risk
     cost_r = (entry_fee / 100 * entry_px + exit_fee / 100 * exit_px) / risk
     return Trade(coin=o.coin, tag=o.tag, kind=o.kind, decided_i=o.decided_i,
                  entry_i=entry_i, entry_t=int(bars[entry_i].get("t", 0)),
                  entry_px=entry_px, stop=o.stop, tp=o.tp, exit_i=exit_i,
                  exit_px=exit_px, outcome=outcome, r_gross=r_gross,
                  cost_r=cost_r, r_net=r_gross - cost_r, ambiguous=ambiguous,
-                 fill_bar_tp=fill_bar_tp, features=dict(o.features))
+                 fill_bar_tp=fill_bar_tp, features=dict(o.features), side=o.side)
 
 
 def atr_pct_series(bars: List[Dict[str, Any]], n: int = 14) -> List[float]:

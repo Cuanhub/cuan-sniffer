@@ -22,7 +22,7 @@ import numpy as np
 
 from research.backtest import data as D
 from research.backtest.costs import MEASURED, Costs
-from research.backtest.engine import LIMIT, MARKET_CLOSE, Order, Trade, simulate
+from research.backtest.engine import LIMIT, LONG, MARKET_CLOSE, Order, Trade, simulate
 
 SEED = 20261027
 WARMUP = 799                     # zones.ZONE_MIN_BARS - 1
@@ -85,8 +85,19 @@ def matched_control(bars: List[Dict[str, Any]], coin: str, entry_i: int,
 BID_TTL_BARS = 12        # band.BID_TTL_BARS; kept here to avoid an import cycle
 
 
+def funding_r(tr: Trade, pct_per_hour: float) -> float:
+    """Funding over a resolved trade's hold, in R, at a constant rate: a
+    positive rate is paid by longs and received by shorts. One bar is an
+    hour. A sensitivity, not a cost model -- real funding moves every hour."""
+    if not pct_per_hour or tr.exit_i is None or tr.risk_pct <= 0:
+        return 0.0
+    s = -1.0 if tr.side == LONG else 1.0
+    return s * pct_per_hour * (tr.exit_i - tr.entry_i) / tr.risk_pct
+
+
 def same_order_control(bars: List[Dict[str, Any]], trade: Trade,
-                       costs: Costs = MEASURED) -> Optional[float]:
+                       costs: Costs = MEASURED,
+                       funding_pct_per_hour: float = 0.0) -> Optional[float]:
     """Mean net R of random orders of the trade's OWN type, placed AFTER its
     entry with its geometry (rr_floor PREREG Amendment 1).
 
@@ -96,26 +107,32 @@ def same_order_control(bars: List[Dict[str, Any]], trade: Trade,
     distances from the bid -- only the ones that fill count. That way the
     engine's conservative fill-hour rule (stop counted, target not) applies
     to trade and control alike. A market entry gets market entries.
+
+    A short trade gets shorts, mirrored: a resting sell the same distance
+    ABOVE the random bar's close, the stop that far above it, the target that
+    far below.
     """
     coin = trade.coin
-    risk = (trade.entry_px - trade.stop) / trade.entry_px
-    reward = (trade.tp - trade.entry_px) / trade.entry_px
+    s = 1.0 if trade.side == LONG else -1.0
+    risk = s * (trade.entry_px - trade.stop) / trade.entry_px
+    reward = s * (trade.tp - trade.entry_px) / trade.entry_px
     if trade.kind == LIMIT:
         dec_c = bars[trade.decided_i]["c"]
-        offset = (dec_c - trade.entry_px) / dec_c if dec_c > 0 else 0.0
+        offset = s * (dec_c - trade.entry_px) / dec_c if dec_c > 0 else 0.0
     rs = []
     for u in draws_after(len(bars), trade.entry_i, rng_for(coin, trade.entry_i, 2)):
         u = int(u)
         c = bars[u]["c"]
         if trade.kind == LIMIT:
-            lim = c * (1 - offset)
-            o = Order(coin, u, LIMIT, lim * (1 - risk), lim * (1 + reward), limit=lim,
-                      ttl=BID_TTL_BARS)
+            lim = c * (1 - s * offset)
+            o = Order(coin, u, LIMIT, lim * (1 - s * risk), lim * (1 + s * reward), limit=lim,
+                      ttl=BID_TTL_BARS, side=trade.side)
         else:
-            o = Order(coin, u, MARKET_CLOSE, c * (1 - risk), c * (1 + reward))
+            o = Order(coin, u, MARKET_CLOSE, c * (1 - s * risk), c * (1 + s * reward),
+                      side=trade.side)
         tr = simulate(bars, o, costs)
         if tr is not None and tr.resolved:
-            rs.append(tr.r_net)
+            rs.append(tr.r_net + funding_r(tr, funding_pct_per_hour))
     return float(np.mean(rs)) if len(rs) >= MIN_CONTROL else None
 
 
