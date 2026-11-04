@@ -128,6 +128,23 @@ def main() -> int:
             "prereg": "research/backtest/PREREG_kronos.md",
             "report": "research/backtest/results/kronos/report.md",
             "source": "CuanSniffer repo, pre-registered 2026-11-03"})
+    sm = res / "short_mirror" / "summary.json"
+    if sm.exists():
+        s = json.loads(sm.read_text())
+        v, d = s["framings"]["S_live"], s["decision"]["S_live"]
+        ledger.append("historical", "H-SHORT", {
+            "title": "The band strategy's short-side mirror: the live planner on inverted prices, "
+                     "each order traded as a short on the real bars",
+            "hypotheses": 1,
+            "verdict": "NO EDGE: -0.146R against random shorts with the same geometry (CI -0.329 "
+                       "to +0.070, p 0.149), negative in both halves; 1,048 shorts at -0.132R a "
+                       "trade. Long + short together lose faster than long alone.",
+            "evidence": {"S_live": {"estimate": v["estimate"], "ci": [v["ci_lo"], v["ci_hi"]],
+                                    "p": v["p"], "n": v["n"]}},
+            "edge": {"S_live": d["has_edge"]},
+            "prereg": "research/backtest/PREREG_short_mirror.md",
+            "report": "research/backtest/results/short_mirror/report.md",
+            "source": "CuanSniffer repo, pre-registered 2026-11-04"})
     print(f"seeded {len(ledger.entries())} entries; hypotheses to date: {ledger.tested_count()}; "
           f"chain {'intact' if ledger.verify() is None else 'BROKEN'}")
     return 0

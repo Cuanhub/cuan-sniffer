@@ -1,0 +1,7006 @@
+{
+ "framings": {
+  "S_live": {
+   "n": 676,
+   "estimate": -0.14571056334475044,
+   "se": 0.10098165253867246,
+   "ci_lo": -0.3288617675035319,
+   "ci_hi": 0.07010450521073797,
+   "p": 0.1490371015327773,
+   "clusters": 26,
+   "halves": [
+    -0.10590666741225811,
+    -0.18551445927724278
+   ],
+   "p_iid": 0.01496897350357174,
+   "absolute_mean_net_r": -0.26340387642276597,
+   "control_mean_r": -0.11769331307801553,
+   "se_coin": 0.0477228622345394,
+   "se_coin_week": 0.06173953811613542,
+   "se_2way": 0.10098165253867246,
+   "p_2way": 0.1490371015327773
+  }
+ },
+ "decision": {
+  "S_live": {
+   "criteria": {
+    "p_below_alpha": false,
+    "positive": false,
+    "both_halves_positive": false,
+    "null_calibration_ok": true
+   },
+   "has_edge": false,
+   "material": false
+  }
+ },
+ "absolute": {
+  "n": 1048,
+  "mean": -0.13175338300726924,
+  "total": -138.07754539161817,
+  "win": 0.27576335877862596,
+  "se": 0.04864346684676918,
+  "ambiguous": 0,
+  "fill_bar_tp": 0,
+  "by_outcome": {
+   "tp": 289,
+   "stop": 759
+  },
+  "median_hold_bars": 13.0,
+  "median_risk_pct": 2.666554421308287,
+  "planner_rr_median": 2.3998538771219895,
+  "native_rr_median": 2.1910905602286865
+ },
+ "by_entry_kind": {
+  "limit": {
+   "n": 512,
+   "mean": -0.15162849099886005,
+   "sd": 1.4971480318873387,
+   "se": 0.06616522036172691,
+   "t": -2.291664565913985,
+   "p": 0.022330894966789885,
+   "total": -77.63378739141635,
+   "win": 0.240234375
+  },
+  "market_close": {
+   "n": 164,
+   "mean": -0.12723508188801805,
+   "sd": 1.7207072247465252,
+   "se": 0.134364660198784,
+   "t": -0.946938590100863,
+   "p": 0.3450717711878831,
+   "total": -20.866553429634962,
+   "win": 0.3048780487804878
+  }
+ },
+ "stop_atr_strata": {
+  "median_stop_atr_x": 1.9854610243152369,
+  "below": {
+   "n": 338,
+   "mean": -0.10869442174023515,
+   "sd": 1.5580657964363143,
+   "se": 0.08474760693807207,
+   "t": -1.2825662654954,
+   "p": 0.20052554638358588,
+   "total": -36.73871454819948,
+   "win": 0.2692307692307692
+  },
+  "at_or_above": {
+   "n": 338,
+   "mean": -0.18272670494926574,
+   "sd": 1.5494373669237531,
+   "se": 0.08427828224427805,
+   "t": -2.1681351361628125,
+   "p": 0.030847799644344302,
+   "total": -61.76162627285182,
+   "win": 0.24260355029585798
+  }
+ },
+ "by_market_week": {
+  "universe_fell": {
+   "n": 308,
+   "mean": 0.19557774796210517,
+   "sd": 1.719025347397754,
+   "se": 0.0979505597690887,
+   "t": 1.9966986245220593,
+   "p": 0.04674061592701693,
+   "total": 60.237946372328395,
+   "win": 0.3538961038961039
+  },
+  "universe_rose": {
+   "n": 368,
+   "mean": -0.4313540412863578,
+   "sd": 1.3359124624343934,
+   "se": 0.06963925108401287,
+   "t": -6.19412234583011,
+   "p": 1.5727430049831893e-09,
+   "total": -158.73828719337968,
+   "win": 0.17391304347826086
+  }
+ },
+ "long_side_same_code": {
+  "n": 555,
+  "estimate": 0.055355746276486935,
+  "se": 0.10583199100876775,
+  "ci_lo": -0.14474546037397854,
+  "ci_hi": 0.2726168639255971,
+  "p": 0.6009373326150167,
+  "clusters": 26,
+  "halves": [
+   0.1284121440605008,
+   -0.017437858709742654
+  ],
+  "p_iid": 0.43728815248214914,
+  "absolute_mean_net_r": -0.05793156196172553,
+  "control_mean_r": -0.11328730823821251,
+  "trades": 876,
+  "mean_net_r": -0.09027869718060678,
+  "total_net_r": -79.08413873021155,
+  "win": 0.2762557077625571
+ },
+ "combined_book": {
+  "weeks": 26,
+  "long_weekly_mean": -3.041697643469675,
+  "long_weekly_sd": 17.295245888357183,
+  "combined_weekly_mean": -8.352372466224221,
+  "combined_weekly_sd": 14.487515727718305,
+  "added_by_shorts": {
+   "estimate": -5.310674822754544,
+   "ci_lo": -13.110905259060933,
+   "ci_hi": 1.8817544535589554,
+   "p": 0.1670657459473986
+  },
+  "corr_long_short_weekly": -0.7100271893829065
+ },
+ "funding_sensitivity": {
+  "pct_per_hour": 0.00125,
+  "absolute_mean_net_r": -0.11841510338396088,
+  "excess": {
+   "n": 676,
+   "estimate": -0.1462469234536034,
+   "se": 0.10134654677939066,
+   "ci_lo": -0.3297379677183893,
+   "ci_hi": 0.07066627340875606,
+   "p": 0.14900975227729588,
+   "clusters": 26,
+   "halves": [
+    -0.10638375356359524,
+    -0.18611009334361162
+   ],
+   "p_iid": 0.01499952333064374,
+   "absolute_mean_net_r": -0.26340387642276597,
+   "control_mean_r": -0.11715695296916258
+  }
+ },
+ "trades": [
+  {
+   "coin": "AAVE",
+   "entry_t": 1780815600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0748,
+   "excess": -0.4852,
+   "risk_pct": 2.418,
+   "hold_bars": 15
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1781582400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0611,
+   "excess": -0.2014,
+   "risk_pct": 2.977,
+   "hold_bars": 8
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1781622000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0643,
+   "excess": 0.0,
+   "risk_pct": 2.824,
+   "hold_bars": 3
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1781712000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.075,
+   "excess": -0.5139,
+   "risk_pct": 2.41,
+   "hold_bars": 174
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1783332000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0856,
+   "excess": -1.1603,
+   "risk_pct": 2.108,
+   "hold_bars": 3
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1783382400000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.3381,
+   "excess": 2.2956,
+   "risk_pct": 3.37,
+   "hold_bars": 38
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1784041200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.595,
+   "excess": 1.8365,
+   "risk_pct": 2.314,
+   "hold_bars": 41
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1784538000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0902,
+   "excess": -1.1154,
+   "risk_pct": 1.998,
+   "hold_bars": 19
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1784955600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.145,
+   "excess": -1.4739,
+   "risk_pct": 1.435,
+   "hold_bars": 25
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1787140800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1149,
+   "excess": -0.6693,
+   "risk_pct": 1.562,
+   "hold_bars": 2
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1787619600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.3941,
+   "excess": 3.4425,
+   "risk_pct": 3.779,
+   "hold_bars": 37
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1788728400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9263,
+   "excess": 1.7444,
+   "risk_pct": 2.998,
+   "hold_bars": 40
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1790830800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0868,
+   "excess": -1.1628,
+   "risk_pct": 2.415,
+   "hold_bars": 17
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1791057600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0781,
+   "excess": -2.0586,
+   "risk_pct": 2.314,
+   "hold_bars": 41
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1791226800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0914,
+   "excess": -2.0318,
+   "risk_pct": 2.291,
+   "hold_bars": 5
+  },
+  {
+   "coin": "AAVE",
+   "entry_t": 1791266400000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.506,
+   "excess": 1.6186,
+   "risk_pct": 2.305,
+   "hold_bars": 32
+  },
+  {
+   "coin": "ADA",
+   "entry_t": 1780923600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0845,
+   "excess": -1.1173,
+   "risk_pct": 2.484,
+   "hold_bars": 2
+  },
+  {
+   "coin": "ADA",
+   "entry_t": 1780977600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0706,
+   "excess": -1.3964,
+   "risk_pct": 2.981,
+   "hold_bars": 72
+  },
+  {
+   "coin": "ADA",
+   "entry_t": 1781272800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0638,
+   "excess": -2.1863,
+   "risk_pct": 2.847,
+   "hold_bars": 57
+  },
+  {
+   "coin": "ADA",
+   "entry_t": 1781611200000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.2278,
+   "excess": 1.257,
+   "risk_pct": 1.678,
+   "hold_bars": 2
+  },
+  {
+   "coin": "ADA",
+   "entry_t": 1784602800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0634,
+   "excess": -0.8032,
+   "risk_pct": 2.866,
+   "hold_bars": 36
+  },
+  {
+   "coin": "ADA",
+   "entry_t": 1784815200000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.9853,
+   "excess": 2.9307,
+   "risk_pct": 1.461,
+   "hold_bars": 40
+  },
+  {
+   "coin": "ADA",
+   "entry_t": 1784998800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9222,
+   "excess": 2.2557,
+   "risk_pct": 1.613,
+   "hold_bars": 45
+  },
+  {
+   "coin": "ADA",
+   "entry_t": 1787151600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1248,
+   "excess": -1.0791,
+   "risk_pct": 1.436,
+   "hold_bars": 5
+  },
+  {
+   "coin": "ADA",
+   "entry_t": 1789408800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.0783,
+   "excess": 2.6138,
+   "risk_pct": 2.027,
+   "hold_bars": 10
+  },
+  {
+   "coin": "ADA",
+   "entry_t": 1790254800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0631,
+   "excess": -1.8643,
+   "risk_pct": 2.88,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ADA",
+   "entry_t": 1790978400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0559,
+   "excess": -1.2343,
+   "risk_pct": 3.262,
+   "hold_bars": 41
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1778497200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8473,
+   "excess": 1.9965,
+   "risk_pct": 4.343,
+   "hold_bars": 22
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1778670000000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.9847,
+   "excess": 1.7585,
+   "risk_pct": 2.083,
+   "hold_bars": 16
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1779012000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8667,
+   "excess": 2.1372,
+   "risk_pct": 2.009,
+   "hold_bars": 13
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1779138000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0684,
+   "excess": -1.1826,
+   "risk_pct": 2.651,
+   "hold_bars": 4
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1779271200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0706,
+   "excess": -1.009,
+   "risk_pct": 2.982,
+   "hold_bars": 22
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1780869600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0698,
+   "excess": -0.351,
+   "risk_pct": 2.594,
+   "hold_bars": 17
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1780959600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0825,
+   "excess": -0.0792,
+   "risk_pct": 2.545,
+   "hold_bars": 66
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1781470800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0834,
+   "excess": -0.6501,
+   "risk_pct": 2.163,
+   "hold_bars": 2
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1781967600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0476,
+   "excess": -1.494,
+   "risk_pct": 3.85,
+   "hold_bars": 1
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1782334800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 3.0493,
+   "excess": 3.4997,
+   "risk_pct": 3.977,
+   "hold_bars": 37
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1782648000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0717,
+   "excess": -0.9481,
+   "risk_pct": 2.526,
+   "hold_bars": 2
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1782982800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0592,
+   "excess": -1.5857,
+   "risk_pct": 3.073,
+   "hold_bars": 1
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1784937600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0839,
+   "excess": 0.0,
+   "risk_pct": 2.15,
+   "hold_bars": 47
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1785121200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.08,
+   "excess": -0.6783,
+   "risk_pct": 2.258,
+   "hold_bars": 9
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1786212000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.3225,
+   "excess": -0.8312,
+   "risk_pct": 0.641,
+   "hold_bars": 2
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1787151600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1337,
+   "excess": -0.9004,
+   "risk_pct": 1.34,
+   "hold_bars": 0
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1787443200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0592,
+   "excess": -1.9197,
+   "risk_pct": 3.075,
+   "hold_bars": 15
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1787533200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0734,
+   "excess": -1.1356,
+   "risk_pct": 2.867,
+   "hold_bars": 4
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1789218000000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.9752,
+   "excess": 2.6986,
+   "risk_pct": 2.292,
+   "hold_bars": 64
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1789606800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0805,
+   "excess": -0.4373,
+   "risk_pct": 2.244,
+   "hold_bars": 11
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1789711200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0575,
+   "excess": -0.3845,
+   "risk_pct": 3.167,
+   "hold_bars": 0
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1789743600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0471,
+   "excess": -0.5614,
+   "risk_pct": 3.895,
+   "hold_bars": 4
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1790982000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0557,
+   "excess": -0.149,
+   "risk_pct": 3.275,
+   "hold_bars": 18
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1791068400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0651,
+   "excess": -1.254,
+   "risk_pct": 2.79,
+   "hold_bars": 11
+  },
+  {
+   "coin": "AERO",
+   "entry_t": 1791464400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.063,
+   "excess": -1.3945,
+   "risk_pct": 2.884,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1778461200000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.8701,
+   "excess": 0.204,
+   "risk_pct": 4.813,
+   "hold_bars": 73
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1779559200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.0256,
+   "excess": 1.2852,
+   "risk_pct": 2.565,
+   "hold_bars": 27
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1779724800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0761,
+   "excess": -2.5039,
+   "risk_pct": 2.376,
+   "hold_bars": 18
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1779868800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9499,
+   "excess": 0.9783,
+   "risk_pct": 2.542,
+   "hold_bars": 19
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1788195600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0557,
+   "excess": -0.7872,
+   "risk_pct": 3.275,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1788206400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0471,
+   "excess": -0.9668,
+   "risk_pct": 3.893,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1788217200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0333,
+   "excess": -0.8869,
+   "risk_pct": 5.595,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1788260400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0229,
+   "excess": -0.7285,
+   "risk_pct": 8.33,
+   "hold_bars": 29
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1788933600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 3.8018,
+   "excess": 4.8355,
+   "risk_pct": 5.514,
+   "hold_bars": 98
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1789660800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0305,
+   "excess": -0.8434,
+   "risk_pct": 6.131,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1789873200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0468,
+   "excess": -1.9406,
+   "risk_pct": 3.921,
+   "hold_bars": 24
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1790254800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0459,
+   "excess": -1.6476,
+   "risk_pct": 3.995,
+   "hold_bars": 33
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1790434800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.068,
+   "excess": -1.9495,
+   "risk_pct": 2.665,
+   "hold_bars": 17
+  },
+  {
+   "coin": "ARB",
+   "entry_t": 1792360800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0782,
+   "excess": -1.7061,
+   "risk_pct": 2.311,
+   "hold_bars": 3
+  },
+  {
+   "coin": "AVAX",
+   "entry_t": 1778659200000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.3337,
+   "excess": 2.4529,
+   "risk_pct": 2.16,
+   "hold_bars": 53
+  },
+  {
+   "coin": "AVAX",
+   "entry_t": 1781330400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1115,
+   "excess": -1.3047,
+   "risk_pct": 1.61,
+   "hold_bars": 9
+  },
+  {
+   "coin": "AVAX",
+   "entry_t": 1781416800000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 4.4524,
+   "excess": 4.3455,
+   "risk_pct": 0.909,
+   "hold_bars": 12
+  },
+  {
+   "coin": "AVAX",
+   "entry_t": 1787014800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1382,
+   "excess": -0.5117,
+   "risk_pct": 1.295,
+   "hold_bars": 38
+  },
+  {
+   "coin": "AVAX",
+   "entry_t": 1787842800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.1076,
+   "excess": 2.5619,
+   "risk_pct": 2.162,
+   "hold_bars": 25
+  },
+  {
+   "coin": "AVAX",
+   "entry_t": 1789704000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0869,
+   "excess": -0.8451,
+   "risk_pct": 2.074,
+   "hold_bars": 9
+  },
+  {
+   "coin": "AVAX",
+   "entry_t": 1790258400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0618,
+   "excess": -0.972,
+   "risk_pct": 2.94,
+   "hold_bars": 7
+  },
+  {
+   "coin": "AVAX",
+   "entry_t": 1790733600000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.4514,
+   "excess": 2.7531,
+   "risk_pct": 2.687,
+   "hold_bars": 64
+  },
+  {
+   "coin": "AVAX",
+   "entry_t": 1791025200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0824,
+   "excess": -0.8856,
+   "risk_pct": 2.191,
+   "hold_bars": 66
+  },
+  {
+   "coin": "AVAX",
+   "entry_t": 1791288000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0969,
+   "excess": -1.5722,
+   "risk_pct": 1.857,
+   "hold_bars": 11
+  },
+  {
+   "coin": "BCH",
+   "entry_t": 1781517600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0671,
+   "excess": -2.0386,
+   "risk_pct": 2.704,
+   "hold_bars": 0
+  },
+  {
+   "coin": "BCH",
+   "entry_t": 1782835200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0814,
+   "excess": -0.912,
+   "risk_pct": 2.219,
+   "hold_bars": 11
+  },
+  {
+   "coin": "BCH",
+   "entry_t": 1787148000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1282,
+   "excess": -0.7441,
+   "risk_pct": 1.398,
+   "hold_bars": 1
+  },
+  {
+   "coin": "BCH",
+   "entry_t": 1787781600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0816,
+   "excess": -0.2481,
+   "risk_pct": 2.212,
+   "hold_bars": 10
+  },
+  {
+   "coin": "BCH",
+   "entry_t": 1788030000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1163,
+   "excess": -0.4239,
+   "risk_pct": 1.543,
+   "hold_bars": 17
+  },
+  {
+   "coin": "BCH",
+   "entry_t": 1788318000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0892,
+   "excess": -0.7111,
+   "risk_pct": 2.02,
+   "hold_bars": 35
+  },
+  {
+   "coin": "BCH",
+   "entry_t": 1788735600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1044,
+   "excess": -0.9385,
+   "risk_pct": 1.722,
+   "hold_bars": 17
+  },
+  {
+   "coin": "BCH",
+   "entry_t": 1788825600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.5456,
+   "excess": 2.7905,
+   "risk_pct": 2.524,
+   "hold_bars": 60
+  },
+  {
+   "coin": "BCH",
+   "entry_t": 1789653600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0944,
+   "excess": -1.0987,
+   "risk_pct": 1.908,
+   "hold_bars": 0
+  },
+  {
+   "coin": "BCH",
+   "entry_t": 1789722000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0564,
+   "excess": -0.6861,
+   "risk_pct": 3.233,
+   "hold_bars": 12
+  },
+  {
+   "coin": "BNB",
+   "entry_t": 1778619600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1298,
+   "excess": -1.6777,
+   "risk_pct": 1.38,
+   "hold_bars": 4
+  },
+  {
+   "coin": "BNB",
+   "entry_t": 1778677200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1412,
+   "excess": -1.9349,
+   "risk_pct": 1.474,
+   "hold_bars": 23
+  },
+  {
+   "coin": "BNB",
+   "entry_t": 1778896800000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 5.4437,
+   "excess": 5.2411,
+   "risk_pct": 1.089,
+   "hold_bars": 173
+  },
+  {
+   "coin": "BNB",
+   "entry_t": 1780110000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1332,
+   "excess": -1.5165,
+   "risk_pct": 1.345,
+   "hold_bars": 4
+  },
+  {
+   "coin": "BNB",
+   "entry_t": 1781964000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1743,
+   "excess": -1.8325,
+   "risk_pct": 1.192,
+   "hold_bars": 35
+  },
+  {
+   "coin": "BNB",
+   "entry_t": 1785556800000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.4553,
+   "excess": 3.4964,
+   "risk_pct": 1.112,
+   "hold_bars": 14
+  },
+  {
+   "coin": "BNB",
+   "entry_t": 1785769200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1557,
+   "excess": -0.1615,
+   "risk_pct": 1.149,
+   "hold_bars": 33
+  },
+  {
+   "coin": "BNB",
+   "entry_t": 1785967200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1667,
+   "excess": -0.017,
+   "risk_pct": 1.247,
+   "hold_bars": 64
+  },
+  {
+   "coin": "BNB",
+   "entry_t": 1788537600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0844,
+   "excess": -0.884,
+   "risk_pct": 2.139,
+   "hold_bars": 15
+  },
+  {
+   "coin": "BTC",
+   "entry_t": 1781420400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.3452,
+   "excess": -1.2705,
+   "risk_pct": 0.599,
+   "hold_bars": 14
+  },
+  {
+   "coin": "BTC",
+   "entry_t": 1785081600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.2648,
+   "excess": -0.9433,
+   "risk_pct": 0.672,
+   "hold_bars": 6
+  },
+  {
+   "coin": "BTC",
+   "entry_t": 1787518800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0973,
+   "excess": -0.8054,
+   "risk_pct": 1.849,
+   "hold_bars": 16
+  },
+  {
+   "coin": "BTC",
+   "entry_t": 1787662800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1339,
+   "excess": -0.3742,
+   "risk_pct": 1.555,
+   "hold_bars": 43
+  },
+  {
+   "coin": "BTC",
+   "entry_t": 1789106400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1183,
+   "excess": -0.6913,
+   "risk_pct": 1.516,
+   "hold_bars": 7
+  },
+  {
+   "coin": "BTC",
+   "entry_t": 1789192800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1548,
+   "excess": -0.2837,
+   "risk_pct": 1.344,
+   "hold_bars": 51
+  },
+  {
+   "coin": "BTC",
+   "entry_t": 1789430400000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 4.004,
+   "excess": 4.9251,
+   "risk_pct": 0.88,
+   "hold_bars": 18
+  },
+  {
+   "coin": "BTC",
+   "entry_t": 1790254800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1461,
+   "excess": -0.0794,
+   "risk_pct": 1.424,
+   "hold_bars": 143
+  },
+  {
+   "coin": "BTC",
+   "entry_t": 1791014400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.6762,
+   "excess": -1.0036,
+   "risk_pct": 0.305,
+   "hold_bars": 4
+  },
+  {
+   "coin": "BTC",
+   "entry_t": 1791093600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.3544,
+   "excess": -1.0221,
+   "risk_pct": 0.583,
+   "hold_bars": 13
+  },
+  {
+   "coin": "BTC",
+   "entry_t": 1791277200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.086,
+   "excess": 1.6595,
+   "risk_pct": 1.162,
+   "hold_bars": 17
+  },
+  {
+   "coin": "CASHCAT",
+   "entry_t": 1786658400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.4539,
+   "excess": 2.5005,
+   "risk_pct": 5.271,
+   "hold_bars": 7
+  },
+  {
+   "coin": "CASHCAT",
+   "entry_t": 1786903200000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.7446,
+   "excess": 2.2908,
+   "risk_pct": 6.731,
+   "hold_bars": 7
+  },
+  {
+   "coin": "CASHCAT",
+   "entry_t": 1787223600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0181,
+   "excess": -0.7378,
+   "risk_pct": 10.769,
+   "hold_bars": 6
+  },
+  {
+   "coin": "CASHCAT",
+   "entry_t": 1788069600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0224,
+   "excess": -1.2249,
+   "risk_pct": 9.927,
+   "hold_bars": 10
+  },
+  {
+   "coin": "CASHCAT",
+   "entry_t": 1789059600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0182,
+   "excess": -0.7378,
+   "risk_pct": 10.683,
+   "hold_bars": 21
+  },
+  {
+   "coin": "CASHCAT",
+   "entry_t": 1791925200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.048,
+   "excess": -1.3411,
+   "risk_pct": 4.433,
+   "hold_bars": 4
+  },
+  {
+   "coin": "CASHCAT",
+   "entry_t": 1791993600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0271,
+   "excess": -0.9277,
+   "risk_pct": 6.951,
+   "hold_bars": 5
+  },
+  {
+   "coin": "CASHCAT",
+   "entry_t": 1792216800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9526,
+   "excess": 2.4409,
+   "risk_pct": 5.117,
+   "hold_bars": 9
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1780185600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.0594,
+   "excess": 1.8983,
+   "risk_pct": 2.372,
+   "hold_bars": 2
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1780401600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.1026,
+   "excess": 2.0269,
+   "risk_pct": 3.639,
+   "hold_bars": 11
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1780869600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0504,
+   "excess": -0.7696,
+   "risk_pct": 3.63,
+   "hold_bars": 17
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1780952400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0428,
+   "excess": -0.428,
+   "risk_pct": 4.295,
+   "hold_bars": 13
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1781010000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9217,
+   "excess": 2.3371,
+   "risk_pct": 5.332,
+   "hold_bars": 13
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1781769600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0473,
+   "excess": -0.8821,
+   "risk_pct": 3.876,
+   "hold_bars": 17
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1782630000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0431,
+   "excess": -0.7309,
+   "risk_pct": 4.266,
+   "hold_bars": 148
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1783242000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.085,
+   "excess": -0.7524,
+   "risk_pct": 2.468,
+   "hold_bars": 2
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1784718000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8033,
+   "excess": 1.7467,
+   "risk_pct": 3.322,
+   "hold_bars": 32
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1785859200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1007,
+   "excess": -0.5503,
+   "risk_pct": 1.786,
+   "hold_bars": 4
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1786042800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0936,
+   "excess": -0.97,
+   "risk_pct": 1.924,
+   "hold_bars": 4
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1786748400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1191,
+   "excess": -0.6162,
+   "risk_pct": 1.752,
+   "hold_bars": 2
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1786802400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0506,
+   "excess": -0.8609,
+   "risk_pct": 3.61,
+   "hold_bars": 5
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1787144400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0417,
+   "excess": -0.4611,
+   "risk_pct": 4.418,
+   "hold_bars": 2
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1787634000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.76,
+   "excess": 2.0997,
+   "risk_pct": 4.653,
+   "hold_bars": 16
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1788098400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.3223,
+   "excess": 2.7961,
+   "risk_pct": 4.012,
+   "hold_bars": 9
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1788584400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.9854,
+   "excess": 1.5761,
+   "risk_pct": 9.344,
+   "hold_bars": 209
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1790118000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.3856,
+   "excess": 2.1289,
+   "risk_pct": 4.143,
+   "hold_bars": 15
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1790276400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0382,
+   "excess": -1.13,
+   "risk_pct": 4.837,
+   "hold_bars": 0
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1791115200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0759,
+   "excess": -0.9001,
+   "risk_pct": 2.384,
+   "hold_bars": 6
+  },
+  {
+   "coin": "CHIP",
+   "entry_t": 1791651600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0478,
+   "excess": -1.4778,
+   "risk_pct": 3.832,
+   "hold_bars": 0
+  },
+  {
+   "coin": "CRV",
+   "entry_t": 1780819200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0603,
+   "excess": -0.72,
+   "risk_pct": 3.015,
+   "hold_bars": 14
+  },
+  {
+   "coin": "CRV",
+   "entry_t": 1782745200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1007,
+   "excess": -0.8265,
+   "risk_pct": 2.076,
+   "hold_bars": 2
+  },
+  {
+   "coin": "CRV",
+   "entry_t": 1782910800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0879,
+   "excess": -1.0071,
+   "risk_pct": 2.052,
+   "hold_bars": 2
+  },
+  {
+   "coin": "CRV",
+   "entry_t": 1785999600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1251,
+   "excess": -0.4699,
+   "risk_pct": 1.433,
+   "hold_bars": 7
+  },
+  {
+   "coin": "CRV",
+   "entry_t": 1787803200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0624,
+   "excess": 0.0,
+   "risk_pct": 2.912,
+   "hold_bars": 1
+  },
+  {
+   "coin": "CRV",
+   "entry_t": 1788584400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.049,
+   "excess": -1.3048,
+   "risk_pct": 3.737,
+   "hold_bars": 13
+  },
+  {
+   "coin": "CRV",
+   "entry_t": 1788714000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0623,
+   "excess": -1.4171,
+   "risk_pct": 2.918,
+   "hold_bars": 3
+  },
+  {
+   "coin": "CRV",
+   "entry_t": 1788879600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8456,
+   "excess": 1.9258,
+   "risk_pct": 3.088,
+   "hold_bars": 30
+  },
+  {
+   "coin": "CRV",
+   "entry_t": 1792036800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0496,
+   "excess": -0.8182,
+   "risk_pct": 3.685,
+   "hold_bars": 4
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1778403600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.14,
+   "excess": -0.9801,
+   "risk_pct": 1.487,
+   "hold_bars": 8
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1779354000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1693,
+   "excess": -1.5938,
+   "risk_pct": 1.227,
+   "hold_bars": 8
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1779429600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1895,
+   "excess": -1.5788,
+   "risk_pct": 1.095,
+   "hold_bars": 6
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1780819200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0825,
+   "excess": -0.6926,
+   "risk_pct": 2.188,
+   "hold_bars": 14
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1781258400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0942,
+   "excess": -2.4301,
+   "risk_pct": 2.223,
+   "hold_bars": 4
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1781316000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0588,
+   "excess": -2.5498,
+   "risk_pct": 3.597,
+   "hold_bars": 57
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1781575200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1017,
+   "excess": -3.1308,
+   "risk_pct": 2.056,
+   "hold_bars": 6
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1781618400000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.8855,
+   "excess": 0.7351,
+   "risk_pct": 2.385,
+   "hold_bars": 160
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1785693600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.8876,
+   "excess": 3.6683,
+   "risk_pct": 1.176,
+   "hold_bars": 91
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1786197600000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.2905,
+   "excess": 2.8975,
+   "risk_pct": 0.852,
+   "hold_bars": 33
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1786453200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.2815,
+   "excess": -0.6899,
+   "risk_pct": 0.735,
+   "hold_bars": 7
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1787151600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1753,
+   "excess": -1.3179,
+   "risk_pct": 1.019,
+   "hold_bars": 0
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1788692400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1199,
+   "excess": -1.229,
+   "risk_pct": 1.739,
+   "hold_bars": 26
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1788825600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.234,
+   "excess": 2.0615,
+   "risk_pct": 2.241,
+   "hold_bars": 43
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1789131600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.112,
+   "excess": -0.1886,
+   "risk_pct": 1.603,
+   "hold_bars": 0
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1789653600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0705,
+   "excess": -0.7198,
+   "risk_pct": 2.569,
+   "hold_bars": 13
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1789736400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0779,
+   "excess": -1.0022,
+   "risk_pct": 2.321,
+   "hold_bars": 24
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1790326800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0904,
+   "excess": -1.4032,
+   "risk_pct": 1.994,
+   "hold_bars": 2
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1790485200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.115,
+   "excess": -1.2911,
+   "risk_pct": 1.815,
+   "hold_bars": 2
+  },
+  {
+   "coin": "DOGE",
+   "entry_t": 1790550000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.3412,
+   "excess": 2.4218,
+   "risk_pct": 2.011,
+   "hold_bars": 15
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1778371200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.2466,
+   "excess": -1.235,
+   "risk_pct": 0.84,
+   "hold_bars": 7
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1778634000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.085,
+   "excess": -1.3242,
+   "risk_pct": 2.123,
+   "hold_bars": 2
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1778767200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0892,
+   "excess": -0.4383,
+   "risk_pct": 2.021,
+   "hold_bars": 2
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1781478000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1117,
+   "excess": -1.6033,
+   "risk_pct": 1.869,
+   "hold_bars": 11
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1781589600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0808,
+   "excess": -2.809,
+   "risk_pct": 2.236,
+   "hold_bars": 20
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1781686800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0995,
+   "excess": -2.5201,
+   "risk_pct": 2.101,
+   "hold_bars": 6
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1783116000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1455,
+   "excess": -1.2447,
+   "risk_pct": 1.43,
+   "hold_bars": 19
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1783206000000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.5476,
+   "excess": 2.7123,
+   "risk_pct": 1.459,
+   "hold_bars": 37
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1787616000000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.8034,
+   "excess": 2.1659,
+   "risk_pct": 3.232,
+   "hold_bars": 21
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1788562800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0794,
+   "excess": -0.9068,
+   "risk_pct": 2.275,
+   "hold_bars": 2
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1789084800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8344,
+   "excess": 2.3968,
+   "risk_pct": 2.831,
+   "hold_bars": 12
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1789603200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0806,
+   "excess": -0.8671,
+   "risk_pct": 2.239,
+   "hold_bars": 15
+  },
+  {
+   "coin": "DOT",
+   "entry_t": 1791644400000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.8604,
+   "excess": 1.6078,
+   "risk_pct": 2.335,
+   "hold_bars": 51
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1779382800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.083,
+   "excess": -1.7126,
+   "risk_pct": 2.176,
+   "hold_bars": 20
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1779789600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0951,
+   "excess": -1.6033,
+   "risk_pct": 1.894,
+   "hold_bars": 4
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1780171200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1802,
+   "excess": -1.4458,
+   "risk_pct": 1.152,
+   "hold_bars": 6
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1781470800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0536,
+   "excess": -0.5915,
+   "risk_pct": 3.407,
+   "hold_bars": 0
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1782687600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0801,
+   "excess": -0.8943,
+   "risk_pct": 2.254,
+   "hold_bars": 5
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1785002400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1659,
+   "excess": -0.7775,
+   "risk_pct": 1.253,
+   "hold_bars": 28
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1787151600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0788,
+   "excess": -0.7028,
+   "risk_pct": 2.293,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1787738400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0466,
+   "excess": 0.0,
+   "risk_pct": 3.934,
+   "hold_bars": 15
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1789131600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0655,
+   "excess": -0.8517,
+   "risk_pct": 2.769,
+   "hold_bars": 0
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1789365600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0805,
+   "excess": -0.0,
+   "risk_pct": 2.243,
+   "hold_bars": 12
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1789459200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0593,
+   "excess": -0.0,
+   "risk_pct": 3.071,
+   "hold_bars": 9
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1789513200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0421,
+   "excess": -0.0,
+   "risk_pct": 4.373,
+   "hold_bars": 19
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1790755200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0502,
+   "excess": -1.1207,
+   "risk_pct": 3.64,
+   "hold_bars": 5
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1791734400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0782,
+   "excess": -0.4286,
+   "risk_pct": 2.311,
+   "hold_bars": 0
+  },
+  {
+   "coin": "ENA",
+   "entry_t": 1792360800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0599,
+   "excess": -0.29,
+   "risk_pct": 3.037,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1779325200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.2328,
+   "excess": 0.8178,
+   "risk_pct": 2.089,
+   "hold_bars": 47
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1779631200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.2144,
+   "excess": -1.5869,
+   "risk_pct": 0.967,
+   "hold_bars": 19
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1779786000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1862,
+   "excess": -2.8232,
+   "risk_pct": 1.115,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1783353600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1096,
+   "excess": -0.9511,
+   "risk_pct": 1.639,
+   "hold_bars": 5
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1783677600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.124,
+   "excess": -0.4697,
+   "risk_pct": 1.446,
+   "hold_bars": 29
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1783818000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1316,
+   "excess": -0.5341,
+   "risk_pct": 1.362,
+   "hold_bars": 14
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1784559600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0866,
+   "excess": -2.0267,
+   "risk_pct": 2.082,
+   "hold_bars": 15
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1784635200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.176,
+   "excess": -0.2492,
+   "risk_pct": 1.18,
+   "hold_bars": 131
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1785416400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 3.694,
+   "excess": 4.5986,
+   "risk_pct": 1.427,
+   "hold_bars": 53
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1787850000000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.9182,
+   "excess": 2.1373,
+   "risk_pct": 1.542,
+   "hold_bars": 23
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1789200000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1256,
+   "excess": -0.1955,
+   "risk_pct": 1.427,
+   "hold_bars": 60
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1789606800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0777,
+   "excess": -0.6077,
+   "risk_pct": 2.325,
+   "hold_bars": 28
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1789804800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1177,
+   "excess": -0.441,
+   "risk_pct": 1.772,
+   "hold_bars": 40
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1790431200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.2579,
+   "excess": -0.7773,
+   "risk_pct": 0.803,
+   "hold_bars": 15
+  },
+  {
+   "coin": "ETH",
+   "entry_t": 1791979200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.2947,
+   "excess": 2.2514,
+   "risk_pct": 1.282,
+   "hold_bars": 2
+  },
+  {
+   "coin": "FARTCOIN",
+   "entry_t": 1778216400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0437,
+   "excess": -2.2508,
+   "risk_pct": 4.203,
+   "hold_bars": 38
+  },
+  {
+   "coin": "FARTCOIN",
+   "entry_t": 1779703200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8958,
+   "excess": 0.4229,
+   "risk_pct": 2.807,
+   "hold_bars": 31
+  },
+  {
+   "coin": "FARTCOIN",
+   "entry_t": 1780808400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0691,
+   "excess": -0.4097,
+   "risk_pct": 3.048,
+   "hold_bars": 3
+  },
+  {
+   "coin": "FARTCOIN",
+   "entry_t": 1780862400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0555,
+   "excess": -0.662,
+   "risk_pct": 3.282,
+   "hold_bars": 2
+  },
+  {
+   "coin": "FARTCOIN",
+   "entry_t": 1780992000000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.8336,
+   "excess": 2.2083,
+   "risk_pct": 2.921,
+   "hold_bars": 20
+  },
+  {
+   "coin": "FARTCOIN",
+   "entry_t": 1781337600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0609,
+   "excess": -0.4182,
+   "risk_pct": 2.986,
+   "hold_bars": 37
+  },
+  {
+   "coin": "FARTCOIN",
+   "entry_t": 1781773200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.6666,
+   "excess": 2.245,
+   "risk_pct": 4.33,
+   "hold_bars": 152
+  },
+  {
+   "coin": "FARTCOIN",
+   "entry_t": 1786611600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0743,
+   "excess": -0.4067,
+   "risk_pct": 2.436,
+   "hold_bars": 12
+  },
+  {
+   "coin": "FARTCOIN",
+   "entry_t": 1787140800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0907,
+   "excess": -0.5586,
+   "risk_pct": 1.987,
+   "hold_bars": 2
+  },
+  {
+   "coin": "FARTCOIN",
+   "entry_t": 1787666400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0301,
+   "excess": -1.3585,
+   "risk_pct": 6.214,
+   "hold_bars": 11
+  },
+  {
+   "coin": "FARTCOIN",
+   "entry_t": 1789351200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0681,
+   "excess": -0.6572,
+   "risk_pct": 2.661,
+   "hold_bars": 16
+  },
+  {
+   "coin": "FARTCOIN",
+   "entry_t": 1789700400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0563,
+   "excess": -0.4833,
+   "risk_pct": 3.237,
+   "hold_bars": 11
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1779148800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0647,
+   "excess": -1.0723,
+   "risk_pct": 2.806,
+   "hold_bars": 40
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1779724800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0362,
+   "excess": -1.7803,
+   "risk_pct": 5.115,
+   "hold_bars": 2
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1779796800000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.6935,
+   "excess": 1.7728,
+   "risk_pct": 6.366,
+   "hold_bars": 7
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1779969600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0312,
+   "excess": -0.3944,
+   "risk_pct": 5.975,
+   "hold_bars": 30
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1780164000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.7133,
+   "excess": 2.2915,
+   "risk_pct": 6.637,
+   "hold_bars": 37
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1780354800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.6895,
+   "excess": 2.5585,
+   "risk_pct": 6.479,
+   "hold_bars": 16
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1782205200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.045,
+   "excess": -0.8354,
+   "risk_pct": 4.077,
+   "hold_bars": 3
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1786989600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.0421,
+   "excess": 2.2761,
+   "risk_pct": 2.344,
+   "hold_bars": 28
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1788127200000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.1187,
+   "excess": 1.5552,
+   "risk_pct": 2.385,
+   "hold_bars": 1
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1788447600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0796,
+   "excess": -1.9397,
+   "risk_pct": 2.27,
+   "hold_bars": 4
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1789776000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0633,
+   "excess": -0.3292,
+   "risk_pct": 2.867,
+   "hold_bars": 25
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1790406000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0397,
+   "excess": -0.6455,
+   "risk_pct": 5.403,
+   "hold_bars": 11
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1790650800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0207,
+   "excess": -1.5799,
+   "risk_pct": 9.265,
+   "hold_bars": 1
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1791018000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0347,
+   "excess": -0.4407,
+   "risk_pct": 5.345,
+   "hold_bars": 24
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1791226800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0473,
+   "excess": -0.4276,
+   "risk_pct": 3.876,
+   "hold_bars": 1
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1792072800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0302,
+   "excess": -0.189,
+   "risk_pct": 6.195,
+   "hold_bars": 17
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1792440000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0476,
+   "excess": -0.0968,
+   "risk_pct": 3.846,
+   "hold_bars": 18
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1792684800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0721,
+   "excess": -0.4862,
+   "risk_pct": 2.919,
+   "hold_bars": 9
+  },
+  {
+   "coin": "GRASS",
+   "entry_t": 1792872000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0368,
+   "excess": -0.2712,
+   "risk_pct": 5.03,
+   "hold_bars": 4
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1778781600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0607,
+   "excess": -0.4928,
+   "risk_pct": 2.993,
+   "hold_bars": 7
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1779040800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0728,
+   "excess": -0.7454,
+   "risk_pct": 2.487,
+   "hold_bars": 1
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1780462800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 3.3558,
+   "excess": 3.9078,
+   "risk_pct": 4.554,
+   "hold_bars": 46
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1781355600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0717,
+   "excess": -0.9904,
+   "risk_pct": 2.527,
+   "hold_bars": 13
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1781578800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0613,
+   "excess": -2.3319,
+   "risk_pct": 2.966,
+   "hold_bars": 1
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1783778400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.117,
+   "excess": -0.9197,
+   "risk_pct": 1.534,
+   "hold_bars": 29
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1785124800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9008,
+   "excess": 2.2171,
+   "risk_pct": 1.386,
+   "hold_bars": 10
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1786388400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1115,
+   "excess": -0.3623,
+   "risk_pct": 1.611,
+   "hold_bars": 44
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1786928400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1484,
+   "excess": -0.3847,
+   "risk_pct": 1.205,
+   "hold_bars": 1
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1787151600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0967,
+   "excess": -1.0003,
+   "risk_pct": 1.862,
+   "hold_bars": 0
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1787508000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0818,
+   "excess": -0.387,
+   "risk_pct": 2.565,
+   "hold_bars": 4
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1787572800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0589,
+   "excess": -0.4132,
+   "risk_pct": 3.09,
+   "hold_bars": 31
+  },
+  {
+   "coin": "HYPE",
+   "entry_t": 1789351200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0822,
+   "excess": -0.6595,
+   "risk_pct": 2.197,
+   "hold_bars": 15
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1778061600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1022,
+   "excess": -0.6968,
+   "risk_pct": 1.759,
+   "hold_bars": 1
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1779696000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9537,
+   "excess": 2.2946,
+   "risk_pct": 2.35,
+   "hold_bars": 18
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1780138800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0625,
+   "excess": -0.7889,
+   "risk_pct": 2.909,
+   "hold_bars": 0
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1780203600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0513,
+   "excess": -0.8926,
+   "risk_pct": 3.563,
+   "hold_bars": 3
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1780236000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0609,
+   "excess": -1.1887,
+   "risk_pct": 3.473,
+   "hold_bars": 3
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1780390800000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.7233,
+   "excess": 2.8925,
+   "risk_pct": 2.546,
+   "hold_bars": 14
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1780812000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0584,
+   "excess": -0.4977,
+   "risk_pct": 3.117,
+   "hold_bars": 39
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1781020800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9109,
+   "excess": 2.7079,
+   "risk_pct": 5.744,
+   "hold_bars": 20
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1781452800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0578,
+   "excess": -0.9921,
+   "risk_pct": 3.662,
+   "hold_bars": 5
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1783242000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1096,
+   "excess": -1.4389,
+   "risk_pct": 1.906,
+   "hold_bars": 5
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1783314000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1096,
+   "excess": -1.0096,
+   "risk_pct": 1.906,
+   "hold_bars": 14
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1783396800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0921,
+   "excess": -1.46,
+   "risk_pct": 2.275,
+   "hold_bars": 85
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1785600000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9059,
+   "excess": 2.1903,
+   "risk_pct": 2.234,
+   "hold_bars": 38
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1785988800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1038,
+   "excess": -0.4817,
+   "risk_pct": 2.013,
+   "hold_bars": 31
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1786197600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0824,
+   "excess": -1.5803,
+   "risk_pct": 2.192,
+   "hold_bars": 0
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1786460400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 5.6312,
+   "excess": 6.746,
+   "risk_pct": 1.564,
+   "hold_bars": 155
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1788015600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1047,
+   "excess": -0.8554,
+   "risk_pct": 1.717,
+   "hold_bars": 0
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1788087600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0703,
+   "excess": -0.3378,
+   "risk_pct": 2.997,
+   "hold_bars": 7
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1788256800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0738,
+   "excess": -0.4336,
+   "risk_pct": 2.851,
+   "hold_bars": 13
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1788782400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0973,
+   "excess": -0.1709,
+   "risk_pct": 1.849,
+   "hold_bars": 20
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1789398000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0737,
+   "excess": -0.5868,
+   "risk_pct": 2.454,
+   "hold_bars": 4
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1789948800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0647,
+   "excess": -0.7932,
+   "risk_pct": 2.807,
+   "hold_bars": 5
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1790600400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1486,
+   "excess": -1.3182,
+   "risk_pct": 2.521,
+   "hold_bars": 1
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1790661600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0548,
+   "excess": -1.4028,
+   "risk_pct": 3.328,
+   "hold_bars": 1
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1792314000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0697,
+   "excess": -0.8997,
+   "risk_pct": 2.598,
+   "hold_bars": 22
+  },
+  {
+   "coin": "INIT",
+   "entry_t": 1793091600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.056,
+   "excess": 0.0,
+   "risk_pct": 3.257,
+   "hold_bars": 0
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1778428800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1032,
+   "excess": -0.6718,
+   "risk_pct": 1.742,
+   "hold_bars": 1
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1778450400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0716,
+   "excess": -0.7338,
+   "risk_pct": 2.528,
+   "hold_bars": 12
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1779145200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.039,
+   "excess": -0.9605,
+   "risk_pct": 4.74,
+   "hold_bars": 1
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1779382800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0461,
+   "excess": -0.6173,
+   "risk_pct": 3.977,
+   "hold_bars": 16
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1779710400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0437,
+   "excess": -1.3006,
+   "risk_pct": 4.205,
+   "hold_bars": 6
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1779757200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0448,
+   "excess": -0.9736,
+   "risk_pct": 4.764,
+   "hold_bars": 11
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1780030800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0408,
+   "excess": -0.9738,
+   "risk_pct": 4.513,
+   "hold_bars": 1
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1780203600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0548,
+   "excess": -1.0377,
+   "risk_pct": 3.329,
+   "hold_bars": 7
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1780264800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0521,
+   "excess": -1.021,
+   "risk_pct": 3.505,
+   "hold_bars": 14
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1780430400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.6945,
+   "excess": 1.554,
+   "risk_pct": 6.178,
+   "hold_bars": 30
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1782244800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.939,
+   "excess": 1.8808,
+   "risk_pct": 3.005,
+   "hold_bars": 15
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1782691200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0812,
+   "excess": -0.7451,
+   "risk_pct": 2.225,
+   "hold_bars": 7
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1787112000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1239,
+   "excess": -0.9416,
+   "risk_pct": 1.683,
+   "hold_bars": 2
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1787148000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0748,
+   "excess": -1.1457,
+   "risk_pct": 2.42,
+   "hold_bars": 1
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1787166000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0755,
+   "excess": -0.8707,
+   "risk_pct": 2.397,
+   "hold_bars": 2
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1788422400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0613,
+   "excess": -0.9297,
+   "risk_pct": 2.966,
+   "hold_bars": 6
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1788652800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1077,
+   "excess": -0.9656,
+   "risk_pct": 1.668,
+   "hold_bars": 2
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1788670800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0909,
+   "excess": -0.9772,
+   "risk_pct": 1.983,
+   "hold_bars": 18
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1789131600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0754,
+   "excess": -0.2305,
+   "risk_pct": 2.399,
+   "hold_bars": 29
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1789304400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0526,
+   "excess": -0.5006,
+   "risk_pct": 3.469,
+   "hold_bars": 17
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1789581600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0654,
+   "excess": -0.4513,
+   "risk_pct": 2.775,
+   "hold_bars": 6
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1789714800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0544,
+   "excess": -1.3693,
+   "risk_pct": 3.353,
+   "hold_bars": 1
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1790665200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0467,
+   "excess": -0.6295,
+   "risk_pct": 3.929,
+   "hold_bars": 94
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1791648000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0602,
+   "excess": -1.3316,
+   "risk_pct": 3.021,
+   "hold_bars": 1
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1792249200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1017,
+   "excess": -1.1857,
+   "risk_pct": 2.056,
+   "hold_bars": 3
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1792364400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0495,
+   "excess": -0.7654,
+   "risk_pct": 3.699,
+   "hold_bars": 39
+  },
+  {
+   "coin": "INJ",
+   "entry_t": 1792530000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0485,
+   "excess": -0.7607,
+   "risk_pct": 3.777,
+   "hold_bars": 0
+  },
+  {
+   "coin": "LINK",
+   "entry_t": 1784415600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.195,
+   "excess": -1.2131,
+   "risk_pct": 1.064,
+   "hold_bars": 25
+  },
+  {
+   "coin": "LINK",
+   "entry_t": 1784545200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1075,
+   "excess": -2.1103,
+   "risk_pct": 1.671,
+   "hold_bars": 7
+  },
+  {
+   "coin": "LINK",
+   "entry_t": 1784653200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1762,
+   "excess": -1.2053,
+   "risk_pct": 1.179,
+   "hold_bars": 9
+  },
+  {
+   "coin": "LINK",
+   "entry_t": 1784707200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1937,
+   "excess": -1.2099,
+   "risk_pct": 1.071,
+   "hold_bars": 6
+  },
+  {
+   "coin": "LINK",
+   "entry_t": 1784750400000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.6136,
+   "excess": 2.6475,
+   "risk_pct": 1.233,
+   "hold_bars": 41
+  },
+  {
+   "coin": "LINK",
+   "entry_t": 1785150000000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 3.4428,
+   "excess": 3.912,
+   "risk_pct": 1.303,
+   "hold_bars": 12
+  },
+  {
+   "coin": "LINK",
+   "entry_t": 1786597200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1036,
+   "excess": -0.3307,
+   "risk_pct": 1.735,
+   "hold_bars": 36
+  },
+  {
+   "coin": "LINK",
+   "entry_t": 1788105600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0836,
+   "excess": -1.1535,
+   "risk_pct": 2.158,
+   "hold_bars": 108
+  },
+  {
+   "coin": "LINK",
+   "entry_t": 1789405200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.089,
+   "excess": -0.6018,
+   "risk_pct": 2.026,
+   "hold_bars": 3
+  },
+  {
+   "coin": "LINK",
+   "entry_t": 1789628400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0636,
+   "excess": -0.839,
+   "risk_pct": 2.856,
+   "hold_bars": 18
+  },
+  {
+   "coin": "LINK",
+   "entry_t": 1789714800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0723,
+   "excess": -0.6788,
+   "risk_pct": 2.503,
+   "hold_bars": 7
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1778868000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.82,
+   "excess": 2.3321,
+   "risk_pct": 3.63,
+   "hold_bars": 2
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1779051600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.874,
+   "excess": 2.2707,
+   "risk_pct": 2.023,
+   "hold_bars": 2
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1779649200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.6547,
+   "excess": 1.6967,
+   "risk_pct": 6.781,
+   "hold_bars": 48
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1780012800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0314,
+   "excess": -1.0732,
+   "risk_pct": 5.934,
+   "hold_bars": 14
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1780264800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.7242,
+   "excess": 1.8972,
+   "risk_pct": 5.251,
+   "hold_bars": 9
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1781352000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.051,
+   "excess": -0.5657,
+   "risk_pct": 3.587,
+   "hold_bars": 7
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1783083600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0511,
+   "excess": -1.0038,
+   "risk_pct": 3.579,
+   "hold_bars": 1
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1783573200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0357,
+   "excess": -1.4883,
+   "risk_pct": 5.197,
+   "hold_bars": 32
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1784559600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0526,
+   "excess": -1.2658,
+   "risk_pct": 3.468,
+   "hold_bars": 16
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1785103200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0887,
+   "excess": -0.2567,
+   "risk_pct": 2.033,
+   "hold_bars": 3
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1787472000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0231,
+   "excess": -0.0,
+   "risk_pct": 8.237,
+   "hold_bars": 15
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1787781600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0458,
+   "excess": -0.7765,
+   "risk_pct": 4.008,
+   "hold_bars": 16
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1788015600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0611,
+   "excess": -0.5696,
+   "risk_pct": 2.978,
+   "hold_bars": 25
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1789128000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0325,
+   "excess": 0.0,
+   "risk_pct": 5.723,
+   "hold_bars": 2
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1789315200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0745,
+   "excess": -0.7181,
+   "risk_pct": 2.43,
+   "hold_bars": 4
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1789351200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0608,
+   "excess": -0.4789,
+   "risk_pct": 2.989,
+   "hold_bars": 1
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1792580400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0877,
+   "excess": -1.7107,
+   "risk_pct": 2.39,
+   "hold_bars": 5
+  },
+  {
+   "coin": "LIT",
+   "entry_t": 1792753200000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.932,
+   "excess": 1.7701,
+   "risk_pct": 3.402,
+   "hold_bars": 11
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1778713200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.2554,
+   "excess": 1.9708,
+   "risk_pct": 3.765,
+   "hold_bars": 38
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1780794000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.04,
+   "excess": -1.1887,
+   "risk_pct": 4.614,
+   "hold_bars": 3
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1780923600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.81,
+   "excess": 1.8872,
+   "risk_pct": 4.41,
+   "hold_bars": 11
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1781578800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0694,
+   "excess": -2.3349,
+   "risk_pct": 2.613,
+   "hold_bars": 5
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1781715600000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.201,
+   "excess": 1.6008,
+   "risk_pct": 3.194,
+   "hold_bars": 22
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1781874000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1018,
+   "excess": -1.3749,
+   "risk_pct": 1.766,
+   "hold_bars": 39
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1784008800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0629,
+   "excess": -1.3025,
+   "risk_pct": 2.887,
+   "hold_bars": 6
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1786978800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0729,
+   "excess": -0.838,
+   "risk_pct": 2.481,
+   "hold_bars": 0
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1787004000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0709,
+   "excess": -1.076,
+   "risk_pct": 2.556,
+   "hold_bars": 1
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1787173200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0504,
+   "excess": -0.8526,
+   "risk_pct": 3.626,
+   "hold_bars": 6
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1788094800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0715,
+   "excess": -1.3214,
+   "risk_pct": 2.533,
+   "hold_bars": 3
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1788192000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 3.439,
+   "excess": 2.6138,
+   "risk_pct": 4.402,
+   "hold_bars": 233
+  },
+  {
+   "coin": "MON",
+   "entry_t": 1791028800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0904,
+   "excess": -1.836,
+   "risk_pct": 2.316,
+   "hold_bars": 2
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1778576400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0406,
+   "excess": -0.5104,
+   "risk_pct": 4.537,
+   "hold_bars": 16
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1779001200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0787,
+   "excess": -0.1986,
+   "risk_pct": 2.67,
+   "hold_bars": 36
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1779253200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0536,
+   "excess": -0.8269,
+   "risk_pct": 3.405,
+   "hold_bars": 16
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1779541200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.034,
+   "excess": -0.6047,
+   "risk_pct": 5.467,
+   "hold_bars": 2
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1779703200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0268,
+   "excess": -0.8053,
+   "risk_pct": 7.043,
+   "hold_bars": 3
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1779991200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.04,
+   "excess": -0.9322,
+   "risk_pct": 4.617,
+   "hold_bars": 6
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1780203600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0499,
+   "excess": -0.9054,
+   "risk_pct": 3.662,
+   "hold_bars": 22
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1780848000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0317,
+   "excess": -1.286,
+   "risk_pct": 5.881,
+   "hold_bars": 23
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1785427200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0783,
+   "excess": -1.3823,
+   "risk_pct": 2.308,
+   "hold_bars": 61
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1786096800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.3836,
+   "excess": 1.9044,
+   "risk_pct": 1.824,
+   "hold_bars": 7
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1786348800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8569,
+   "excess": 2.0333,
+   "risk_pct": 2.341,
+   "hold_bars": 14
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1786759200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.1716,
+   "excess": 2.2554,
+   "risk_pct": 1.911,
+   "hold_bars": 43
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1787032800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9123,
+   "excess": 1.9735,
+   "risk_pct": 1.983,
+   "hold_bars": 15
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1787151600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0887,
+   "excess": -0.6238,
+   "risk_pct": 2.032,
+   "hold_bars": 0
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1788033600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.102,
+   "excess": -0.0,
+   "risk_pct": 1.763,
+   "hold_bars": 22
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1788134400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0576,
+   "excess": -0.0,
+   "risk_pct": 3.164,
+   "hold_bars": 23
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1788879600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0448,
+   "excess": -0.6606,
+   "risk_pct": 4.096,
+   "hold_bars": 19
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1789588800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0539,
+   "excess": -0.6721,
+   "risk_pct": 3.383,
+   "hold_bars": 4
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1789916400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0371,
+   "excess": -0.5144,
+   "risk_pct": 4.984,
+   "hold_bars": 1
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1790251200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0231,
+   "excess": -0.7838,
+   "risk_pct": 8.235,
+   "hold_bars": 7
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1790456400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0379,
+   "excess": -0.8152,
+   "risk_pct": 4.876,
+   "hold_bars": 8
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1791241200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.1048,
+   "excess": 2.5036,
+   "risk_pct": 3.678,
+   "hold_bars": 18
+  },
+  {
+   "coin": "NEAR",
+   "entry_t": 1791666000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0878,
+   "excess": -1.5858,
+   "risk_pct": 2.387,
+   "hold_bars": 18
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1778050800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0805,
+   "excess": -1.077,
+   "risk_pct": 2.243,
+   "hold_bars": 0
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1778436000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0461,
+   "excess": 0.0,
+   "risk_pct": 3.982,
+   "hold_bars": 241
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1779566400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0289,
+   "excess": -1.0996,
+   "risk_pct": 6.477,
+   "hold_bars": 7
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1781197200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.062,
+   "excess": -0.7639,
+   "risk_pct": 3.409,
+   "hold_bars": 15
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1785096000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0808,
+   "excess": -0.7033,
+   "risk_pct": 2.235,
+   "hold_bars": 1
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1785801600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0384,
+   "excess": -0.2455,
+   "risk_pct": 4.814,
+   "hold_bars": 4
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1786604400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0527,
+   "excess": -0.8587,
+   "risk_pct": 4.026,
+   "hold_bars": 5
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1786626000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0312,
+   "excess": -0.5643,
+   "risk_pct": 5.979,
+   "hold_bars": 34
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1786867200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.031,
+   "excess": -0.7038,
+   "risk_pct": 7.001,
+   "hold_bars": 18
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1786957200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0344,
+   "excess": -0.5169,
+   "risk_pct": 6.282,
+   "hold_bars": 9
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1787032800000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.9618,
+   "excess": 2.6659,
+   "risk_pct": 6.438,
+   "hold_bars": 28
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1787256000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0546,
+   "excess": -0.757,
+   "risk_pct": 3.887,
+   "hold_bars": 3
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1787299200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0279,
+   "excess": -1.3065,
+   "risk_pct": 6.725,
+   "hold_bars": 18
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1787479200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0665,
+   "excess": -0.8748,
+   "risk_pct": 3.173,
+   "hold_bars": 5
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1789617600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0712,
+   "excess": -0.4609,
+   "risk_pct": 2.543,
+   "hold_bars": 13
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1790017200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0172,
+   "excess": -0.4943,
+   "risk_pct": 11.355,
+   "hold_bars": 7
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1790492400000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.8051,
+   "excess": 2.1381,
+   "risk_pct": 8.146,
+   "hold_bars": 18
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1790755200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0342,
+   "excess": -0.247,
+   "risk_pct": 5.432,
+   "hold_bars": 3
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1790823600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8927,
+   "excess": 2.4222,
+   "risk_pct": 5.892,
+   "hold_bars": 38
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1791003600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0459,
+   "excess": -0.988,
+   "risk_pct": 3.995,
+   "hold_bars": 25
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1791669600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.4251,
+   "excess": 2.3325,
+   "risk_pct": 3.39,
+   "hold_bars": 1
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1791709200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9076,
+   "excess": 1.664,
+   "risk_pct": 5.559,
+   "hold_bars": 29
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1792407600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.048,
+   "excess": -0.448,
+   "risk_pct": 3.813,
+   "hold_bars": 1
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1792728000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0497,
+   "excess": -0.4138,
+   "risk_pct": 3.684,
+   "hold_bars": 2
+  },
+  {
+   "coin": "NIL",
+   "entry_t": 1792810800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0463,
+   "excess": -0.3226,
+   "risk_pct": 3.964,
+   "hold_bars": 6
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1778738400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0506,
+   "excess": -0.191,
+   "risk_pct": 3.613,
+   "hold_bars": 8
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1779138000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.054,
+   "excess": -0.1333,
+   "risk_pct": 3.379,
+   "hold_bars": 0
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1779148800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0369,
+   "excess": -0.8034,
+   "risk_pct": 5.01,
+   "hold_bars": 49
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1780174800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0814,
+   "excess": -1.0976,
+   "risk_pct": 2.218,
+   "hold_bars": 3
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1781092800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9176,
+   "excess": 1.2966,
+   "risk_pct": 2.979,
+   "hold_bars": 9
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1784545200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0774,
+   "excess": -0.364,
+   "risk_pct": 2.336,
+   "hold_bars": 5
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1785409200000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.0592,
+   "excess": 1.0666,
+   "risk_pct": 2.698,
+   "hold_bars": 27
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1786932000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1541,
+   "excess": -0.7365,
+   "risk_pct": 1.161,
+   "hold_bars": 4
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1787169600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0812,
+   "excess": -0.5841,
+   "risk_pct": 2.224,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1789599600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0644,
+   "excess": -0.3607,
+   "risk_pct": 2.817,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1789646400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0482,
+   "excess": -0.5439,
+   "risk_pct": 3.8,
+   "hold_bars": 13
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1790514000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0776,
+   "excess": -2.2378,
+   "risk_pct": 2.329,
+   "hold_bars": 7
+  },
+  {
+   "coin": "ONDO",
+   "entry_t": 1790661600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 3.5826,
+   "excess": 3.3826,
+   "risk_pct": 4.918,
+   "hold_bars": 380
+  },
+  {
+   "coin": "PONS",
+   "entry_t": 1791982800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.7588,
+   "excess": 2.7476,
+   "risk_pct": 5.214,
+   "hold_bars": 13
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1780801200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.072,
+   "excess": -0.8556,
+   "risk_pct": 2.922,
+   "hold_bars": 5
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1780869600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0632,
+   "excess": -0.6657,
+   "risk_pct": 2.873,
+   "hold_bars": 0
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1780891200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0636,
+   "excess": -1.3507,
+   "risk_pct": 3.319,
+   "hold_bars": 3
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1781276400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0634,
+   "excess": -1.3456,
+   "risk_pct": 2.864,
+   "hold_bars": 3
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1782028800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.2828,
+   "excess": 2.6451,
+   "risk_pct": 3.312,
+   "hold_bars": 48
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1783879200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0798,
+   "excess": -1.2066,
+   "risk_pct": 2.263,
+   "hold_bars": 6
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1785423600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0454,
+   "excess": -0.1259,
+   "risk_pct": 4.047,
+   "hold_bars": 22
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1785506400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0508,
+   "excess": -0.595,
+   "risk_pct": 3.596,
+   "hold_bars": 13
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1786208400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0653,
+   "excess": -1.0575,
+   "risk_pct": 2.78,
+   "hold_bars": 9
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1786546800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0514,
+   "excess": -0.1562,
+   "risk_pct": 3.557,
+   "hold_bars": 23
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1786939200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0684,
+   "excess": -0.7474,
+   "risk_pct": 2.652,
+   "hold_bars": 2
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1787709600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0274,
+   "excess": -1.2521,
+   "risk_pct": 6.853,
+   "hold_bars": 37
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1787925600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.036,
+   "excess": -1.0672,
+   "risk_pct": 5.151,
+   "hold_bars": 31
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1788220800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 3.2759,
+   "excess": 3.1426,
+   "risk_pct": 5.153,
+   "hold_bars": 119
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1788775200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0336,
+   "excess": -1.1881,
+   "risk_pct": 5.526,
+   "hold_bars": 1
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1788829200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0264,
+   "excess": -0.5732,
+   "risk_pct": 7.143,
+   "hold_bars": 40
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1789232400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0438,
+   "excess": -0.4094,
+   "risk_pct": 4.192,
+   "hold_bars": 1
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1789351200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0399,
+   "excess": -0.8429,
+   "risk_pct": 4.625,
+   "hold_bars": 14
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1789624800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0388,
+   "excess": -0.7438,
+   "risk_pct": 4.758,
+   "hold_bars": 17
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1791028800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0278,
+   "excess": -2.2522,
+   "risk_pct": 6.771,
+   "hold_bars": 4
+  },
+  {
+   "coin": "PUMP",
+   "entry_t": 1791234000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.4838,
+   "excess": 1.909,
+   "risk_pct": 4.197,
+   "hold_bars": 61
+  },
+  {
+   "coin": "SKR",
+   "entry_t": 1778058000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1178,
+   "excess": -2.1389,
+   "risk_pct": 1.523,
+   "hold_bars": 57
+  },
+  {
+   "coin": "SKR",
+   "entry_t": 1779566400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.105,
+   "excess": -2.376,
+   "risk_pct": 1.712,
+   "hold_bars": 1
+  },
+  {
+   "coin": "SKR",
+   "entry_t": 1779631200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1984,
+   "excess": -1.7069,
+   "risk_pct": 1.046,
+   "hold_bars": 14
+  },
+  {
+   "coin": "SKR",
+   "entry_t": 1781492400000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.8006,
+   "excess": 1.0738,
+   "risk_pct": 3.367,
+   "hold_bars": 23
+  },
+  {
+   "coin": "SKR",
+   "entry_t": 1782482400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0467,
+   "excess": -0.3826,
+   "risk_pct": 3.927,
+   "hold_bars": 7
+  },
+  {
+   "coin": "SKR",
+   "entry_t": 1782568800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0572,
+   "excess": -0.9938,
+   "risk_pct": 3.182,
+   "hold_bars": 86
+  },
+  {
+   "coin": "SKR",
+   "entry_t": 1783663200000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.0416,
+   "excess": 2.2416,
+   "risk_pct": 1.321,
+   "hold_bars": 22
+  },
+  {
+   "coin": "SKR",
+   "entry_t": 1784674800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.3214,
+   "excess": 1.2573,
+   "risk_pct": 1.933,
+   "hold_bars": 73
+  },
+  {
+   "coin": "SKR",
+   "entry_t": 1785412800000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.692,
+   "excess": 2.6379,
+   "risk_pct": 1.591,
+   "hold_bars": 11
+  },
+  {
+   "coin": "SKR",
+   "entry_t": 1786957200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1012,
+   "excess": -0.3124,
+   "risk_pct": 1.777,
+   "hold_bars": 54
+  },
+  {
+   "coin": "SKR",
+   "entry_t": 1787259600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0684,
+   "excess": -0.9027,
+   "risk_pct": 2.649,
+   "hold_bars": 10
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1778738400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1348,
+   "excess": -1.5953,
+   "risk_pct": 1.545,
+   "hold_bars": 9
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1780812000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1073,
+   "excess": -0.6552,
+   "risk_pct": 1.946,
+   "hold_bars": 3
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1780873200000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.0247,
+   "excess": 2.0759,
+   "risk_pct": 2.859,
+   "hold_bars": 70
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1781272800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0919,
+   "excess": -0.9858,
+   "risk_pct": 1.961,
+   "hold_bars": 31
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1781470800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1112,
+   "excess": -2.2471,
+   "risk_pct": 1.615,
+   "hold_bars": 2
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1781589600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 5.0986,
+   "excess": 4.3899,
+   "risk_pct": 2.346,
+   "hold_bars": 203
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1783551600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0857,
+   "excess": -2.0054,
+   "risk_pct": 2.106,
+   "hold_bars": 35
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1784026800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.2178,
+   "excess": -1.1422,
+   "risk_pct": 0.952,
+   "hold_bars": 1
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1787061600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.159,
+   "excess": -0.4346,
+   "risk_pct": 1.125,
+   "hold_bars": 22
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1787673600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0929,
+   "excess": -0.8664,
+   "risk_pct": 2.255,
+   "hold_bars": 30
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1789408800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 3.9108,
+   "excess": 5.0219,
+   "risk_pct": 1.617,
+   "hold_bars": 24
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1789646400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1097,
+   "excess": -0.5626,
+   "risk_pct": 1.638,
+   "hold_bars": 13
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1790258400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0925,
+   "excess": -1.1969,
+   "risk_pct": 1.947,
+   "hold_bars": 2
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1790420400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1499,
+   "excess": -1.0386,
+   "risk_pct": 1.388,
+   "hold_bars": 20
+  },
+  {
+   "coin": "SOL",
+   "entry_t": 1791187200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8832,
+   "excess": 1.299,
+   "risk_pct": 1.521,
+   "hold_bars": 42
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1778529600000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.7877,
+   "excess": 2.4697,
+   "risk_pct": 2.956,
+   "hold_bars": 55
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1779771600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1056,
+   "excess": -1.0312,
+   "risk_pct": 1.979,
+   "hold_bars": 5
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1780862400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0623,
+   "excess": -1.2249,
+   "risk_pct": 2.915,
+   "hold_bars": 2
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1783414800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.1234,
+   "excess": 1.101,
+   "risk_pct": 2.478,
+   "hold_bars": 26
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1783796400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 3.2596,
+   "excess": 3.3681,
+   "risk_pct": 1.607,
+   "hold_bars": 27
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1786003200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.0154,
+   "excess": 1.2789,
+   "risk_pct": 1.973,
+   "hold_bars": 33
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1787151600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1191,
+   "excess": -0.4507,
+   "risk_pct": 1.507,
+   "hold_bars": 0
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1787554800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.0535,
+   "excess": 2.3806,
+   "risk_pct": 3.846,
+   "hold_bars": 38
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1787792400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.067,
+   "excess": -1.0369,
+   "risk_pct": 2.709,
+   "hold_bars": 15
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1788220800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0529,
+   "excess": -0.7701,
+   "risk_pct": 3.454,
+   "hold_bars": 63
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1789642800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0839,
+   "excess": -0.9088,
+   "risk_pct": 2.502,
+   "hold_bars": 6
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1790431200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.946,
+   "excess": 2.2119,
+   "risk_pct": 3.149,
+   "hold_bars": 6
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1790661600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0333,
+   "excess": -0.0,
+   "risk_pct": 5.592,
+   "hold_bars": 105
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1791446400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0666,
+   "excess": -1.1204,
+   "risk_pct": 2.724,
+   "hold_bars": 1
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1791594000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0232,
+   "excess": -0.5997,
+   "risk_pct": 8.204,
+   "hold_bars": 13
+  },
+  {
+   "coin": "STRK",
+   "entry_t": 1792314000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 3.5486,
+   "excess": 3.7246,
+   "risk_pct": 3.841,
+   "hold_bars": 44
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1778763600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 4.2689,
+   "excess": 4.7175,
+   "risk_pct": 2.614,
+   "hold_bars": 40
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1783350000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.12,
+   "excess": -1.0785,
+   "risk_pct": 1.739,
+   "hold_bars": 6
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1783436400000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.984,
+   "excess": 1.9574,
+   "risk_pct": 1.696,
+   "hold_bars": 11
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1783767600000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.9087,
+   "excess": 2.0567,
+   "risk_pct": 1.291,
+   "hold_bars": 13
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1784034000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1044,
+   "excess": -1.4332,
+   "risk_pct": 1.722,
+   "hold_bars": 1
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1784163600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.0069,
+   "excess": 1.8044,
+   "risk_pct": 1.81,
+   "hold_bars": 31
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1784455200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1477,
+   "excess": -1.7673,
+   "risk_pct": 1.212,
+   "hold_bars": 29
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1786647600000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.971,
+   "excess": 1.7745,
+   "risk_pct": 1.224,
+   "hold_bars": 74
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1788364800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0767,
+   "excess": -1.579,
+   "risk_pct": 2.357,
+   "hold_bars": 4
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1789588800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0846,
+   "excess": -0.4486,
+   "risk_pct": 2.131,
+   "hold_bars": 16
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1789689600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0871,
+   "excess": -0.8023,
+   "risk_pct": 2.07,
+   "hold_bars": 1
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1790114400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0468,
+   "excess": -0.2123,
+   "risk_pct": 3.92,
+   "hold_bars": 60
+  },
+  {
+   "coin": "SUI",
+   "entry_t": 1790474400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.067,
+   "excess": -1.3429,
+   "risk_pct": 2.705,
+   "hold_bars": 5
+  },
+  {
+   "coin": "TAO",
+   "entry_t": 1781215200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0466,
+   "excess": -1.5676,
+   "risk_pct": 3.932,
+   "hold_bars": 33
+  },
+  {
+   "coin": "TAO",
+   "entry_t": 1783188000000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 1.8898,
+   "excess": 1.7136,
+   "risk_pct": 1.441,
+   "hold_bars": 8
+  },
+  {
+   "coin": "TAO",
+   "entry_t": 1785117600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.3919,
+   "excess": 2.7454,
+   "risk_pct": 1.885,
+   "hold_bars": 20
+  },
+  {
+   "coin": "TAO",
+   "entry_t": 1787169600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.098,
+   "excess": -0.8336,
+   "risk_pct": 1.836,
+   "hold_bars": 1
+  },
+  {
+   "coin": "TAO",
+   "entry_t": 1788883200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9744,
+   "excess": 1.6069,
+   "risk_pct": 3.266,
+   "hold_bars": 30
+  },
+  {
+   "coin": "TAO",
+   "entry_t": 1789704000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0631,
+   "excess": -0.7123,
+   "risk_pct": 2.879,
+   "hold_bars": 6
+  },
+  {
+   "coin": "TAO",
+   "entry_t": 1789808400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0518,
+   "excess": -0.8122,
+   "risk_pct": 3.526,
+   "hold_bars": 2
+  },
+  {
+   "coin": "TAO",
+   "entry_t": 1790427600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0699,
+   "excess": -1.7298,
+   "risk_pct": 3.013,
+   "hold_bars": 2
+  },
+  {
+   "coin": "TAO",
+   "entry_t": 1790485200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0835,
+   "excess": -1.5214,
+   "risk_pct": 2.513,
+   "hold_bars": 3
+  },
+  {
+   "coin": "TAO",
+   "entry_t": 1790528400000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.0179,
+   "excess": 1.4198,
+   "risk_pct": 3.077,
+   "hold_bars": 12
+  },
+  {
+   "coin": "TAO",
+   "entry_t": 1791046800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0878,
+   "excess": -1.4456,
+   "risk_pct": 2.054,
+   "hold_bars": 5
+  },
+  {
+   "coin": "TAO",
+   "entry_t": 1791720000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0707,
+   "excess": -1.9645,
+   "risk_pct": 2.563,
+   "hold_bars": 3
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1778032800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0728,
+   "excess": -0.5402,
+   "risk_pct": 2.487,
+   "hold_bars": 7
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1778493600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0317,
+   "excess": -0.9481,
+   "risk_pct": 5.882,
+   "hold_bars": 39
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1779382800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0636,
+   "excess": -1.0898,
+   "risk_pct": 2.856,
+   "hold_bars": 9
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1779685200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0701,
+   "excess": -1.8394,
+   "risk_pct": 2.585,
+   "hold_bars": 1
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1780822800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0486,
+   "excess": -0.2199,
+   "risk_pct": 3.765,
+   "hold_bars": 13
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1781463600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0843,
+   "excess": -0.9757,
+   "risk_pct": 2.141,
+   "hold_bars": 2
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1782111600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0717,
+   "excess": -0.9377,
+   "risk_pct": 2.525,
+   "hold_bars": 4
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1785103200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.6665,
+   "excess": 2.6804,
+   "risk_pct": 1.458,
+   "hold_bars": 24
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1785762000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1415,
+   "excess": -2.0087,
+   "risk_pct": 1.471,
+   "hold_bars": 3
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1785942000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1413,
+   "excess": -2.0967,
+   "risk_pct": 1.473,
+   "hold_bars": 30
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1788091200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.4542,
+   "excess": 2.8955,
+   "risk_pct": 1.519,
+   "hold_bars": 11
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1790920800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0547,
+   "excess": -0.4554,
+   "risk_pct": 3.332,
+   "hold_bars": 1
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1791093600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.0404,
+   "excess": 2.0036,
+   "risk_pct": 4.134,
+   "hold_bars": 68
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1791414000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0616,
+   "excess": -0.4101,
+   "risk_pct": 2.953,
+   "hold_bars": 3
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1791457200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0467,
+   "excess": -0.49,
+   "risk_pct": 3.925,
+   "hold_bars": 7
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1791644400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0415,
+   "excess": -0.7173,
+   "risk_pct": 4.442,
+   "hold_bars": 3
+  },
+  {
+   "coin": "TIA",
+   "entry_t": 1792072800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0458,
+   "excess": -1.2309,
+   "risk_pct": 4.005,
+   "hold_bars": 1
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1779627600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.152,
+   "excess": -1.1483,
+   "risk_pct": 1.368,
+   "hold_bars": 18
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1780066800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0592,
+   "excess": -1.0138,
+   "risk_pct": 3.075,
+   "hold_bars": 10
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1783623600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1438,
+   "excess": -1.1862,
+   "risk_pct": 1.447,
+   "hold_bars": 14
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1783760400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9281,
+   "excess": 1.9643,
+   "risk_pct": 1.407,
+   "hold_bars": 15
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1786827600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.2769,
+   "excess": -0.8668,
+   "risk_pct": 0.748,
+   "hold_bars": 16
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1787151600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1492,
+   "excess": -0.8552,
+   "risk_pct": 1.199,
+   "hold_bars": 0
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1787169600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0867,
+   "excess": -0.727,
+   "risk_pct": 2.079,
+   "hold_bars": 0
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1787565600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.7443,
+   "excess": 2.1117,
+   "risk_pct": 6.244,
+   "hold_bars": 29
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1787724000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.044,
+   "excess": -1.2755,
+   "risk_pct": 4.18,
+   "hold_bars": 32
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1789210800000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.0358,
+   "excess": 2.4301,
+   "risk_pct": 1.478,
+   "hold_bars": 35
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1789354800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0837,
+   "excess": -0.2786,
+   "risk_pct": 2.157,
+   "hold_bars": 9
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1789491600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0766,
+   "excess": -0.5578,
+   "risk_pct": 2.359,
+   "hold_bars": 58
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1791583200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0857,
+   "excess": -2.1445,
+   "risk_pct": 2.104,
+   "hold_bars": 4
+  },
+  {
+   "coin": "TRUMP",
+   "entry_t": 1791626400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1747,
+   "excess": -1.937,
+   "risk_pct": 1.188,
+   "hold_bars": 29
+  },
+  {
+   "coin": "TRX",
+   "entry_t": 1781884800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.2144,
+   "excess": -1.6625,
+   "risk_pct": 0.967,
+   "hold_bars": 20
+  },
+  {
+   "coin": "TRX",
+   "entry_t": 1782392400000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.0671,
+   "excess": 2.547,
+   "risk_pct": 1.046,
+   "hold_bars": 123
+  },
+  {
+   "coin": "TRX",
+   "entry_t": 1783123200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1535,
+   "excess": -1.2553,
+   "risk_pct": 1.354,
+   "hold_bars": 36
+  },
+  {
+   "coin": "TRX",
+   "entry_t": 1787302800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1828,
+   "excess": -2.7103,
+   "risk_pct": 1.136,
+   "hold_bars": 16
+  },
+  {
+   "coin": "TRX",
+   "entry_t": 1789887600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1933,
+   "excess": -1.3464,
+   "risk_pct": 1.073,
+   "hold_bars": 6
+  },
+  {
+   "coin": "TRX",
+   "entry_t": 1789930800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.2559,
+   "excess": -1.8319,
+   "risk_pct": 0.809,
+   "hold_bars": 29
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1778760000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0799,
+   "excess": -1.5616,
+   "risk_pct": 2.627,
+   "hold_bars": 2
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1781470800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0727,
+   "excess": -0.8907,
+   "risk_pct": 2.49,
+   "hold_bars": 13
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1783440000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0874,
+   "excess": -1.2342,
+   "risk_pct": 2.064,
+   "hold_bars": 13
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1783764000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0916,
+   "excess": -1.5181,
+   "risk_pct": 1.966,
+   "hold_bars": 1
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1784307600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0864,
+   "excess": -1.0939,
+   "risk_pct": 2.088,
+   "hold_bars": 6
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1784876400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9959,
+   "excess": 2.5021,
+   "risk_pct": 2.072,
+   "hold_bars": 21
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1787151600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0925,
+   "excess": -0.5399,
+   "risk_pct": 1.947,
+   "hold_bars": 1
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1787778000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.058,
+   "excess": -0.3582,
+   "risk_pct": 3.14,
+   "hold_bars": 5
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1788019200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0676,
+   "excess": -0.9392,
+   "risk_pct": 2.68,
+   "hold_bars": 10
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1788598800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0434,
+   "excess": -1.4237,
+   "risk_pct": 4.231,
+   "hold_bars": 7
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1788832800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 3.4683,
+   "excess": 4.4607,
+   "risk_pct": 3.463,
+   "hold_bars": 43
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1789131600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8475,
+   "excess": 1.8353,
+   "risk_pct": 3.319,
+   "hold_bars": 5
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1789200000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0448,
+   "excess": -0.67,
+   "risk_pct": 4.097,
+   "hold_bars": 59
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1789581600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0517,
+   "excess": -0.5473,
+   "risk_pct": 3.534,
+   "hold_bars": 5
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1789650000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.038,
+   "excess": -0.4987,
+   "risk_pct": 4.863,
+   "hold_bars": 3
+  },
+  {
+   "coin": "UNI",
+   "entry_t": 1791111600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.225,
+   "excess": -1.4967,
+   "risk_pct": 0.921,
+   "hold_bars": 13
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1778457600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0472,
+   "excess": -0.5346,
+   "risk_pct": 3.884,
+   "hold_bars": 5
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1778659200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.4473,
+   "excess": 2.9503,
+   "risk_pct": 4.229,
+   "hold_bars": 16
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1778986800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0397,
+   "excess": -0.6551,
+   "risk_pct": 4.642,
+   "hold_bars": 10
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1779616800000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.0942,
+   "excess": 1.959,
+   "risk_pct": 5.331,
+   "hold_bars": 30
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1780484400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.6566,
+   "excess": 1.9303,
+   "risk_pct": 6.998,
+   "hold_bars": 21
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1780794000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0321,
+   "excess": -1.2924,
+   "risk_pct": 5.801,
+   "hold_bars": 13
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1781658000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.7783,
+   "excess": 1.407,
+   "risk_pct": 5.209,
+   "hold_bars": 38
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1782050400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0528,
+   "excess": -1.4651,
+   "risk_pct": 3.458,
+   "hold_bars": 21
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1782637200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9578,
+   "excess": 1.7103,
+   "risk_pct": 2.936,
+   "hold_bars": 15
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1784304000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0413,
+   "excess": -0.2452,
+   "risk_pct": 4.457,
+   "hold_bars": 8
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1785704400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.086,
+   "excess": -0.9742,
+   "risk_pct": 2.096,
+   "hold_bars": 20
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1786269600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.112,
+   "excess": -0.6481,
+   "risk_pct": 1.604,
+   "hold_bars": 6
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1787346000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.035,
+   "excess": -0.4739,
+   "risk_pct": 5.306,
+   "hold_bars": 1
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1787468400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0339,
+   "excess": -0.4324,
+   "risk_pct": 6.368,
+   "hold_bars": 55
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1788116400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8736,
+   "excess": 2.0755,
+   "risk_pct": 3.074,
+   "hold_bars": 41
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1788757200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8694,
+   "excess": 2.3047,
+   "risk_pct": 2.118,
+   "hold_bars": 2
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1789556400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0314,
+   "excess": -1.2094,
+   "risk_pct": 5.94,
+   "hold_bars": 7
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1789603200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0362,
+   "excess": -1.2703,
+   "risk_pct": 5.123,
+   "hold_bars": 4
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1789905600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0336,
+   "excess": -1.2526,
+   "risk_pct": 5.534,
+   "hold_bars": 13
+  },
+  {
+   "coin": "VVV",
+   "entry_t": 1792944000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0705,
+   "excess": 0.0,
+   "risk_pct": 2.569,
+   "hold_bars": 1
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1779292800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0769,
+   "excess": -0.2602,
+   "risk_pct": 2.352,
+   "hold_bars": 15
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1780164000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0317,
+   "excess": -1.1761,
+   "risk_pct": 5.891,
+   "hold_bars": 33
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1780326000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0197,
+   "excess": -0.5824,
+   "risk_pct": 9.784,
+   "hold_bars": 3
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1780419600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.7165,
+   "excess": 1.9473,
+   "risk_pct": 6.848,
+   "hold_bars": 6
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1782795600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.9051,
+   "excess": 2.3183,
+   "risk_pct": 3.691,
+   "hold_bars": 37
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1786597200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0877,
+   "excess": -0.4289,
+   "risk_pct": 2.057,
+   "hold_bars": 4
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1787151600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0827,
+   "excess": -0.6004,
+   "risk_pct": 2.184,
+   "hold_bars": 0
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1787241600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0505,
+   "excess": -1.3257,
+   "risk_pct": 3.621,
+   "hold_bars": 15
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1788454800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8799,
+   "excess": 2.174,
+   "risk_pct": 3.144,
+   "hold_bars": 21
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1789128000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0781,
+   "excess": -0.8689,
+   "risk_pct": 2.692,
+   "hold_bars": 1
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1789225200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8522,
+   "excess": 2.3375,
+   "risk_pct": 2.598,
+   "hold_bars": 17
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1789693200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0652,
+   "excess": -0.7319,
+   "risk_pct": 2.785,
+   "hold_bars": 1
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1790258400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0321,
+   "excess": -0.5427,
+   "risk_pct": 5.816,
+   "hold_bars": 22
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1790366400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0474,
+   "excess": -0.542,
+   "risk_pct": 3.866,
+   "hold_bars": 3
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1790946000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0375,
+   "excess": -1.4374,
+   "risk_pct": 4.933,
+   "hold_bars": 22
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1791093600000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 4.1857,
+   "excess": 2.9396,
+   "risk_pct": 1.883,
+   "hold_bars": 68
+  },
+  {
+   "coin": "WLD",
+   "entry_t": 1791734400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.0379,
+   "excess": 2.1558,
+   "risk_pct": 3.65,
+   "hold_bars": 19
+  },
+  {
+   "coin": "XMR",
+   "entry_t": 1780981200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0531,
+   "excess": -0.8649,
+   "risk_pct": 3.44,
+   "hold_bars": 41
+  },
+  {
+   "coin": "XMR",
+   "entry_t": 1784912400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1083,
+   "excess": -0.5102,
+   "risk_pct": 1.658,
+   "hold_bars": 2
+  },
+  {
+   "coin": "XMR",
+   "entry_t": 1786608000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1097,
+   "excess": -0.2285,
+   "risk_pct": 1.637,
+   "hold_bars": 2
+  },
+  {
+   "coin": "XMR",
+   "entry_t": 1786708800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1107,
+   "excess": -0.1976,
+   "risk_pct": 1.623,
+   "hold_bars": 18
+  },
+  {
+   "coin": "XMR",
+   "entry_t": 1786824000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1155,
+   "excess": -0.45,
+   "risk_pct": 1.807,
+   "hold_bars": 38
+  },
+  {
+   "coin": "XMR",
+   "entry_t": 1786986000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1466,
+   "excess": -0.4475,
+   "risk_pct": 1.419,
+   "hold_bars": 13
+  },
+  {
+   "coin": "XMR",
+   "entry_t": 1787058000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1251,
+   "excess": -0.5572,
+   "risk_pct": 1.666,
+   "hold_bars": 26
+  },
+  {
+   "coin": "XMR",
+   "entry_t": 1787904000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0864,
+   "excess": -0.8933,
+   "risk_pct": 2.427,
+   "hold_bars": 49
+  },
+  {
+   "coin": "XMR",
+   "entry_t": 1788372000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.4025,
+   "excess": 2.4001,
+   "risk_pct": 3.173,
+   "hold_bars": 6
+  },
+  {
+   "coin": "XMR",
+   "entry_t": 1789196400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.0952,
+   "excess": 2.1093,
+   "risk_pct": 2.634,
+   "hold_bars": 41
+  },
+  {
+   "coin": "XMR",
+   "entry_t": 1789653600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0664,
+   "excess": -1.382,
+   "risk_pct": 2.732,
+   "hold_bars": 15
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1778054400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0609,
+   "excess": -1.0983,
+   "risk_pct": 2.985,
+   "hold_bars": 4
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1779390000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8607,
+   "excess": 1.6831,
+   "risk_pct": 3.947,
+   "hold_bars": 24
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1779721200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0566,
+   "excess": -1.5364,
+   "risk_pct": 3.216,
+   "hold_bars": 1
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1779973200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0413,
+   "excess": -1.6049,
+   "risk_pct": 4.457,
+   "hold_bars": 4
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1780869600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0494,
+   "excess": -0.2448,
+   "risk_pct": 3.702,
+   "hold_bars": 17
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1781200800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0528,
+   "excess": -0.744,
+   "risk_pct": 3.459,
+   "hold_bars": 1
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1781222400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0307,
+   "excess": -0.658,
+   "risk_pct": 6.083,
+   "hold_bars": 3
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1782615600000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.0684,
+   "excess": 2.0546,
+   "risk_pct": 2.263,
+   "hold_bars": 12
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1784448000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0771,
+   "excess": -0.6945,
+   "risk_pct": 2.724,
+   "hold_bars": 30
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1785362400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0387,
+   "excess": 0.0,
+   "risk_pct": 5.547,
+   "hold_bars": 503
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1788282000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9566,
+   "excess": 1.5312,
+   "risk_pct": 3.137,
+   "hold_bars": 7
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1788782400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0565,
+   "excess": -0.8754,
+   "risk_pct": 3.226,
+   "hold_bars": 21
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1788955200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0427,
+   "excess": -0.8971,
+   "risk_pct": 4.311,
+   "hold_bars": 1
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1789621200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0582,
+   "excess": -1.1165,
+   "risk_pct": 3.128,
+   "hold_bars": 1
+  },
+  {
+   "coin": "XPL",
+   "entry_t": 1792238400000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.0409,
+   "excess": 1.8304,
+   "risk_pct": 1.817,
+   "hold_bars": 9
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1778158800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.2045,
+   "excess": -1.3433,
+   "risk_pct": 1.014,
+   "hold_bars": 29
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1778814000000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.2699,
+   "excess": 0.2855,
+   "risk_pct": 2.369,
+   "hold_bars": 28
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1780819200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0807,
+   "excess": -0.8294,
+   "risk_pct": 2.237,
+   "hold_bars": 1
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1780869600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0783,
+   "excess": -0.9089,
+   "risk_pct": 2.308,
+   "hold_bars": 0
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1780912800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1038,
+   "excess": -1.2366,
+   "risk_pct": 2.014,
+   "hold_bars": 2
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1782090000000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.7481,
+   "excess": 3.4078,
+   "risk_pct": 1.885,
+   "hold_bars": 57
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1783533600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1111,
+   "excess": -1.3188,
+   "risk_pct": 1.88,
+   "hold_bars": 31
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1784545200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1185,
+   "excess": -2.1705,
+   "risk_pct": 1.514,
+   "hold_bars": 7
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1784602800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1632,
+   "excess": -1.3656,
+   "risk_pct": 1.273,
+   "hold_bars": 9
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1787623200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.1135,
+   "excess": 1.9107,
+   "risk_pct": 3.576,
+   "hold_bars": 19
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1789174800000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0506,
+   "excess": -0.2758,
+   "risk_pct": 4.203,
+   "hold_bars": 63
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1789408800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0892,
+   "excess": -0.3576,
+   "risk_pct": 2.02,
+   "hold_bars": 0
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1789477200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.8468,
+   "excess": 3.7277,
+   "risk_pct": 1.855,
+   "hold_bars": 5
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1789588800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0828,
+   "excess": -0.103,
+   "risk_pct": 2.18,
+   "hold_bars": 36
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1789977600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0664,
+   "excess": -1.7594,
+   "risk_pct": 2.733,
+   "hold_bars": 12
+  },
+  {
+   "coin": "XRP",
+   "entry_t": 1790762400000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1369,
+   "excess": -1.5291,
+   "risk_pct": 1.521,
+   "hold_bars": 2
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1778259600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0562,
+   "excess": -1.5312,
+   "risk_pct": 3.243,
+   "hold_bars": 5
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1778767200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 2.144,
+   "excess": 2.4658,
+   "risk_pct": 3.236,
+   "hold_bars": 25
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1778994000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0669,
+   "excess": -1.6961,
+   "risk_pct": 2.71,
+   "hold_bars": 15
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1779285600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0555,
+   "excess": -1.3103,
+   "risk_pct": 3.282,
+   "hold_bars": 0
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1779382800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 3.3192,
+   "excess": 3.8804,
+   "risk_pct": 2.933,
+   "hold_bars": 25
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1779717600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8134,
+   "excess": 1.5584,
+   "risk_pct": 3.675,
+   "hold_bars": 10
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1780160400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0401,
+   "excess": -0.4921,
+   "risk_pct": 4.602,
+   "hold_bars": 29
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1780369200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0434,
+   "excess": -1.0557,
+   "risk_pct": 4.239,
+   "hold_bars": 13
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1782745200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0421,
+   "excess": 0.0,
+   "risk_pct": 4.377,
+   "hold_bars": 4
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1782943200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0557,
+   "excess": 0.0,
+   "risk_pct": 3.275,
+   "hold_bars": 13
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1783432800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0808,
+   "excess": -0.4848,
+   "risk_pct": 2.235,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1783620000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0685,
+   "excess": -0.9063,
+   "risk_pct": 2.645,
+   "hold_bars": 0
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1785866400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0805,
+   "excess": -0.5412,
+   "risk_pct": 2.244,
+   "hold_bars": 8
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1786946400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.1053,
+   "excess": -0.4425,
+   "risk_pct": 1.707,
+   "hold_bars": 56
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1787626800000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.8835,
+   "excess": 2.1634,
+   "risk_pct": 4.598,
+   "hold_bars": 16
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1787770800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0546,
+   "excess": -0.0,
+   "risk_pct": 3.343,
+   "hold_bars": 3
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1788105600000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9428,
+   "excess": 2.4308,
+   "risk_pct": 2.452,
+   "hold_bars": 7
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1788624000000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1019,
+   "excess": -1.2928,
+   "risk_pct": 2.053,
+   "hold_bars": 9
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1788861600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0448,
+   "excess": -0.1669,
+   "risk_pct": 4.094,
+   "hold_bars": 6
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1789128000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0358,
+   "excess": -0.0,
+   "risk_pct": 5.179,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1789354800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0645,
+   "excess": -0.1527,
+   "risk_pct": 2.815,
+   "hold_bars": 2
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1789927200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0729,
+   "excess": -0.9253,
+   "risk_pct": 2.484,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1790053200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0664,
+   "excess": -1.0097,
+   "risk_pct": 2.73,
+   "hold_bars": 0
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1791936000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0559,
+   "excess": -0.4427,
+   "risk_pct": 3.259,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1792360800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0578,
+   "excess": -0.3326,
+   "risk_pct": 3.15,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ZEC",
+   "entry_t": 1792375200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0538,
+   "excess": -0.3792,
+   "risk_pct": 3.391,
+   "hold_bars": 36
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1778090400000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9096,
+   "excess": 1.6526,
+   "risk_pct": 3.166,
+   "hold_bars": 43
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1780171200000,
+   "kind": "market_close",
+   "outcome": "tp",
+   "r_net": 2.3697,
+   "excess": 2.0522,
+   "risk_pct": 1.922,
+   "hold_bars": 20
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1781175600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0455,
+   "excess": -0.7066,
+   "risk_pct": 4.031,
+   "hold_bars": 22
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1781301600000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0518,
+   "excess": -0.9226,
+   "risk_pct": 4.097,
+   "hold_bars": 12
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1781470800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0934,
+   "excess": -1.0454,
+   "risk_pct": 1.928,
+   "hold_bars": 3
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1781488800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0768,
+   "excess": -1.437,
+   "risk_pct": 2.353,
+   "hold_bars": 1
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1781578800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0374,
+   "excess": -2.3722,
+   "risk_pct": 4.942,
+   "hold_bars": 8
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1781812800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0485,
+   "excess": -1.8473,
+   "risk_pct": 3.779,
+   "hold_bars": 0
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1783105200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.1039,
+   "excess": -0.9672,
+   "risk_pct": 2.012,
+   "hold_bars": 7
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1786953600000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0845,
+   "excess": -0.3473,
+   "risk_pct": 2.135,
+   "hold_bars": 46
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1787569200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0399,
+   "excess": -0.1605,
+   "risk_pct": 4.618,
+   "hold_bars": 26
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1787742000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0319,
+   "excess": -0.7479,
+   "risk_pct": 5.841,
+   "hold_bars": 27
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1788642000000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0745,
+   "excess": -1.4468,
+   "risk_pct": 2.428,
+   "hold_bars": 14
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1789135200000,
+   "kind": "limit",
+   "outcome": "tp",
+   "r_net": 1.9381,
+   "excess": 2.5155,
+   "risk_pct": 2.827,
+   "hold_bars": 4
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1789610400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.067,
+   "excess": -0.2846,
+   "risk_pct": 2.706,
+   "hold_bars": 15
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1790431200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.052,
+   "excess": -0.9255,
+   "risk_pct": 3.514,
+   "hold_bars": 3
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1790449200000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0411,
+   "excess": -0.5338,
+   "risk_pct": 4.485,
+   "hold_bars": 24
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1790686800000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0336,
+   "excess": -1.0627,
+   "risk_pct": 5.528,
+   "hold_bars": 11
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1790870400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0368,
+   "excess": -0.9772,
+   "risk_pct": 5.032,
+   "hold_bars": 3
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1791014400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0327,
+   "excess": -1.0775,
+   "risk_pct": 5.696,
+   "hold_bars": 2
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1791212400000,
+   "kind": "limit",
+   "outcome": "stop",
+   "r_net": -1.0507,
+   "excess": -0.7398,
+   "risk_pct": 3.608,
+   "hold_bars": 5
+  },
+  {
+   "coin": "ZRO",
+   "entry_t": 1791277200000,
+   "kind": "market_close",
+   "outcome": "stop",
+   "r_net": -1.0422,
+   "excess": -1.1548,
+   "risk_pct": 5.068,
+   "hold_bars": 6
+  }
+ ],
+ "data": {
+  "source": "https://api.hyperliquid.xyz/info candleSnapshot (mainnet, public, read-only)",
+  "fetched_at_utc": "2026-10-28T00:46:11.551000+00:00",
+  "excluded": {
+   "XTEN": "only 18 closed bars (< 1000)"
+  }
+ },
+ "coins": {
+  "BTC": "9dd4e2a9efe5962ff192bf783ef6f309e8c0fde0caa0b987edf755fbd7cdd0dc",
+  "ETH": "1770dab072ada102834960cd28a8c34c3aaeecf4ecaf4756e2ce10273cd17420",
+  "HYPE": "4404b7514aa1b9c2272d4baf394bf2316b770cfac3b7ce590ac489e477049bce",
+  "ZEC": "223b44ff898ef6e8978355c8199f7aaf4348f97becc2fecf24d4d93b14d7b22a",
+  "NEAR": "c9a8a8ac0780bb4beef85fa141405b3555512bc9d5a291a93e544a85d82c3b7b",
+  "SOL": "8401d9bfc1fabbda82c0d1e6f43dbc72359bae4aa3c9a20fafb740bf701679d4",
+  "XRP": "458038ec726002efcc8cb583c992ebd86271a608e9ca6d03daab817ca245bdde",
+  "ENA": "fa29039e96798c380ecd53e728f0c28e37a0f7b82459a525d5bd5e1429033310",
+  "PUMP": "bf5f14f599ebed7f3c547936da03cb47520fe95a0dad0beac8e5277f9bb0f01e",
+  "XMR": "124b1a2c4c70d1c2d4343b3538c5c0c3abb0f85c83db0275ef36222eea988d48",
+  "WLD": "b31635fb5a2baa908446bc22f61af7b4d1e0bbba0f55c3a309c7825634ddf85d",
+  "LIT": "a873f32ac35d8fc863ec0845ea99a712ce3fa6a5ffdafb45a646015e014a40e4",
+  "VVV": "c96e23f3b8810fab842bb89a9494979da7e7bbceaedbfb54cb2d6e3612fdff2f",
+  "SUI": "9d0317fa3adeb75e3e1748576790487d2e1c1ea72e5f799d76c8a22d6bd1f5d8",
+  "CASHCAT": "4fab86a3ce607141398c280cf42731cffbeb6d536fa2cfa1c9f347e63b3e0565",
+  "GRASS": "2256eb228ebc16ce460f360ec47f47160e015b559b62cdcaf9e89d1f724ecda5",
+  "CHIP": "7866979ec0f91f5ce6c8ed29cadeb1ec2fd34293a3af63b678b7892aa8ee9c0e",
+  "UNI": "9253313252c175430ad9d7434b8bc20506d81782b5e970b94349af20f22122bd",
+  "NIL": "2f92f0b44a37619716c0fae35f27532ea318a28cbad146a6550618c01f269c03",
+  "PONS": "6bce7936d9d6851eff2ebc3afb276eb73cdebd836cfc2bd443d7b462e82519bf",
+  "AAVE": "10f79cea5c474432f8cc7869ae6df9bd5e9164fe9579597c35875a825913646f",
+  "BNB": "9047834adfe397bb15839b9265f849ec0f2042dec1727fe352e7a18edf00c00a",
+  "ZRO": "234c268231da1b85285ec452cd52c616dc992017f96f3cb41abcec1ee82ea973",
+  "XPL": "f382703066a0b83c2081b07e96720f4b399e3953aca10be98c0b0c5fbb695955",
+  "DOGE": "f2bb1ab3531be9621cec09ffcc166d520d28be792c59ece528e693615796cfb9",
+  "FARTCOIN": "c798facdc6dd4a45d0262d78fd20e3fe7379c391e86b941285f6fef1cea90c22",
+  "INJ": "c7a289b731535ab7750c0547273d8ab4ad8391f0b5cdccc90c38fa4cf23320c5",
+  "LINK": "422042a8221d5078e951e280d131da18ebf51e76a8117fd44c9d2ca2b2aca46b",
+  "ONDO": "67778548146f172a9721fe8a8ebaaa90445771c110fc7e4d4738a480438b6aff",
+  "TAO": "1f65db7a42eb2485aa57515b922194a79db67acd3aefda86baa3b475f6efbf9c",
+  "CRV": "8c37e1521284364ed72a2ccb3848eaddf460cbb3fa5549421fc5792e06d50090",
+  "MON": "7e76e87b794f6091ef9e9b9b90d365386b4a1f68f803cac95f5ca078213259a3",
+  "AERO": "c2fa31f3e6c64221c84266bdbd0e06e55f298feef4015a8144cb69079d5030d1",
+  "INIT": "71765be0c57ecafa474e31ebf9f49d23788cb5db446555ed2b6419cd273b9ad8",
+  "STRK": "83f7ab8006778ba4842532ae3d81b109426b70adc764b066dc0ac3c70b08b75c",
+  "ARB": "6799009126eac15c2f8f708398b5b15b4b35887b8a2ea39ca62719482db30bbb",
+  "ADA": "5c94c7437cd219a15e1d9ea37dd6f30aacbbc7db20ac4d43d999f4d833e67355",
+  "AVAX": "b94f3aed17f4ac236e61ea954f65849374dbd473dbe0075f1a321cf8c9aa6420",
+  "TRUMP": "9b56ff8af5a0bbbb81c332c71f75a125ff1a623c71f12f40d2d10bdf923b6536",
+  "BCH": "73fd98a7660992d57e252b91e7c57ea8604d770cdafbfd9047d88db0eb351f5a",
+  "TRX": "5605bb5e0bcbf65fd72b884b523d6988e560a64a988a5ac67b4b93de10532c70",
+  "DOT": "6937291e44c801957f216b2d4740feaca042250115676018eba8cd90091e3eee",
+  "SKR": "e43e221be7739b1d31e4b34c7571d4c6cd7f502784b063035057a5dc43ed2ef3",
+  "TIA": "fec8e715eb0f431336b6e28a0fae3aa19ecfe4f44c219d9e24b2dfdbbde6b8ca"
+ },
+ "null": {
+  "S_live": {
+   "fired": 0,
+   "mean": -0.03246701990918911,
+   "se": 0.031490016449226464,
+   "centred": true,
+   "miscalibrated": false
+  }
+ },
+ "costs": {
+  "maker_fee_pct": 0.0144,
+  "taker_fee_pct": 0.0432,
+  "stop_slip_pct": 0.1193,
+  "tp_slip_pct": 0.0,
+  "market_entry_slip_pct": 0.0
+ },
+ "runtime_sec": 117.7
+}

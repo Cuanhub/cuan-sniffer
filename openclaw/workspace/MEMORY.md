@@ -110,6 +110,19 @@ K1 is not ruled out at a material size, but confirming it needs ~4,800
 trades. The lab cannot run Kronos (no PyTorch in the package); a re-test
 runs from the repo. Report: lab/research/backtest/results/kronos/.
 
+## The short-side mirror (H-SHORT, pre-registered, 2026-11-04): no edge
+
+The live planner run unchanged on inverted prices (K/p), each order traded
+as a short on the real bars, so supply bands are the entries. Against random
+shorts with each trade's own order type and geometry: -0.146R, CI -0.329 to
++0.070, p 0.149, negative in both halves (n 676; null 0 of 20 fired). As a
+strategy, 1,048 shorts at -0.132R. Long + short together: -8.35R a week vs
+-3.04R long-only; the sides correlate -0.71 weekly, so the book is steadier
+and loses faster. The rr gate on inverted prices is ~9% lenient on the
+target (median 2.40 vs 2.19 as a real short); the strict subset is no
+better (-0.172R). The band rules carry no detectable direction either way
+up. Report: lab/research/backtest/results/short_mirror/.
+
 ## Live recorder (fixed 2026-10-27)
 
 Band outcomes are resolved by research.backtest.engine (conservative, net of
