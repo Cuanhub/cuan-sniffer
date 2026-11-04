@@ -76,5 +76,27 @@ grounding. Remove an item when it is registered (note the experiment id).
     four, and its approved trades were break-even (+0.010R). Runs from the
     repo (research/kronos/.venv), not the lab: the package has no PyTorch.
 
+14. **Weekly cross-sectional momentum** (28-day formation, 7-day hold,
+    terciles, equal weight). Grounding: the predictability scan (exploratory)
+    found +64 bps a week over 195 weeks of Hyperliquid daily candles, z 1.65,
+    Holm 0.59, breaking even at a 52 bps one-way fee; Liu, Tsyvinski & Wu
+    (2022, JF) on 2014-2018. Power: ~560 weeks for 80% at this size, so it
+    needs a longer, broader daily history than this venue's, pre-registered
+    there first, then a forward test here. Survivorship (today's top 45) must
+    be addressed in the design.
+
+15. **Delta-neutral funding carry on the majors -- a yield to measure, not an
+    alpha to test.** Grounding: 60 days to 2026-10-27, BTC +8.8%, ETH +9.1%,
+    SOL +7.1%, HYPE +8.7% a year paid to shorts, no negative week; funding is
+    the formula's constant in 72% of coin-hours. Measure over the full
+    funding history since listing (worst month, negative spells), spot
+    availability and fees (0.070% / 0.040% base), and the spot-perp basis at
+    entry and exit. A perp-only short is NOT this trade (60 days: +1.1%
+    funding against a +22.5% average price move).
+
 Do NOT queue without new reasoning: killzone timing, HTF bias, per-coin
-selection, lowering the reward:risk floor -- see graveyard.md.
+selection, lowering the reward:risk floor -- see graveyard.md. Also, from the
+predictability scan: hourly price-pattern rules on this universe (nothing at
+1h to a week beyond the last hour's bounce), switching on "trending vs
+ranging" regimes (trendiness does not persist), and premium as a
+cross-sectional signal (nothing in 60 days).

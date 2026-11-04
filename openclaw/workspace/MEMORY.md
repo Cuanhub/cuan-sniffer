@@ -123,6 +123,22 @@ target (median 2.40 vs 2.19 as a real short); the strict subset is no
 better (-0.172R). The band rules carry no detectable direction either way
 up. Report: lab/research/backtest/results/short_mirror/.
 
+## Where the bars are predictable (exploratory scan, 2026-11-04)
+
+The conditional mean measured directly, against a sign-flip null that keeps
+fat tails, volatility clustering and cross-coin correlation. On the 1h
+archive (42 coins, 30 weeks): one effect -- the last hour's cross-sectional
+reversal, +2.65 bps an hour (Holm p 0.013), mostly bid-ask bounce (+1.03
+with a one-hour skip), breaking even at a 1.0 bps one-way fee; this account
+pays 1.44 / 4.32. Nothing else at 1h to a week: market trend, longer
+cross-sectional moves, shock follow-through. Premium (60 days): no
+cross-sectional signal. Funding: +6.7% a year paid by longs, exactly the
+formula's constant in 72% of coin-hours; majors 7-9%, no negative week. On
+daily candles (195 weeks): 28-day cross-sectional momentum +64 bps a week,
+z 1.65 -- a lead needing ~560 weeks to confirm. Volatility persists week to
+week (0.52-0.74 rank corr); trendiness does not. Report:
+lab/research/backtest/results/predictability_scan/.
+
 ## Live recorder (fixed 2026-10-27)
 
 Band outcomes are resolved by research.backtest.engine (conservative, net of

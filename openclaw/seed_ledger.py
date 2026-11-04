@@ -145,6 +145,26 @@ def main() -> int:
             "prereg": "research/backtest/PREREG_short_mirror.md",
             "report": "research/backtest/results/short_mirror/report.md",
             "source": "CuanSniffer repo, pre-registered 2026-11-04"})
+    ps = res / "predictability_scan" / "summary.json"
+    if ps.exists():
+        s = json.loads(ps.read_text())
+        fams = {"hourly": s["hourly"]["cells"], "premium": s.get("premium", {}).get("cells", {}),
+                "weekly": s.get("weekly", {}).get("cells", {})}
+        tested = sum(1 for cells in fams.values() for v in cells.values() if not v.get("diagnostic"))
+        tested += 3 * sum(1 for k in ("regime_hourly", "regime_daily") if s.get(k))
+        ledger.append("historical", "H-SCAN", {
+            "title": "Predictability scan (EXPLORATORY): the conditional mean of returns at 1h to a "
+                     "week -- market trend, cross-sectional, shock, premium, weekly momentum, regimes",
+            "hypotheses": tested,
+            "verdict": "EXPLORATORY, decides nothing. One effect: the last hour's cross-sectional "
+                       "reversal (+2.65 bps/h, Holm 0.013), mostly bid-ask bounce and below this "
+                       "account's fees. Nothing else at 1h to a week; premium nothing in 60 days. "
+                       "Weekly 28d cross-sectional momentum +64 bps/week, z 1.65 -- a lead needing "
+                       "~560 weeks. Volatility persists; trendiness does not.",
+            "evidence": {f"{fam}:{k}": {"z": v.get("z"), "p": v.get("p"), "p_holm": v.get("p_holm")}
+                         for fam, cells in fams.items() for k, v in cells.items()},
+            "report": "research/backtest/results/predictability_scan/report.md",
+            "source": "CuanSniffer repo, exploratory, 2026-11-04"})
     print(f"seeded {len(ledger.entries())} entries; hypotheses to date: {ledger.tested_count()}; "
           f"chain {'intact' if ledger.verify() is None else 'BROKEN'}")
     return 0
