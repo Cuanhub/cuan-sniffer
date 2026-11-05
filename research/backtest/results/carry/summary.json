@@ -1,0 +1,974 @@
+{
+ "coins": {
+  "BTC": {
+   "funding": {
+    "first": "2023-05-12",
+    "hours": 29983,
+    "span_hours": 30553,
+    "pct_per_year": 14.068947458279693,
+    "last_12m_pct_per_year": 5.790176880000001,
+    "by_year": {
+     "2023": {
+      "pct_per_year": 15.064723959183675,
+      "hours": 5047
+     },
+     "2024": {
+      "pct_per_year": 24.139659645087104,
+      "hours": 8783
+     },
+     "2025": {
+      "pct_per_year": 10.63423451,
+      "hours": 8760
+     },
+     "2026": {
+      "pct_per_year": 5.4948011428648735,
+      "hours": 7393
+     }
+    },
+    "share_at_interest_constant": 0.5206283560684388,
+    "share_negative": 0.12607144048294033,
+    "bps_per_hour_p1": -0.27722934,
+    "complete_months": 40,
+    "share_negative_months": 0.075,
+    "worst_month": {
+     "month": "2023-08",
+     "pct_of_notional": -0.7047230699999992
+    },
+    "longest_negative_weeks": 6
+   },
+   "rule": {
+    "window_from": "2023-05-19",
+    "years": 3.4202054794520547,
+    "time_in_market": 0.9158239044090651,
+    "switches": 30,
+    "gross_always_pct_per_year": 14.186728160488759,
+    "gross_filtered_pct_per_year": 14.415757315229936,
+    "net_always_taker_pct_per_year": 14.120533307179459,
+    "net_filtered_taker_pct_per_year": 13.422834515590404,
+    "net_always_maker_pct_per_year": 14.154917206248248,
+    "net_filtered_maker_pct_per_year": 13.938593001622246
+   },
+   "spot_token": "UBTC",
+   "rises": {
+    "1d": {
+     "rise": 0.21619190404797606,
+     "from": "2023-10-22"
+    },
+    "7d": {
+     "rise": 0.3781838041805272,
+     "from": "2023-03-10"
+    }
+   },
+   "max_leverage": 40.0,
+   "capital": [
+    {
+     "leverage": 1.0,
+     "return_on_capital_pct": 2.8950884400000003,
+     "liquidation_rise": 0.9753086419753088,
+     "survives_worst_1d": true,
+     "survives_worst_7d": true
+    },
+    {
+     "leverage": 1.5,
+     "return_on_capital_pct": 3.4741061280000003,
+     "liquidation_rise": 0.6460905349794239,
+     "survives_worst_1d": true,
+     "survives_worst_7d": true
+    },
+    {
+     "leverage": 2.0,
+     "return_on_capital_pct": 3.8601179200000004,
+     "liquidation_rise": 0.4814814814814815,
+     "survives_worst_1d": true,
+     "survives_worst_7d": true
+    },
+    {
+     "leverage": 3.0,
+     "return_on_capital_pct": 4.3426326600000005,
+     "liquidation_rise": 0.3168724279835391,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    }
+   ],
+   "basis": {
+    "hours": 5000,
+    "first": "2026-04-10",
+    "mean_bps": -1.9850239871670456,
+    "sd_bps": 6.144441265405202,
+    "p1_bps": -13.438876179285286,
+    "p99_bps": 13.058902419679663,
+    "worst_bps": 101.60350556170927,
+    "worst_at": "2026-07-08 11:00",
+    "share_beyond_100bps": 0.0002
+   }
+  },
+  "ETH": {
+   "funding": {
+    "first": "2023-05-12",
+    "hours": 29983,
+    "span_hours": 30553,
+    "pct_per_year": 14.180863623640064,
+    "last_12m_pct_per_year": 6.396025610000001,
+    "by_year": {
+     "2023": {
+      "pct_per_year": 22.371779702080445,
+      "hours": 5047
+     },
+     "2024": {
+      "pct_per_year": 22.048696965592622,
+      "hours": 8783
+     },
+     "2025": {
+      "pct_per_year": 8.534730730000001,
+      "hours": 8760
+     },
+     "2026": {
+      "pct_per_year": 5.932167621750305,
+      "hours": 7393
+     }
+    },
+    "share_at_interest_constant": 0.493813160791115,
+    "share_negative": 0.1340092719207551,
+    "bps_per_hour_p1": -0.32659642000000005,
+    "complete_months": 40,
+    "share_negative_months": 0.075,
+    "worst_month": {
+     "month": "2025-04",
+     "pct_of_notional": -0.24189320000000109
+    },
+    "longest_negative_weeks": 3
+   },
+   "rule": {
+    "window_from": "2023-05-19",
+    "years": 3.4202054794520547,
+    "time_in_market": 0.9279396548846834,
+    "switches": 36,
+    "gross_always_pct_per_year": 14.255127281946645,
+    "gross_filtered_pct_per_year": 14.327106752618507,
+    "net_always_taker_pct_per_year": 14.188932428637344,
+    "net_filtered_taker_pct_per_year": 13.13559939305107,
+    "net_always_maker_pct_per_year": 14.223316327706131,
+    "net_filtered_maker_pct_per_year": 13.754509576289282
+   },
+   "spot_token": "UETH",
+   "rises": {
+    "1d": {
+     "rise": 0.23111749116607783,
+     "from": "2025-05-07"
+    },
+    "7d": {
+     "rise": 0.5129748233215548,
+     "from": "2025-05-07"
+    }
+   },
+   "max_leverage": 25.0,
+   "capital": [
+    {
+     "leverage": 1.0,
+     "return_on_capital_pct": 3.1980128050000003,
+     "liquidation_rise": 0.9607843137254901,
+     "survives_worst_1d": true,
+     "survives_worst_7d": true
+    },
+    {
+     "leverage": 1.5,
+     "return_on_capital_pct": 3.837615366,
+     "liquidation_rise": 0.6339869281045751,
+     "survives_worst_1d": true,
+     "survives_worst_7d": true
+    },
+    {
+     "leverage": 2.0,
+     "return_on_capital_pct": 4.264017073333334,
+     "liquidation_rise": 0.47058823529411764,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 3.0,
+     "return_on_capital_pct": 4.7970192075,
+     "liquidation_rise": 0.3071895424836601,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    }
+   ],
+   "basis": {
+    "hours": 5000,
+    "first": "2026-04-10",
+    "mean_bps": -2.035091427436473,
+    "sd_bps": 6.3409733163313025,
+    "p1_bps": -15.317421151814203,
+    "p99_bps": 13.419469377763305,
+    "worst_bps": 42.240506886084276,
+    "worst_at": "2026-10-29 22:00",
+    "share_beyond_100bps": 0.0
+   }
+  },
+  "FARTCOIN": {
+   "funding": {
+    "first": "2024-12-20",
+    "hours": 16429,
+    "span_hours": 16429,
+    "pct_per_year": 22.972323474441534,
+    "last_12m_pct_per_year": 14.65795955,
+    "by_year": {
+     "2024": {
+      "pct_per_year": 89.61267728695653,
+      "hours": 276
+     },
+     "2025": {
+      "pct_per_year": 27.73989815,
+      "hours": 8760
+     },
+     "2026": {
+      "pct_per_year": 14.835343654321658,
+      "hours": 7393
+     }
+    },
+    "share_at_interest_constant": 0.6571306835473857,
+    "share_negative": 0.020451640391989774,
+    "bps_per_hour_p1": -0.15349408,
+    "complete_months": 22,
+    "share_negative_months": 0.0,
+    "worst_month": {
+     "month": "2025-10",
+     "pct_of_notional": 0.6077280800000039
+    },
+    "longest_negative_weeks": 1
+   },
+   "rule": {
+    "window_from": "2024-12-28",
+    "years": 1.8547945205479452,
+    "time_in_market": 0.9896602658788775,
+    "switches": 4,
+    "gross_always_pct_per_year": 22.097184348966188,
+    "gross_filtered_pct_per_year": 21.989109013515666,
+    "net_always_taker_pct_per_year": 21.975122310561463,
+    "net_filtered_taker_pct_per_year": 21.744984936706214,
+    "net_always_maker_pct_per_year": 22.038525560192184,
+    "net_filtered_maker_pct_per_year": 21.871791435967662
+   },
+   "spot_token": "UFART",
+   "rises": {
+    "1d": {
+     "rise": 0.6368242270712188,
+     "from": "2025-01-18"
+    },
+    "7d": {
+     "rise": 2.709647955322425,
+     "from": "2025-01-12"
+    }
+   },
+   "max_leverage": 10.0,
+   "capital": [
+    {
+     "leverage": 1.0,
+     "return_on_capital_pct": 7.328979775,
+     "liquidation_rise": 0.9047619047619047,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 1.5,
+     "return_on_capital_pct": 8.79477573,
+     "liquidation_rise": 0.5873015873015872,
+     "survives_worst_1d": false,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 2.0,
+     "return_on_capital_pct": 9.771973033333333,
+     "liquidation_rise": 0.42857142857142855,
+     "survives_worst_1d": false,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 3.0,
+     "return_on_capital_pct": 10.993469662499999,
+     "liquidation_rise": 0.2698412698412698,
+     "survives_worst_1d": false,
+     "survives_worst_7d": false
+    }
+   ],
+   "basis": {
+    "hours": 5000,
+    "first": "2026-04-10",
+    "mean_bps": -10.161126663236363,
+    "sd_bps": 30.199076205261225,
+    "p1_bps": -105.61356908136457,
+    "p99_bps": 69.76584235436552,
+    "worst_bps": -252.35966219572802,
+    "worst_at": "2026-08-26 20:00",
+    "share_beyond_100bps": 0.0148
+   }
+  },
+  "HYPE": {
+   "funding": {
+    "first": "2024-12-05",
+    "hours": 16791,
+    "span_hours": 16791,
+    "pct_per_year": 20.19026885988923,
+    "last_12m_pct_per_year": 9.870434790000001,
+    "by_year": {
+     "2024": {
+      "pct_per_year": 118.78953691974921,
+      "hours": 638
+     },
+     "2025": {
+      "pct_per_year": 22.06620668,
+      "hours": 8760
+     },
+     "2026": {
+      "pct_per_year": 9.458556655593128,
+      "hours": 7393
+     }
+    },
+    "share_at_interest_constant": 0.6669644452385206,
+    "share_negative": 0.06658328866654756,
+    "bps_per_hour_p1": -0.2783326,
+    "complete_months": 23,
+    "share_negative_months": 0.0,
+    "worst_month": {
+     "month": "2026-04",
+     "pct_of_notional": 0.417824989999998
+    },
+    "longest_negative_weeks": 1
+   },
+   "rule": {
+    "window_from": "2024-12-13",
+    "years": 1.895890410958904,
+    "time_in_market": 0.9855491329479769,
+    "switches": 8,
+    "gross_always_pct_per_year": 18.935893974927833,
+    "gross_filtered_pct_per_year": 18.863638073844015,
+    "net_always_taker_pct_per_year": 18.816477789956735,
+    "net_filtered_taker_pct_per_year": 18.385973333959623,
+    "net_always_maker_pct_per_year": 18.878506691690838,
+    "net_filtered_maker_pct_per_year": 18.63408894089604
+   },
+   "spot_token": "HYPE",
+   "rises": {
+    "1d": {
+     "rise": 0.28511586452762927,
+     "from": "2025-04-08"
+    },
+    "7d": {
+     "rise": 1.1365947100862006,
+     "from": "2024-12-10"
+    }
+   },
+   "max_leverage": 10.0,
+   "capital": [
+    {
+     "leverage": 1.0,
+     "return_on_capital_pct": 4.9352173950000005,
+     "liquidation_rise": 0.9047619047619047,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 1.5,
+     "return_on_capital_pct": 5.922260874000001,
+     "liquidation_rise": 0.5873015873015872,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 2.0,
+     "return_on_capital_pct": 6.580289860000001,
+     "liquidation_rise": 0.42857142857142855,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 3.0,
+     "return_on_capital_pct": 7.402826092500001,
+     "liquidation_rise": 0.2698412698412698,
+     "survives_worst_1d": false,
+     "survives_worst_7d": false
+    }
+   ],
+   "basis": {
+    "hours": 5000,
+    "first": "2026-04-10",
+    "mean_bps": 0.9888382357727336,
+    "sd_bps": 4.855318567103872,
+    "p1_bps": -13.054361708441952,
+    "p99_bps": 10.07239875991526,
+    "worst_bps": -37.70755941458259,
+    "worst_at": "2026-10-30 01:00",
+    "share_beyond_100bps": 0.0
+   }
+  },
+  "NEAR": {
+   "funding": {
+    "first": "2023-11-01",
+    "hours": 26383,
+    "span_hours": 26384,
+    "pct_per_year": 20.602607177652278,
+    "last_12m_pct_per_year": 10.91710214,
+    "by_year": {
+     "2023": {
+      "pct_per_year": 73.11783638811335,
+      "hours": 1447
+     },
+     "2024": {
+      "pct_per_year": 30.420543639622,
+      "hours": 8783
+     },
+     "2025": {
+      "pct_per_year": 9.85028593,
+      "hours": 8760
+     },
+     "2026": {
+      "pct_per_year": 11.400640657486813,
+      "hours": 7393
+     }
+    },
+    "share_at_interest_constant": 0.6535268923170223,
+    "share_negative": 0.08194670810749347,
+    "bps_per_hour_p1": -0.37405578,
+    "complete_months": 36,
+    "share_negative_months": 0.0,
+    "worst_month": {
+     "month": "2025-10",
+     "pct_of_notional": 0.2607866699999968
+    },
+    "longest_negative_weeks": 1
+   },
+   "rule": {
+    "window_from": "2023-11-09",
+    "years": 2.9916666666666667,
+    "time_in_market": 0.9643225092532529,
+    "switches": 20,
+    "gross_always_pct_per_year": 20.22638152980501,
+    "gross_filtered_pct_per_year": 20.147280538161557,
+    "net_always_taker_pct_per_year": 20.15070464958217,
+    "net_filtered_taker_pct_per_year": 19.390511735933142,
+    "net_always_maker_pct_per_year": 20.190013841782726,
+    "net_filtered_maker_pct_per_year": 19.783603657938713
+   },
+   "spot_token": "ONEAR",
+   "rises": {
+    "1d": {
+     "rise": 0.4156215726479424,
+     "from": "2025-11-06"
+    },
+    "7d": {
+     "rise": 0.996959835574206,
+     "from": "2026-09-15"
+    }
+   },
+   "max_leverage": 10.0,
+   "capital": [
+    {
+     "leverage": 1.0,
+     "return_on_capital_pct": 5.45855107,
+     "liquidation_rise": 0.9047619047619047,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 1.5,
+     "return_on_capital_pct": 6.550261284000001,
+     "liquidation_rise": 0.5873015873015872,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 2.0,
+     "return_on_capital_pct": 7.278068093333334,
+     "liquidation_rise": 0.42857142857142855,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 3.0,
+     "return_on_capital_pct": 8.187826605000001,
+     "liquidation_rise": 0.2698412698412698,
+     "survives_worst_1d": false,
+     "survives_worst_7d": false
+    }
+   ],
+   "basis": {
+    "hours": 1073,
+    "first": "2026-09-21",
+    "mean_bps": -2.2912259260830026,
+    "sd_bps": 37.14680496100107,
+    "p1_bps": -66.3194632455959,
+    "p99_bps": 112.26554712038443,
+    "worst_bps": -430.0548152769723,
+    "worst_at": "2026-09-22 02:00",
+    "share_beyond_100bps": 0.0195712954333644
+   }
+  },
+  "PUMP": {
+   "funding": {
+    "first": "2025-07-10",
+    "hours": 11589,
+    "span_hours": 11589,
+    "pct_per_year": 14.316759077815172,
+    "last_12m_pct_per_year": 9.829724240000001,
+    "by_year": {
+     "2025": {
+      "pct_per_year": 22.167638647378453,
+      "hours": 4196
+     },
+     "2026": {
+      "pct_per_year": 9.860883158176655,
+      "hours": 7393
+     }
+    },
+    "share_at_interest_constant": 0.7487272413495556,
+    "share_negative": 0.06661489343342825,
+    "bps_per_hour_p1": -0.31669028,
+    "complete_months": 15,
+    "share_negative_months": 0.0,
+    "worst_month": {
+     "month": "2026-03",
+     "pct_of_notional": 0.32610115999999717
+    },
+    "longest_negative_weeks": 1
+   },
+   "rule": {
+    "window_from": "2025-07-18",
+    "years": 1.3013698630136987,
+    "time_in_market": 0.9663157894736842,
+    "switches": 8,
+    "gross_always_pct_per_year": 12.181976508421004,
+    "gross_filtered_pct_per_year": 11.923737371684163,
+    "net_always_taker_pct_per_year": 12.008005982105214,
+    "net_filtered_taker_pct_per_year": 11.227855266421006,
+    "net_always_maker_pct_per_year": 12.098372297894686,
+    "net_filtered_maker_pct_per_year": 11.5893205295789
+   },
+   "spot_token": "UPUMP",
+   "rises": {
+    "1d": {
+     "rise": 0.3115845539280957,
+     "from": "2026-08-19"
+    },
+    "7d": {
+     "rise": 1.0460674157303371,
+     "from": "2026-08-16"
+    }
+   },
+   "max_leverage": 10.0,
+   "capital": [
+    {
+     "leverage": 1.0,
+     "return_on_capital_pct": 4.9148621200000004,
+     "liquidation_rise": 0.9047619047619047,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 1.5,
+     "return_on_capital_pct": 5.897834544,
+     "liquidation_rise": 0.5873015873015872,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 2.0,
+     "return_on_capital_pct": 6.553149493333334,
+     "liquidation_rise": 0.42857142857142855,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 3.0,
+     "return_on_capital_pct": 7.372293180000001,
+     "liquidation_rise": 0.2698412698412698,
+     "survives_worst_1d": false,
+     "survives_worst_7d": false
+    }
+   ],
+   "basis": {
+    "hours": 5000,
+    "first": "2026-04-10",
+    "mean_bps": -5.790570687163842,
+    "sd_bps": 14.745559691936698,
+    "p1_bps": -43.683529197197366,
+    "p99_bps": 34.55356120462582,
+    "worst_bps": 279.29788332472947,
+    "worst_at": "2026-09-06 18:00",
+    "share_beyond_100bps": 0.0004
+   }
+  },
+  "SOL": {
+   "funding": {
+    "first": "2023-05-12",
+    "hours": 29983,
+    "span_hours": 30553,
+    "pct_per_year": 12.184880938064904,
+    "last_12m_pct_per_year": 0.92586729,
+    "by_year": {
+     "2023": {
+      "pct_per_year": 13.044282515712306,
+      "hours": 5047
+     },
+     "2024": {
+      "pct_per_year": 28.1428239339178,
+      "hours": 8783
+     },
+     "2025": {
+      "pct_per_year": 5.310193830000001,
+      "hours": 8760
+     },
+     "2026": {
+      "pct_per_year": 0.7857528400919798,
+      "hours": 7393
+     }
+    },
+    "share_at_interest_constant": 0.4204382483407264,
+    "share_negative": 0.23863522662842276,
+    "bps_per_hour_p1": -0.74862028,
+    "complete_months": 40,
+    "share_negative_months": 0.275,
+    "worst_month": {
+     "month": "2026-02",
+     "pct_of_notional": -1.3520350099999987
+    },
+    "longest_negative_weeks": 11
+   },
+   "rule": {
+    "window_from": "2023-05-19",
+    "years": 3.4202054794520547,
+    "time_in_market": 0.759720970595107,
+    "switches": 50,
+    "gross_always_pct_per_year": 12.280743710383554,
+    "gross_filtered_pct_per_year": 14.710297373145137,
+    "net_always_taker_pct_per_year": 12.214548857074252,
+    "net_filtered_taker_pct_per_year": 13.055426040412584,
+    "net_always_maker_pct_per_year": 12.248932756143041,
+    "net_filtered_maker_pct_per_year": 13.91502351713232
+   },
+   "spot_token": "USOL",
+   "rises": {
+    "1d": {
+     "rise": 0.3586308710153643,
+     "from": "2023-01-13"
+    },
+    "7d": {
+     "rise": 0.8986780774814702,
+     "from": "2023-01-07"
+    }
+   },
+   "max_leverage": 20.0,
+   "capital": [
+    {
+     "leverage": 1.0,
+     "return_on_capital_pct": 0.462933645,
+     "liquidation_rise": 0.951219512195122,
+     "survives_worst_1d": true,
+     "survives_worst_7d": true
+    },
+    {
+     "leverage": 1.5,
+     "return_on_capital_pct": 0.555520374,
+     "liquidation_rise": 0.6260162601626016,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 2.0,
+     "return_on_capital_pct": 0.61724486,
+     "liquidation_rise": 0.4634146341463415,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 3.0,
+     "return_on_capital_pct": 0.6944004675,
+     "liquidation_rise": 0.30081300813008127,
+     "survives_worst_1d": false,
+     "survives_worst_7d": false
+    }
+   ],
+   "basis": {
+    "hours": 5000,
+    "first": "2026-04-10",
+    "mean_bps": -1.4559566795943406,
+    "sd_bps": 6.947811351960487,
+    "p1_bps": -17.224882737542035,
+    "p99_bps": 16.25359528509387,
+    "worst_bps": 42.23090883707981,
+    "worst_at": "2026-04-14 14:00",
+    "share_beyond_100bps": 0.0
+   }
+  },
+  "XMR": {
+   "funding": {
+    "first": "2026-01-15",
+    "hours": 7048,
+    "span_hours": 7048,
+    "pct_per_year": 28.005341883200906,
+    "last_12m_pct_per_year": 28.005341883200906,
+    "by_year": {
+     "2026": {
+      "pct_per_year": 28.005341883200906,
+      "hours": 7048
+     }
+    },
+    "share_at_interest_constant": 0.6130817253121453,
+    "share_negative": 0.036322360953461974,
+    "bps_per_hour_p1": -0.52871862,
+    "complete_months": 9,
+    "share_negative_months": 0.0,
+    "worst_month": {
+     "month": "2026-02",
+     "pct_of_notional": 1.0554614000000118
+    },
+    "longest_negative_weeks": 1
+   },
+   "rule": {
+    "window_from": "2026-01-23",
+    "years": 0.7835616438356164,
+    "time_in_market": 0.9755244755244755,
+    "switches": 4,
+    "gross_always_pct_per_year": 27.82588211346153,
+    "gross_filtered_pct_per_year": 27.800961623601395,
+    "net_always_taker_pct_per_year": 27.536945050524466,
+    "net_filtered_taker_pct_per_year": 27.22308749772727,
+    "net_always_maker_pct_per_year": 27.687028966608388,
+    "net_filtered_maker_pct_per_year": 27.523255329895104
+   },
+   "spot_token": "XMR1",
+   "rises": {
+    "1d": {
+     "rise": 0.39775443989071047,
+     "from": "2025-04-27"
+    },
+    "7d": {
+     "rise": 0.8355527033531205,
+     "from": "2026-01-07"
+    }
+   },
+   "max_leverage": 5.0,
+   "capital": [
+    {
+     "leverage": 1.0,
+     "return_on_capital_pct": 14.002670941600453,
+     "liquidation_rise": 0.8181818181818181,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 1.5,
+     "return_on_capital_pct": 16.803205129920542,
+     "liquidation_rise": 0.5151515151515151,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 2.0,
+     "return_on_capital_pct": 18.670227922133936,
+     "liquidation_rise": 0.36363636363636365,
+     "survives_worst_1d": false,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 3.0,
+     "return_on_capital_pct": 21.004006412400678,
+     "liquidation_rise": 0.21212121212121207,
+     "survives_worst_1d": false,
+     "survives_worst_7d": false
+    }
+   ],
+   "basis": {
+    "hours": 5000,
+    "first": "2026-04-10",
+    "mean_bps": -13.627587466322193,
+    "sd_bps": 36.688645171214304,
+    "p1_bps": -98.14700520636106,
+    "p99_bps": 84.6227916932127,
+    "worst_bps": -806.4196552407366,
+    "worst_at": "2026-09-04 03:00",
+    "share_beyond_100bps": 0.0166
+   }
+  },
+  "ZEC": {
+   "funding": {
+    "first": "2025-10-02",
+    "hours": 9563,
+    "span_hours": 9563,
+    "pct_per_year": 4.662434418320612,
+    "last_12m_pct_per_year": 4.328765430000002,
+    "by_year": {
+     "2025": {
+      "pct_per_year": -0.6097704398156666,
+      "hours": 2170
+     },
+     "2026": {
+      "pct_per_year": 6.2099367234952,
+      "hours": 7393
+     }
+    },
+    "share_at_interest_constant": 0.6678866464498588,
+    "share_negative": 0.1689846282547318,
+    "bps_per_hour_p1": -1.6356435,
+    "complete_months": 13,
+    "share_negative_months": 0.23076923076923078,
+    "worst_month": {
+     "month": "2025-11",
+     "pct_of_notional": -2.4238719200000403
+    },
+    "longest_negative_weeks": 4
+   },
+   "rule": {
+    "window_from": "2025-10-10",
+    "years": 1.0712328767123287,
+    "time_in_market": 0.7851662404092071,
+    "switches": 22,
+    "gross_always_pct_per_year": 3.7350508904092132,
+    "gross_filtered_pct_per_year": 6.67490581687979,
+    "net_always_taker_pct_per_year": 3.523705621867013,
+    "net_filtered_taker_pct_per_year": 4.350107862915595,
+    "net_always_maker_pct_per_year": 3.6334856730179084,
+    "net_filtered_maker_pct_per_year": 5.557688425575441
+   },
+   "spot_token": "UZEC",
+   "rises": {
+    "1d": {
+     "rise": 0.7503371998920962,
+     "from": "2025-09-30"
+    },
+    "7d": {
+     "rise": 2.179773258952672,
+     "from": "2025-09-27"
+    }
+   },
+   "max_leverage": 10.0,
+   "capital": [
+    {
+     "leverage": 1.0,
+     "return_on_capital_pct": 2.164382715000001,
+     "liquidation_rise": 0.9047619047619047,
+     "survives_worst_1d": true,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 1.5,
+     "return_on_capital_pct": 2.597259258000001,
+     "liquidation_rise": 0.5873015873015872,
+     "survives_worst_1d": false,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 2.0,
+     "return_on_capital_pct": 2.885843620000001,
+     "liquidation_rise": 0.42857142857142855,
+     "survives_worst_1d": false,
+     "survives_worst_7d": false
+    },
+    {
+     "leverage": 3.0,
+     "return_on_capital_pct": 3.2465740725000014,
+     "liquidation_rise": 0.2698412698412698,
+     "survives_worst_1d": false,
+     "survives_worst_7d": false
+    }
+   ],
+   "basis": {
+    "hours": 5000,
+    "first": "2026-04-10",
+    "mean_bps": 0.8641147911788576,
+    "sd_bps": 34.42491007791106,
+    "p1_bps": -42.16162530233591,
+    "p99_bps": 97.51065113817913,
+    "worst_bps": 726.368469465708,
+    "worst_at": "2026-08-21 08:00",
+    "share_beyond_100bps": 0.0102
+   }
+  }
+ },
+ "data": {
+  "funding": {
+   "path": "research/backtest/cache/funding_full",
+   "files": 9,
+   "sha256": "8b7aece65bc6631193ee02104f8994ca29f0a10837b4cd97ff43a09391042852"
+  },
+  "daily": {
+   "path": "research/backtest/cache/candles_1d",
+   "files": 44,
+   "sha256": "26447041c450fec0c799f33130a636208392c8c0a222b522dc00111c824cd7b0"
+  },
+  "basis": {
+   "path": "research/backtest/cache/basis_1h",
+   "files": 18,
+   "sha256": "bb29473e40f18347cb8f4ed77355ab7bef30387e367cb1a62f6fb065d85b1825"
+  }
+ },
+ "source": "https://api.hyperliquid.xyz/info (public, read-only)",
+ "spot_tokens": {
+  "BTC": {
+   "token": "UBTC",
+   "full_name": "Unit Bitcoin",
+   "day_volume": 50946012.977969974
+  },
+  "ETH": {
+   "token": "UETH",
+   "full_name": "Unit Ethereum",
+   "day_volume": 15900403.116889998
+  },
+  "FARTCOIN": {
+   "token": "UFART",
+   "full_name": "Unit Fartcoin",
+   "day_volume": 116052.724577
+  },
+  "HYPE": {
+   "token": "HYPE",
+   "full_name": "Hyperliquid",
+   "day_volume": 104022383.90550996
+  },
+  "NEAR": {
+   "token": "ONEAR",
+   "full_name": "NEAR Protocol",
+   "day_volume": 4050449.9712940026
+  },
+  "PUMP": {
+   "token": "UPUMP",
+   "full_name": "Unit Pump Fun",
+   "day_volume": 1998232.5381110008
+  },
+  "SOL": {
+   "token": "USOL",
+   "full_name": "Unit Solana",
+   "day_volume": 4326067.558189002
+  },
+  "XMR": {
+   "token": "XMR1",
+   "full_name": "XMR - Wagyu.xyz",
+   "day_volume": 20771068.530800004
+  },
+  "ZEC": {
+   "token": "UZEC",
+   "full_name": "Unit Zcash",
+   "day_volume": 22796705.678780004
+  }
+ },
+ "hlp": {
+  "first": "2023-05-10",
+  "last": "2026-11-05",
+  "points": 185,
+  "twr_pct": 264.8360308528977,
+  "twr_range_pct": [
+   170.28946375588302,
+   395.86326092397286
+  ],
+  "annualised_pct": 44.886476656462705,
+  "by_year_pct": {
+   "2023": 77.3126726585532,
+   "2024": 62.86345959659086,
+   "2025": 17.267123762283877,
+   "2026": 7.735297938693142
+  },
+  "trailing_pct": {
+   "365d": 6.959837181917172,
+   "182d": 1.016018096956417,
+   "91d": 0.9047396630150306
+  },
+  "account_value": 151205577.084997
+ }
+}

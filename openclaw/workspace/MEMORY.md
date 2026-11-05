@@ -139,6 +139,22 @@ z 1.65 -- a lead needing ~560 weeks to confirm. Volatility persists week to
 week (0.52-0.74 rank corr); trendiness does not. Report:
 lab/research/backtest/results/predictability_scan/.
 
+## Cash-and-carry (H-CARRY, measurement, 2026-11-05)
+
+Spot long plus the same perp short collects funding without a price bet.
+Every coin measured paid shorts on average over its whole funding history
+(ZEC +4.7% to XMR +28.0% a year of notional; BTC/ETH +14% over 3.4 years),
+but the payment has shrunk with the market (BTC +24.1% in 2024, +5.5% in
+2026; HLP the same: +62.9% -> +7.7%). Last 12 months: XMR 28, FARTCOIN 15,
+NEAR 11, HYPE 10, PUMP 10, ETH 6, BTC 6, ZEC 4, SOL 1. Funding's own tails
+are mild (BTC/ETH worst month -0.70%). What breaks it is the short leg's
+squeeze (worst weeks +84% to +271% on alts, beyond a 1x short's liquidation)
+and the wrapped spot token (all but HYPE; XMR1 traded 8% under the perp for
+an hour on 2026-09-04). Spot does not margin the short below $10k account
+value, so the yield on capital is about half: ~3-14% at the last 12 months'
+rates. The bot cannot trade spot today. Report:
+lab/research/backtest/results/carry/.
+
 ## Live recorder (fixed 2026-10-27)
 
 Band outcomes are resolved by research.backtest.engine (conservative, net of

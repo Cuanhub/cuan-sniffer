@@ -165,6 +165,26 @@ def main() -> int:
                          for fam, cells in fams.items() for k, v in cells.items()},
             "report": "research/backtest/results/predictability_scan/report.md",
             "source": "CuanSniffer repo, exploratory, 2026-11-04"})
+    ca = res / "carry" / "summary.json"
+    if ca.exists():
+        s = json.loads(ca.read_text())
+        ledger.append("historical", "H-CARRY", {
+            "title": "Cash-and-carry (MEASUREMENT): spot long + the same perp short, funding to the short "
+                     "over each perp's whole history; plus one rule, stepping aside after a negative week",
+            "hypotheses": 1,
+            "verdict": "MEASUREMENT, in-sample. Every coin paid shorts on average (ZEC +4.7% to XMR +28.0% a "
+                       "year of notional; BTC/ETH +14% over 3.4 years) but it has shrunk (BTC +24.1% 2024, "
+                       "+5.5% 2026). Funding's own tails are mild; the risk is the short leg's squeeze (worst "
+                       "weeks +84% to +271% on alts) and the wrapped spot token. The trailing-week filter adds "
+                       "nothing except on SOL and ZEC. ~3-14% a year on capital at the last 12 months' rates.",
+            "evidence": {c: {"pct_per_year": v["funding"]["pct_per_year"],
+                             "last_12m_pct_per_year": v["funding"]["last_12m_pct_per_year"],
+                             "worst_month": v["funding"]["worst_month"],
+                             "filtered_minus_always_taker": v["rule"]["net_filtered_taker_pct_per_year"]
+                             - v["rule"]["net_always_taker_pct_per_year"]}
+                         for c, v in s["coins"].items()},
+            "report": "research/backtest/results/carry/report.md",
+            "source": "CuanSniffer repo, metrics fixed 2026-11-05 (9633ce4) before the data was read"})
     print(f"seeded {len(ledger.entries())} entries; hypotheses to date: {ledger.tested_count()}; "
           f"chain {'intact' if ledger.verify() is None else 'BROKEN'}")
     return 0

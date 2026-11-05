@@ -85,14 +85,13 @@ grounding. Remove an item when it is registered (note the experiment id).
     there first, then a forward test here. Survivorship (today's top 45) must
     be addressed in the design.
 
-15. **Delta-neutral funding carry on the majors -- a yield to measure, not an
-    alpha to test.** Grounding: 60 days to 2026-10-27, BTC +8.8%, ETH +9.1%,
-    SOL +7.1%, HYPE +8.7% a year paid to shorts, no negative week; funding is
-    the formula's constant in 72% of coin-hours. Measure over the full
-    funding history since listing (worst month, negative spells), spot
-    availability and fees (0.070% / 0.040% base), and the spot-perp basis at
-    entry and exit. A perp-only short is NOT this trade (60 days: +1.1%
-    funding against a +22.5% average price move).
+15. **Delta-neutral funding carry -- MEASURED (H-CARRY, 2026-11-05).** What
+    remains is not a test but a build and a forward run: spot orders in the
+    bot, an hourly rebalancer that tops up each short's margin from spot with
+    limit orders, exits on a funding turn or a spot-perp gap beyond a bound.
+    Grounding: results/carry (every coin paid on average; ~3-14% a year on
+    capital at the last 12 months' rates; the squeeze and the wrapped token
+    are the risks). The user's call.
 
 Do NOT queue without new reasoning: killzone timing, HTF bias, per-coin
 selection, lowering the reward:risk floor -- see graveyard.md. Also, from the
