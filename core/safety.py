@@ -161,6 +161,89 @@ def _cancel_all_orders(venue: Venue, notes: List[str]) -> None:
             notes.append(f"cancel refused {o.coin} oid={o.oid}")
 
 
+def flatten_coin(venue: Venue, coin: str, reason: str = "flatten"
+                 ) -> FlattenResult:
+    """Close one coin and leave every other position and order alone.
+
+    One coin's stop failing says nothing about the others, which still hold
+    their own stops. This loops for the same reason flatten_all does: one IOC
+    is not a close.
+
+    Unlike flatten_all, a stop already resting on this coin stays until the
+    position is gone. Both are reduce-only, so it cannot over-close, and if the
+    close fails the position keeps whatever protection it had.
+    """
+    coin = coin.upper()
+    started = time.time()
+    closed: Dict[str, float] = {}
+    notes: List[str] = []
+    rounds = 0
+    stalled = 0
+    last_seen: Optional[float] = None
+
+    while time.time() - started < MAX_FLATTEN_SEC:
+        rounds += 1
+        _cancel_coin_orders(venue, coin, notes, entries_only=True)
+
+        positions = venue.positions(urgent=True)
+        if positions is None:
+            notes.append(f"round {rounds}: venue unreadable")
+            time.sleep(FLATTEN_PAUSE_SEC)
+            continue
+        held = positions.get(coin)
+        if held is None:
+            _cancel_coin_orders(venue, coin, notes)
+            took = time.time() - started
+            print(f"[SAFETY] flatten_coin {coin} FLAT after {rounds} round(s), "
+                  f"{took:.1f}s ({reason})")
+            return FlattenResult(True, closed, {}, took,
+                                 "; ".join(notes) or "flat")
+
+        out = execute.close(venue, coin)
+        if out.filled:
+            closed[coin] = closed.get(coin, 0.0) + out.filled_size
+        notes.append(f"round {rounds} {coin}: "
+                     f"{'closed ' + format(out.filled_size, 'g') if out.filled else out.note}")
+
+        # Same early exit as flatten_all: a residual no order can express.
+        stalled = 0 if (out.filled or held.szi != last_seen) else stalled + 1
+        last_seen = held.szi
+        if stalled >= 2:
+            notes.append(f"no progress for {stalled + 1} rounds -- giving up")
+            break
+        time.sleep(FLATTEN_PAUSE_SEC)
+
+    final = venue.positions(urgent=True)
+    took = time.time() - started
+    if final is None:
+        notes.append("venue unreadable at the deadline -- cannot claim flat")
+    elif coin not in final:
+        _cancel_coin_orders(venue, coin, notes)
+        return FlattenResult(True, closed, {}, took, "; ".join(notes))
+    still = {coin: final[coin].szi if final else 0.0}
+    notes.append(f"STILL OPEN: {still}")
+    notify.send(
+        f"🚨 *Flatten did not finish*\n{reason}\n\n"
+        f"Still open: `{still}`\nClosed: `{closed or '{}'}`\n"
+        f"Gave up after {took:.0f}s. Close this at the venue.",
+        key=f"flatten_failed_{coin}", cooldown_sec=300)
+    return FlattenResult(False, closed, still, took, "; ".join(notes))
+
+
+def _cancel_coin_orders(venue: Venue, coin: str, notes: List[str],
+                        entries_only: bool = False) -> None:
+    orders = venue.open_orders(coin, urgent=True)
+    if orders is None:
+        notes.append(f"{coin} orders unreadable -- cancelled nothing")
+        return
+    for o in orders:
+        if entries_only and not o.is_entry:
+            continue
+        resp = venue.cancel(o.coin, o.oid)
+        if not (isinstance(resp, dict) and str(resp.get("status")) == "ok"):
+            notes.append(f"cancel refused {o.coin} oid={o.oid}")
+
+
 # ── halt state: exactly two kinds ──────────────────────────────────────────
 
 class HaltState:

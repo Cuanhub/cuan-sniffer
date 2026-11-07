@@ -177,6 +177,64 @@ def test_a_position_that_cannot_be_protected_is_flattened(store, captured_alerts
     assert any("could not be protected" in str(p) for p in captured_alerts)
 
 
+def _refuse_stops_on(fake, coin):
+    """The venue accepts `coin`'s triggers and rests nothing."""
+    real_order = fake.order
+
+    def refuse(name, is_buy, sz, px, order_type, **k):
+        if name == coin and "trigger" in order_type:
+            return {"status": "ok"}
+        return real_order(name, is_buy, sz, px, order_type, **k)
+    fake.order = refuse                      # type: ignore[method-assign]
+
+
+def test_one_coins_failed_stop_leaves_the_rest_of_the_book_alone(store,
+                                                                 captured_alerts):
+    fake = FakeHL(positions={"ETH": 1.0, "HYPE": 2.0}, mid=100.0)
+    fake.rest_protection("ETH", 1.0, stop_px=90.0)
+    fake.rest_plain_order("SOL", 3.0, 80.0)      # another coin's entry bid
+    store.put("ETH", planned(stop=90.0))
+    store.put("HYPE", planned(stop=90.0))
+    _refuse_stops_on(fake, "HYPE")
+
+    res = {r.coin: r.action for r in protect.run_once(build_venue(fake), store)}
+
+    assert res == {"ETH": "ok", "HYPE": "flattened"}
+    assert "HYPE" not in fake.pos
+    assert fake.pos["ETH"] == pytest.approx(1.0)
+    left = {(o["coin"], o["orderType"].split()[0]) for o in fake.resting}
+    assert ("ETH", "Stop") in left, "the other coin's stop was cancelled"
+    assert any(c == "SOL" for c, _ in left), "another coin's bid was cancelled"
+    text = str(captured_alerts)
+    assert "HYPE could not be protected" in text
+    assert "Other positions were left alone" in text
+
+
+def test_every_coin_is_closed_when_the_venue_refuses_every_stop(store,
+                                                                captured_alerts):
+    """Failure stays per coin, so a venue-wide fault still closes them all."""
+    fake = FakeHL(positions={"ETH": 1.0, "HYPE": 2.0}, mid=100.0)
+    _refuse_stops_on(fake, "ETH")
+    _refuse_stops_on(fake, "HYPE")
+    res = protect.run_once(build_venue(fake), store)
+    assert [r.action for r in res] == ["flattened", "flattened"]
+    assert fake.pos == {}
+
+
+def test_the_alert_does_not_claim_a_close_that_did_not_happen(store,
+                                                              captured_alerts,
+                                                              monkeypatch):
+    monkeypatch.setattr(safety, "MAX_FLATTEN_SEC", 0.05)
+    fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    fake.order_fills = False
+    store.put("HYPE", planned(stop=90.0))
+    _refuse_stops_on(fake, "HYPE")
+    protect.run_once(build_venue(fake), store)
+    text = str(captured_alerts)
+    assert "closing HYPE did not finish" in text
+    assert "so HYPE was closed" not in text
+
+
 def test_an_unreadable_order_book_does_not_flatten_a_position(store,
                                                               captured_alerts):
     """An unanswerable query is not evidence of an unprotected position. The

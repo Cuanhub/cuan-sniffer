@@ -132,6 +132,10 @@ def captured_alerts(monkeypatch):
         sent.append(payload)
         return _OkResponse()
 
+    # notify.send returns before the transport when these are unset, so without
+    # them a machine with no .env captures nothing and these tests fail.
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat")
     monkeypatch.setattr(notify, "_transport", _capture)
     notify.reset_cooldowns()
     yield sent

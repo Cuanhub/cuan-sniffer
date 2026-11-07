@@ -109,6 +109,62 @@ def test_flatten_all_is_not_throttled_by_the_rate_limit_brake(monkeypatch):
     assert all(s == 0.0 for s in slept), f"the brake throttled a flatten: {slept}"
 
 
+def _kinds(fake):
+    return {(o["coin"], o["orderType"].split()[0]) for o in fake.resting}
+
+
+def test_flatten_coin_closes_that_coin_and_nothing_else():
+    fake = FakeHL(positions={"ETH": 1.0, "HYPE": 2.0}, mid=100.0)
+    fake.rest_protection("ETH", 1.0, stop_px=90.0)
+    fake.rest_protection("HYPE", 2.0, stop_px=90.0)
+    fake.rest_plain_order("HYPE", 1.0, 80.0)
+    res = safety.flatten_coin(build_venue(fake), "hype")
+    assert res.flat
+    assert res.closed["HYPE"] == pytest.approx(2.0)
+    assert list(fake.pos) == ["ETH"]
+    assert all(o["coin"] == "ETH" for o in fake.resting), "orders left on HYPE"
+    assert ("ETH", "Stop") in _kinds(fake)
+
+
+def test_flatten_coin_retries_until_the_venue_confirms_flat():
+    fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    fake.fill_fraction = 0.5
+    res = safety.flatten_coin(build_venue(fake), "HYPE")
+    assert res.flat
+    assert "HYPE" not in fake.pos
+    assert res.detail.count("closed") >= 2, "one IOC finished it: nothing retried"
+
+
+def test_flatten_coin_keeps_the_stop_when_the_close_fails(monkeypatch,
+                                                          captured_alerts):
+    """A failed close must not strip the protection the position still has."""
+    monkeypatch.setattr(safety, "MAX_FLATTEN_SEC", 0.05)
+    fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    fake.rest_protection("HYPE", 2.0, stop_px=90.0)
+    fake.order_fills = False
+    res = safety.flatten_coin(build_venue(fake), "HYPE", reason="test")
+    assert not res.flat
+    assert res.still_open["HYPE"] == pytest.approx(2.0)
+    assert ("HYPE", "Stop") in _kinds(fake)
+    assert any("Flatten did not finish" in str(p) for p in captured_alerts)
+
+
+def test_flatten_coin_cancels_a_bid_that_could_reopen_it():
+    fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    fake.rest_plain_order("HYPE", 1.0, 80.0)
+    fake.order_fills = False
+    sent = []
+    real = fake.cancel
+    fake.cancel = lambda name, oid: (sent.append(name), real(name, oid))[1]
+    safety.MAX_FLATTEN_SEC, saved = 0.05, safety.MAX_FLATTEN_SEC
+    try:
+        safety.flatten_coin(build_venue(fake), "HYPE")
+    finally:
+        safety.MAX_FLATTEN_SEC = saved
+    assert sent == ["HYPE"]
+    assert fake.resting == []
+
+
 def test_flatten_all_reports_failure_rather_than_claiming_flat(monkeypatch):
     """A position that will not close must be reported as still open, loudly."""
     monkeypatch.setattr(safety, "MAX_FLATTEN_SEC", 0.05)

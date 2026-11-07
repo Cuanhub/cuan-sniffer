@@ -211,14 +211,19 @@ def _cancel_stale(venue: Venue, coin: str, orders: List[Order]) -> int:
 
 
 def _give_up(venue: Venue, coin: str, why: str) -> Result:
-    """Close a position that cannot be protected. An unprotected position is
-    not the trade.
+    """Close a position that cannot be protected, and only that position. An
+    unprotected position is not the trade, but the others keep their own stops.
+    If the venue is refusing every stop, each coin reaches here in its own turn.
     """
-    print(f"[PROTECT] !! {coin}: {why} -- flattening")
-    res = safety.flatten_all(venue, reason=f"{coin}: {why}")
+    print(f"[PROTECT] !! {coin}: {why} -- closing {coin}")
+    res = safety.flatten_coin(venue, coin, reason=f"{coin}: {why}")
+    outcome = (f"so {coin} was closed. Other positions were left alone."
+               if res.flat else
+               f"and closing {coin} did not finish: `{res.still_open}`. "
+               f"Other positions were left alone.")
     notify.send(
-        f"🚨 *{coin} could not be protected*\n{why}, so the position was "
-        f"closed.\n\nFlat: `{res.flat}`  closed: `{res.closed or '{}'}`",
+        f"🚨 *{coin} could not be protected*\n{why}, {outcome}\n\n"
+        f"Closed: `{res.closed or '{}'}`",
         key=f"protect_failed_{coin}", cooldown_sec=900)
     return Result(coin, "flattened", f"{why}; {res.detail}")
 
