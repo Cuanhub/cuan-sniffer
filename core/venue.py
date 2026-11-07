@@ -176,7 +176,7 @@ class Venue:
         self._cloid_seq = 0
         self.load_meta()
         print(f"[VENUE] {'TESTNET' if HL_TESTNET else 'MAINNET'} "
-              f"addr={self.address} assets={len(self._sz_decimals)}")
+              f"addr={self.address[:6]}...{self.address[-4:]} assets={len(self._sz_decimals)}")
 
     # ── metadata and rounding ──────────────────────────────────────────────
 

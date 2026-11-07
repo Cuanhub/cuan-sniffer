@@ -11,6 +11,13 @@ than only the ones that look like they alert: the whole point is that the
 next person to add a halt path does not have to know this file is here.
 """
 
+import os
+
+# Read at import by the modules below. These waits are for the real venue's
+# lag; a fake answers at once, and the suite would take many minutes otherwise.
+os.environ.setdefault("PROTECT_CONFIRM_WAIT_SEC", "0")
+os.environ.setdefault("LEVELS_MIN_REQUEST_GAP_SEC", "0")
+
 import pytest
 
 import notify
@@ -63,6 +70,10 @@ def isolated_runtime_files(tmp_path, monkeypatch):
     from research.levels import storage
     from core import meta as core_meta
     from core import safety as core_safety
+    from tools import liveness
+
+    monkeypatch.setattr(liveness, "DATA", tmp_path / "data")
+    monkeypatch.setattr(liveness, "STATE", tmp_path / "_liveness.json")
 
     monkeypatch.setattr(trader, "STATE_PATH", tmp_path / "_live_state.json")
     monkeypatch.setattr(trader, "TRADE_LOG", tmp_path / "live_trades.csv")

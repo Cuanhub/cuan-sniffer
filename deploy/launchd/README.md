@@ -19,6 +19,14 @@ a couple of dozen labels. `RUNBOOK.md` is the operations reference.
 
 ---
 
+## Keeping the Mac awake
+
+`com.cuansniffer.awake.plist` runs `caffeinate -ims` so the jobs keep running.
+Until 2026-11-06 this was a hand-started `caffeinate`, which died in a reboot;
+the Mac then slept with a bid resting. A bid that fills during sleep has no stop
+until the Mac wakes. `-s` only holds on AC power, and closing the lid can still
+sleep the machine, so keep it plugged in with the lid open.
+
 ## Why this project lives at `~/CuanSniffer`
 
 A launchd-spawned job does **not** inherit Terminal's Full Disk Access. This

@@ -30,6 +30,9 @@ from core.venue import Order, Venue
 # either fills or is cancelled immediately, so this is propagation time, not
 # order lifetime.
 SETTLE_SEC = float(os.getenv("EXEC_SETTLE_SEC", "1.5"))
+# Further reads before an unchanged position counts as no fill. ENA's entry
+# filled on 2026-11-05 and still read as unchanged 1.5s later.
+NO_FILL_REREADS = 2
 # Marketable band for an IOC. Wide enough to cross the spread, bounded so a
 # thin book cannot fill us arbitrarily far from the mid.
 IOC_BPS = float(os.getenv("EXEC_IOC_BPS", "25"))
@@ -145,17 +148,21 @@ def _observe(venue: Venue, coin: str, before: float, what: str,
     left to read, so without it a complete close would report a notional of
     zero. It is a reported price, never a decision input.
     """
-    time.sleep(SETTLE_SEC)
-    pos = venue.positions(urgent=True)
-    if pos is None:
-        # An order was sent and we cannot see the result. Saying "rejected"
-        # here is what left a live, unprotected position untracked for a full
-        # poll interval; saying "filled" would invent one.
-        print(f"[EXEC] {what} {coin}: venue unreadable after send -- UNKNOWN")
-        return Outcome(coin, 0.0, 0.0, unknown=True, note="unreadable_after_send")
-    held = pos.get(coin)
-    after = held.szi if held else 0.0
-    delta = abs(after - before)
+    for _ in range(1 + NO_FILL_REREADS):
+        time.sleep(SETTLE_SEC)
+        pos = venue.positions(urgent=True)
+        if pos is None:
+            # An order was sent and we cannot see the result. Saying "rejected"
+            # here is what left a live, unprotected position untracked for a
+            # full poll interval; saying "filled" would invent one.
+            print(f"[EXEC] {what} {coin}: venue unreadable after send -- UNKNOWN")
+            return Outcome(coin, 0.0, 0.0, unknown=True,
+                           note="unreadable_after_send")
+        held = pos.get(coin)
+        after = held.szi if held else 0.0
+        delta = abs(after - before)
+        if delta > 0:
+            break
     if held is None:
         px = px_hint
     elif what == "entry":

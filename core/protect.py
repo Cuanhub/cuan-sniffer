@@ -24,7 +24,9 @@ can leave a live position with no stop at all.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import notify
@@ -40,6 +42,15 @@ PRICE_TOLERANCE = float(os.getenv("PROTECT_PRICE_TOLERANCE", "0.002"))  # 0.2%
 # whose metadata was lost. Distance from the current mark, per rule 1.
 MAX_RISK_PCT = float(os.getenv("PROTECT_MAX_RISK_PCT", "3.0"))
 MAX_PLACE_ATTEMPTS = 2
+# A stop the venue accepted can take seconds to appear in frontendOpenOrders.
+# Reading once, immediately, is what closed the whole book on 2026-11-05 with
+# correct stops resting: see _place_stop.
+CONFIRM_READS = 4
+CONFIRM_WAIT_SEC = float(os.getenv("PROTECT_CONFIRM_WAIT_SEC", "1.5"))
+# A plan younger than this survives even with nothing visible behind it. The
+# trader writes the plan BEFORE sending, so a young plan with no position and
+# no bid usually means the venue's read has not caught up with the order.
+PLAN_GRACE_SEC = float(os.getenv("PROTECT_PLAN_GRACE_SEC", "600"))
 # How long a resting entry bid may sit before it is pulled. A level that has
 # not been tapped in this long is no longer the setup that justified the bid.
 BID_TTL_HOURS = float(os.getenv("PROTECT_BID_TTL_HOURS", "12"))
@@ -146,8 +157,30 @@ def ensure_stop(venue: Venue, pos: Position, meta: Optional[TradeMeta]
     good = [o for o in stops if _matches(o, pos.size, want_px)]
     if len(stops) == 1 and good:
         return Result(coin, "ok", f"stop {want_px:g} ({why})")
+    if good:
+        # A correct stop is already resting, so tidy up around it. This used
+        # to place yet another stop to replace the duplicates, and a failed
+        # read of that one then flattened a position holding two good stops.
+        keep = good[0]
+        cancelled = _cancel_stale(venue, coin,
+                                  [o for o in stops if o.oid != keep.oid])
+        print(f"[PROTECT] {coin}: kept stop at {want_px:g}, cancelled "
+              f"{cancelled} other(s)")
+        return Result(coin, "replaced", f"stop {want_px:g} ({why})")
 
-    placed = _place_stop(venue, pos, want_px)
+    placed, book_read = _place_stop(venue, pos, want_px, {o.oid for o in orders})
+    if placed is None and not book_read:
+        # Same answer as the unreadable book above: an order may be resting
+        # and nothing here can tell.
+        return Result(coin, "unknown",
+                      "stop sent, order book unreadable afterwards")
+    if placed is None and any(o.size >= pos.size * (1 - SIZE_TOLERANCE)
+                              for o in stops):
+        # The new stop did not appear, but the old one still covers the whole
+        # position. Wrong price, not no protection: nothing here justifies
+        # closing it, and the next cycle tries again.
+        return Result(coin, "unknown",
+                      "replacement stop not visible, existing stop kept")
     if placed is None:
         return _give_up(venue, coin,
                         f"no stop would rest after {MAX_PLACE_ATTEMPTS} attempts")
@@ -156,18 +189,25 @@ def ensure_stop(venue: Venue, pos: Position, meta: Optional[TradeMeta]
     # order leaves a window -- and a failure in that window leaves a live
     # position with no stop at all.
     stale = [o for o in stops if o.oid != placed.oid]
-    for o in stale:
-        resp = venue.cancel(coin, o.oid)
-        ok = isinstance(resp, dict) and str(resp.get("status")) == "ok"
-        if not ok:
-            # Harmless in itself: two reduce-only stops cannot open anything,
-            # and the venue cancels both when the position closes. Worth
-            # knowing about, not worth closing a protected position over.
-            safety.record_error("cancel_stale_stop", f"{coin} oid={o.oid}")
+    _cancel_stale(venue, coin, stale)
     action = "placed" if not stale else "replaced"
     print(f"[PROTECT] {coin}: {action} stop at {want_px:g} for {pos.size:g} "
           f"({why}){f', cancelled {len(stale)} stale' if stale else ''}")
     return Result(coin, action, f"stop {want_px:g} ({why})")
+
+
+def _cancel_stale(venue: Venue, coin: str, orders: List[Order]) -> int:
+    done = 0
+    for o in orders:
+        resp = venue.cancel(coin, o.oid)
+        if isinstance(resp, dict) and str(resp.get("status")) == "ok":
+            done += 1
+        else:
+            # Harmless in itself: two reduce-only stops cannot open anything,
+            # and the venue cancels both when the position closes. Worth
+            # knowing about, not worth closing a protected position over.
+            safety.record_error("cancel_stale_stop", f"{coin} oid={o.oid}")
+    return done
 
 
 def _give_up(venue: Venue, coin: str, why: str) -> Result:
@@ -183,29 +223,43 @@ def _give_up(venue: Venue, coin: str, why: str) -> Result:
     return Result(coin, "flattened", f"{why}; {res.detail}")
 
 
-def _place_stop(venue: Venue, pos: Position, px: float) -> Optional[Order]:
+def _place_stop(venue: Venue, pos: Position, px: float, before: set[int]
+                ) -> tuple[Optional[Order], bool]:
     """Place a stop and confirm it by reading the book, not by parsing a
-    response. Returns the resting order, or None after MAX_PLACE_ATTEMPTS.
+    response. Returns the resting order or None, and whether the book could be
+    read at all after sending. `before` is the book the caller decided from.
+
+    The read waits, and repeats, before anything is sent again. Reading once
+    straight after sending cost real money on 2026-11-05: the venue accepted
+    ETH stops at 15:09:36, :37, 15:10:41 and :43 while this logged "nothing
+    rested" each time, and the book was flattened with all of them resting.
+    The same path doubled stops on ENA (10-28), ETH and XPL (10-29).
     """
     coin = pos.coin
     size = venue.round_size(coin, pos.size)
     if size <= 0:
-        return None
+        return None, True
     for attempt in range(1, MAX_PLACE_ATTEMPTS + 1):
-        before = {o.oid for o in (venue.open_orders(coin) or [])}
         venue.send_trigger(coin, is_buy=not pos.is_long, size=size,
                            trigger_px=px, is_stop=True)
-        after = venue.open_orders(coin)
-        if after is None:
+        read = False
+        for _ in range(CONFIRM_READS):
+            time.sleep(CONFIRM_WAIT_SEC)
+            after = venue.open_orders(coin)
+            if after is None:
+                continue
+            read = True
+            fresh = [o for o in after
+                     if o.oid not in before and o.is_protective and o.is_stop]
+            if fresh:
+                return fresh[0], True
+        if not read:
+            # Sending again blind could only stack stops.
             safety.record_error("confirm_stop", f"{coin} attempt {attempt}")
-            continue
-        fresh = [o for o in after
-                 if o.oid not in before and o.is_protective and o.is_stop]
-        if fresh:
-            return fresh[0]
+            return None, False
         safety.record_error("place_stop",
                             f"{coin} attempt {attempt}: nothing rested")
-    return None
+    return None, True
 
 
 def ensure_tp(venue: Venue, pos: Position, meta: Optional[TradeMeta]) -> None:
@@ -354,6 +408,18 @@ def expire_bids(venue: Venue) -> List[str]:
     return pulled
 
 
+def _plan_age_sec(row: TradeMeta) -> float:
+    """Seconds since the plan was written. Unreadable counts as old, so a
+    damaged timestamp cannot keep a plan alive forever."""
+    try:
+        at = datetime.fromisoformat(row.opened_at.replace("Z", "+00:00"))
+    except ValueError:
+        return float("inf")
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - at).total_seconds()
+
+
 def _forget_closed(store: MetaStore, live: set[str]) -> None:
     """Drop metadata for coins the venue no longer holds.
 
@@ -364,7 +430,14 @@ def _forget_closed(store: MetaStore, live: set[str]) -> None:
     `live` includes coins with a resting BID as well as a position: the plan
     for a bid that has not filled yet is the plan the stop will need the
     moment it does.
+
+    A young plan is left alone: the trader saves it before sending, so its
+    order may simply not be visible yet. Dropping one turned a filled ENA
+    entry into a 3% adoption on 2026-11-05, and left a BTC bid planless.
     """
     for coin in sorted(store.coins() - live):
+        row = store.get(coin)
+        if row is not None and _plan_age_sec(row) < PLAN_GRACE_SEC:
+            continue
         store.drop(coin)
         print(f"[PROTECT] {coin} is gone at the venue -- metadata dropped")

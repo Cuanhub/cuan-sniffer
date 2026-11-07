@@ -13,6 +13,8 @@ Shape of the design, because the tests only make sense against it:
                      _live_state.json keeps exactly one writer
 """
 
+import contextlib
+import io
 import json
 import os
 import pathlib
@@ -1113,3 +1115,35 @@ class PositionsReadsTheVenueNotThePlan(unittest.TestCase):
             out = C.render_positions({}, v)
         self.assertIn("not resting", out,
                       "a target that exists only in the plan was shown as a tp")
+
+
+class TokenAndConflict(unittest.TestCase):
+    TOKEN = "123456789:AAabcDEF_ghi-jkl"
+
+    def test_a_network_error_never_prints_the_token(self):
+        def boom(u, p, timeout=None):
+            raise OSError(f"Max retries exceeded with url: {u}")
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": self.TOKEN}), \
+                mock.patch.object(notify, "_transport", boom), \
+                contextlib.redirect_stdout(out):
+            notify.get_updates(1)
+        self.assertIn("bot<redacted>", out.getvalue())
+        self.assertNotIn(self.TOKEN, out.getvalue())
+
+    def _poll(self, transport):
+        with mock.patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": self.TOKEN}), \
+                mock.patch.object(notify, "_transport", transport):
+            notify.get_updates(1)
+        return notify.poll_conflicted()
+
+    def test_only_a_409_counts_as_a_shared_token(self):
+        def down(u, p, timeout=None):
+            raise OSError("down")
+
+        class Reply:
+            @staticmethod
+            def json():
+                return {"ok": False, "error_code": 409, "description": "Conflict"}
+        self.assertFalse(self._poll(down))
+        self.assertTrue(self._poll(lambda u, p, timeout=None: Reply))

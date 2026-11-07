@@ -19,6 +19,7 @@ time rather than import time so that a .env loaded by the caller still counts.
 """
 
 import os
+import re
 import time
 from typing import Callable, Dict, Optional
 
@@ -70,6 +71,16 @@ def reset_cooldowns() -> None:
     _last_sent.clear()
 
 
+# requests puts the full URL in its errors, and the URL holds the bot token. It
+# reached the trader, protect and control logs 983 times before 2026-11-06.
+_TOKEN_IN_URL = re.compile(r"bot\d+:[\w-]+")
+_poll_conflict = False
+
+
+def _redact(error: object) -> str:
+    return _TOKEN_IN_URL.sub("bot<redacted>", str(error))
+
+
 def send(text: str, key: Optional[str] = None, cooldown_sec: float = 0.0,
          attempts: int = SEND_ATTEMPTS, sleep=time.sleep) -> bool:
     """Deliver `text`. Returns True only when Telegram confirms delivery.
@@ -111,7 +122,7 @@ def send(text: str, key: Optional[str] = None, cooldown_sec: float = 0.0,
                 resp = _transport(url, payload)
             except Exception as e:
                 transport_failed = True
-                print(f"[ALERT] send failed (attempt {attempt}): {str(e)[:160]}")
+                print(f"[ALERT] send failed (attempt {attempt}): {_redact(e)[:160]}")
                 break          # the network is the problem, not the formatting
             try:
                 if resp.json().get("ok"):
@@ -120,7 +131,7 @@ def send(text: str, key: Optional[str] = None, cooldown_sec: float = 0.0,
                     return True
             except Exception as e:
                 transport_failed = True
-                print(f"[ALERT] unreadable reply (attempt {attempt}): {str(e)[:120]}")
+                print(f"[ALERT] unreadable reply (attempt {attempt}): {_redact(e)[:120]}")
                 break
         if not transport_failed:
             # Telegram answered and refused both forms. Retrying will not help.
@@ -166,6 +177,8 @@ def get_updates(offset: int = 0, timeout: int = POLL_TIMEOUT_SEC):
     Telegram re-delivers anything unacknowledged. Not advancing it on a
     command that failed would retry that command forever.
     """
+    global _poll_conflict
+    _poll_conflict = False
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         return [], offset, False
@@ -179,10 +192,11 @@ def get_updates(offset: int = 0, timeout: int = POLL_TIMEOUT_SEC):
         resp = _transport(url, payload, timeout=timeout + 10)
         body = resp.json()
     except Exception as e:
-        print(f"[CONTROL] poll failed: {str(e)[:160]}")
+        print(f"[CONTROL] poll failed: {_redact(e)[:160]}")
         return [], offset, False
     if not body.get("ok"):
-        print(f"[CONTROL] poll refused: {str(body)[:160]}")
+        _poll_conflict = body.get("error_code") == 409
+        print(f"[CONTROL] poll refused: {_redact(body)[:160]}")
         return [], offset, False
 
     out = []
@@ -207,6 +221,12 @@ def get_updates(offset: int = 0, timeout: int = POLL_TIMEOUT_SEC):
                         # the staleness check in tools/telegram_control.py.
                         "at": int(msg.get("date") or 0)})
     return out, nxt, True
+
+
+def poll_conflicted() -> bool:
+    """Whether the last poll was refused because another process holds this
+    token. A failed network is not that, whatever it looks like from here."""
+    return _poll_conflict
 
 
 def authorised(chat_id: str) -> bool:

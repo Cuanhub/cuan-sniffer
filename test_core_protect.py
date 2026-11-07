@@ -571,3 +571,92 @@ def test_a_genuinely_unpriceable_stop_still_flattens(store):
     store.put("BTC", planned(stop=0.0, tp=0.0))
     results = protect.run_once(v, store)
     assert [r.action for r in results] == ["flattened"], results
+
+
+# ── a venue whose reads lag its writes (2026-11-05) ────────────────────────
+
+def _hide_book(venue, fake, reads):
+    """The next `reads` book reads miss everything sent from now on."""
+    real = venue.open_orders
+    known = {o["oid"] for o in fake.resting}
+    left = [reads]
+
+    def lagging(coin="", urgent=False):
+        rows = real(coin, urgent)
+        if left[0] > 0:
+            left[0] -= 1
+            return [o for o in rows if o.oid in known]
+        return rows
+    venue.open_orders = lagging
+
+
+def _stops(fake):
+    return [o for o in fake.resting if o["orderType"].startswith("Stop")]
+
+
+def test_a_stop_that_appears_late_is_not_sent_twice(store):
+    fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    store.put("HYPE", planned(stop=90.0))
+    v = build_venue(fake)
+    _hide_book(v, fake, protect.CONFIRM_READS)      # the decision read + 3
+    res = protect.run_once(v, store)
+    assert [r.action for r in res] == ["placed"]
+    assert len(_stops(fake)) == 1
+
+
+def test_duplicate_correct_stops_are_tidied_without_placing_another(store):
+    fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    fake.rest_protection("HYPE", 2.0, stop_px=90.0)
+    fake.rest_protection("HYPE", 2.0, stop_px=90.0)
+    store.put("HYPE", planned(stop=90.0))
+    v = build_venue(fake)
+    sent = []
+    v.send_trigger = lambda *a, **k: sent.append(a)
+    res = protect.run_once(v, store)
+    assert res[0].protected and not sent
+    assert len(_stops(fake)) == 1
+
+
+def test_a_covered_position_is_not_flattened_when_a_new_stop_stays_unseen(store):
+    fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    fake.rest_protection("HYPE", 2.0, stop_px=85.0)      # right size, wrong price
+    store.put("HYPE", planned(stop=90.0))
+    v = build_venue(fake)
+    _hide_book(v, fake, 10 ** 6)
+    res = protect.run_once(v, store)
+    assert [r.action for r in res] == ["unknown"]
+    assert fake.pos["HYPE"] == pytest.approx(2.0)
+
+
+def test_a_book_unreadable_after_sending_neither_resends_nor_flattens(store):
+    fake = FakeHL(positions={"HYPE": 2.0}, mid=100.0)
+    store.put("HYPE", planned(stop=90.0))
+    v = build_venue(fake)
+    real = v.open_orders
+    sent = []
+    send = v.send_trigger
+
+    def track(*a, **k):
+        sent.append(a)
+        return send(*a, **k)
+    v.send_trigger = track
+    v.open_orders = lambda coin="", urgent=False: None if sent else real(coin, urgent)
+    res = protect.ensure_stop(v, v.positions()["HYPE"], store.get("HYPE"))
+    assert res.action == "unknown" and len(sent) == 1
+    assert fake.pos["HYPE"] == pytest.approx(2.0)
+
+
+def test_a_young_plan_survives_with_nothing_visible_behind_it(store):
+    from core.meta import now_iso
+    fake = FakeHL(mid=100.0)
+    store.put("HYPE", TradeMeta(reason="level", planned_stop=90.0,
+                                opened_at=now_iso()))
+    protect.run_once(build_venue(fake), store)
+    assert store.get("HYPE") is not None
+
+
+def test_a_plan_with_an_unreadable_timestamp_counts_as_old(store):
+    fake = FakeHL(mid=100.0)
+    store.put("HYPE", TradeMeta(reason="level", planned_stop=90.0, opened_at="?"))
+    protect.run_once(build_venue(fake), store)
+    assert store.get("HYPE") is None

@@ -263,3 +263,20 @@ def test_a_bid_carries_its_own_age_so_no_state_is_needed():
     assert order.timestamp_ms > 0, "the venue stamps the order"
     future = int(_t.time() * 1000) + 13 * 3_600_000
     assert order.age_hours(now_ms=future) == pytest.approx(13.0, abs=0.1)
+
+
+def test_a_fill_the_first_read_misses_is_still_a_fill():
+    """ENA, 2026-11-05: filled, and read as unchanged 1.5s later."""
+    fake = FakeHL(mid=100.0)
+    v = build_venue(fake)
+    real = v.positions
+    hide = [1]
+
+    def lagging(urgent=False):
+        if fake.sent and hide:
+            hide.pop()
+            return {}
+        return real(urgent=urgent)
+    v.positions = lagging
+    out = execute.enter(v, "HYPE", usd=200.0)
+    assert out.filled and not hide

@@ -54,6 +54,7 @@ load_dotenv(pathlib.Path(__file__).resolve().parents[1] / ".env",
             override=False)
 
 import notify                                                    # noqa: E402
+from tools import liveness                                       # noqa: E402
 from research.levels.config import (                             # noqa: E402
     MAX_CONCURRENT, MAX_NEW_PER_DAY,
 )
@@ -527,10 +528,13 @@ def main() -> int:
     # in use by another project on this machine, which had been polling for
     # four days. The fix is a second bot from BotFather, not a retry.
     conflicts = 0
+    watch = liveness.Watch()
 
     while True:
         updates, nxt, ok = notify.get_updates(offset)
-        if ok:
+        # Only a real 409 counts. Every sleep or network drop used to read as
+        # a shared token, and sent the operator after the wrong fix.
+        if ok or not notify.poll_conflicted():
             conflicts = 0
         else:
             conflicts += 1
@@ -586,6 +590,11 @@ def main() -> int:
             write_json(OFFSET, {"offset": offset})
         if args.once:
             return 0
+        try:
+            watch.tick()
+        except Exception as e:                                 # noqa: BLE001
+            # A broken watchdog must not take the command channel with it.
+            print(f"[LIVENESS] tick raised: {type(e).__name__}: {str(e)[:120]}")
         time.sleep(1 if ok else fail_backoff)
 
 

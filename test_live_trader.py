@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional
 
 import tools.live_levels_trader as T
 import inspect
+import csv
 import json
 import tempfile
 import time
@@ -314,12 +315,14 @@ class ArmedPathTest(unittest.TestCase):
         self.assertNotIn('state["owned"]', code)
         self.assertNotIn('state["pending"]', code)
 
-    def test_rejected_entry_drops_the_plan(self):
+    def test_rejected_entry_leaves_the_plan_for_the_protection_loop(self):
+        """A "no fill" can be a read lagging a real fill. The plan must still
+        be there if the position shows up; protect forgets it after its grace
+        period if it never does."""
         self.fake.order_fills = False
         out = self.fire()
         self.assertFalse(out)
-        self.assertIsNone(self.meta.get("HYPE"),
-                          "a plan with no position behind it must not linger")
+        self.assertIsNotNone(self.meta.get("HYPE"))
         self.assertEqual(self.stops("HYPE"), [])
 
     def test_an_unknown_result_keeps_the_plan_for_the_protection_loop(self):
@@ -1102,6 +1105,18 @@ class AClosedTradeAnnouncesItself(unittest.TestCase):
             body = " ".join(str(a) for a in send.call_args[0])
             self.assertIn(want, body, f"pnl {pnl} rendered as: {body}")
 
+    def test_a_close_is_recorded_in_the_trade_log(self):
+        """The log stopped recording closes after 2026-10-17. "closed" is the
+        action retention keeps forever."""
+        from core import streak
+        T._announce_close(streak.Trade(coin="HYPE", opened_ms=0, closed_ms=5,
+                                       pnl=-1.5, fills=2))
+        with open(T.TRADE_LOG) as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual([(r["action"], r["coin"], r["result"]) for r in rows],
+                         [("closed", "HYPE", "lost")])
+        self.assertIn("net -1.5000", rows[0]["detail"])
+
     def test_an_unreadable_venue_does_not_move_the_mark(self):
         """A 429 must not skip the next close's alert."""
         self.state["announced_close_ms"] = self.ago(6.0)
@@ -1250,10 +1265,10 @@ class UnreadableBooksAreNotEmpty(unittest.TestCase):
         self.assertIsNotNone(self.meta.get("HYPE"))
         self.assertTrue(any("Bid resting on HYPE" in s for s in self.sent))
 
-    def test_only_a_readable_empty_book_drops_the_plan(self):
+    def test_a_bid_that_never_appears_leaves_the_plan_for_the_protection_loop(self):
         with mock.patch.object(self.fake, "rest_plain_order", lambda *a, **k: None):
             self.assertEqual(self.bid(), 1)
-        self.assertIsNone(self.meta.get("HYPE"))
+        self.assertIsNotNone(self.meta.get("HYPE"))
 
     def test_an_unreadable_book_is_not_an_empty_one(self):
         with mock.patch.object(type(self.venue), "open_orders", return_value=None):

@@ -1296,9 +1296,13 @@ def _announce_close(t: "streak.Trade") -> None:
     one that names none.
     """
     try:
+        word = "won" if not t.lost else ("lost" if t.pnl < 0 else "scratched")
+        log_trade({"ts_utc": now_iso(), "action": "closed", "coin": t.coin,
+                   "result": word,
+                   "detail": f"net {t.pnl:+.4f}, {t.fills} fill(s), "
+                             f"closed_ms {t.closed_ms}"})
         held_h = max(0.0, (t.closed_ms - t.opened_ms) / 3_600_000)
         head = "🎯" if not t.lost else "🔴"
-        word = "won" if not t.lost else ("lost" if t.pnl < 0 else "scratched")
         notify.send(
             f"{head} *{t.coin} closed* -- {word} *${t.pnl:+,.2f}* net of fees\n"
             f"held {held_h:.1f}h, {t.fills} fill(s)",
@@ -1413,7 +1417,8 @@ def place_resting_bid(venue, meta, ep: Dict[str, Any], equity: float,
     if unknown:
         return BID_UNKNOWN
     if order is None:
-        meta.drop(coin)
+        # The plan stays: this read can lag the order too. The protection loop
+        # forgets it after its grace period if nothing ever appears.
         print(f"[LEVELS_LIVE] {coin}: no bid rested")
         return 1
     log_trade({"ts_utc": now_iso(), "action": "entry", "coin": coin,
@@ -1591,7 +1596,9 @@ def execute_one(venue, meta, ep: Dict[str, Any], equity: float,
         return Outcome(order_sent=True)
 
     if not out.filled:
-        meta.drop(coin)
+        # The plan stays, for the protection loop to forget after its grace
+        # period. A "no fill" can be a read that lags the fill: ENA on
+        # 2026-11-05 lost its plan this way and was adopted at the 3% default.
         row.update({"action": "entry", "result": "rejected",
                     "detail": out.note[:400]})
         log_trade(row)

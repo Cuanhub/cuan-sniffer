@@ -8,6 +8,7 @@ client (not importing the funding or cascade clients) so this package
 carries zero risk to the two collectors already running in production.
 """
 
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -18,7 +19,11 @@ REQUEST_TIMEOUT_SEC = 15
 MAX_RETRIES = 5
 BASE_BACKOFF_SEC = 1.0
 MAX_BACKOFF_SEC = 30.0
-MIN_REQUEST_GAP_SEC = 0.15
+# A 4h or 1h candle read weighs about 30 of the venue's 1200 a minute, shared by
+# everything on this IP. At 0.15s the scanner logged 330-650 fetch failures a
+# day and blinded the protection loop. 3.5s keeps one pass near 500 a minute, so
+# the scanner and trader stay under the limit even when they overlap.
+MIN_REQUEST_GAP_SEC = float(os.getenv("LEVELS_MIN_REQUEST_GAP_SEC", "3.5"))
 
 
 class VenueFetchError(Exception):

@@ -42,6 +42,7 @@ WATCHED = (
     "research.levels.storage",
     # Both found by test_the_watched_list_is_whole on its first run rather
     # than by anything going wrong -- retention rotates live_trades.csv.
+    "tools.liveness",
     "tools.retention",
     "tools.screen_context",
 )
