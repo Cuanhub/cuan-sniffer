@@ -71,3 +71,11 @@ research/backtest/cache/
 
 # Kronos weights, fetched by research/kronos/setup.sh (pinned, hash-checked)
 research/kronos/hf/
+
+# Live trader runtime state, rewritten every pass: never tracked
+research/levels/data/_control_offset.json
+research/levels/data/_control_queue.json
+research/levels/data/_equity.json
+research/levels/data/_halt.json
+research/levels/data/_standdown.json
+research/levels/data/_trade_meta.json
