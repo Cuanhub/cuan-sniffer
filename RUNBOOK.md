@@ -192,6 +192,23 @@ labels is the only thing that moves this system off guesses.
 
 ---
 
+## The trend book's paper run
+
+A second strategy on paper, beside the live one and unable to touch it:
+`research/trend/paper.py` holds ten majors in the direction of their own
+14/28/56-day trend (H-TREND, `research/backtest/results/trend_daily/`). It
+places no orders. Its 90-day criteria are in `research/trend/PREREG_forward.md`.
+
+```bash
+.venv/bin/python -m research.trend.paper --dry-run   # what it would do today; writes nothing
+.venv/bin/python -m research.trend.paper --status    # the run so far, against its criteria
+```
+
+Start it by loading `deploy/launchd/com.cuansniffer.trendpaper.plist` (the
+header says how). The first real pass starts the 90-day clock. One Telegram
+line a day; `trendpaper.err.log` says "unreadable, nothing changed" when the
+venue could not be read, and the next hour retries.
+
 ## Tests
 
 ```sh

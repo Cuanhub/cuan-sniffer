@@ -100,8 +100,9 @@ grounding. Remove an item when it is registered (note the experiment id).
     controls (Holm p 0.002), both halves positive, net Sharpe 1.17 (CI 0.40
     to 1.90), survives a day's delay and 20 bps costs; 2022-2026 is weaker
     (Sharpe 0.5 to 1.0) and the test is on Binance spot bars. What remains
-    is a build and a forward run on Hyperliquid perps with its own
-    pre-registered kill criteria. The user's call.
+    is the forward run: research/trend/paper.py is built (paper only,
+    import-isolated, criteria in research/trend/PREREG_forward.md) and
+    starts when the operator loads com.cuansniffer.trendpaper.plist.
 
 Do NOT queue without new reasoning: killzone timing, HTF bias, per-coin
 selection, lowering the reward:risk floor -- see graveyard.md. Also, from the

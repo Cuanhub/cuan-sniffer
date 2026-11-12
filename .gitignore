@@ -81,3 +81,6 @@ research/levels/data/_equity.json
 research/levels/data/_halt.json
 research/levels/data/_standdown.json
 research/levels/data/_trade_meta.json
+
+# The trend book's paper ledger and state -- machine-local runtime
+research/trend/data/
