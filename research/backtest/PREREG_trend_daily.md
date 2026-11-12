@@ -120,3 +120,19 @@ and trades a year; a year-by-year table; long and short legs apart; each
 coin; lookbacks 7 and 112 as neighbours; shorts credited the funding longs
 pay; and the capital check -- what the measured return is in dollars a year
 on this account's equity.
+
+## Amendment 1 (2026-11-12, before the null calibration and before any real result)
+
+The registration rotates "the whole trend matrix, all coins together, by one
+random offset". Written as code that cannot be done literally: SOL, DOT and
+AVAX become eligible about a year into T_all, so a whole-matrix rotation
+would move their signals onto days they did not trade and leave them flat on
+days they did -- the controls would hold those coins less than the real book
+does and earn less of their drift, biasing the excess upward.
+
+So each coin's trend is rotated by the SAME offset inside its OWN eligible
+stretch of the window (wrapping there). The seven coins eligible from the
+first day stay exactly aligned with one another; the three later ones stay
+aligned to within their listing dates. Every control then holds each coin on
+exactly the days the real book does, with the same long/short mix. Nothing
+else changes. The null calibration below is run on this design.
