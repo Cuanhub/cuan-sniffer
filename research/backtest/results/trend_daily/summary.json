@@ -1,0 +1,488 @@
+{
+  "source": "github.com/finom/static-klines @ 2a160c07c975d4e569bd5a264a9351073e6778db (Binance spot 1d klines)",
+  "archive": {
+    "source": "github.com/finom/static-klines @ 2a160c07c975d4e569bd5a264a9351073e6778db (Binance spot 1d klines)",
+    "coins": {
+      "BTC": {
+        "days": 3374,
+        "first": "2017-08-17",
+        "last": "2026-11-11",
+        "sha256": "a48207bc71a7043f3184c92acd3765ddf399b229125b245275a4fe9c48198439"
+      },
+      "ETH": {
+        "days": 3374,
+        "first": "2017-08-17",
+        "last": "2026-11-11",
+        "sha256": "58cb0daff27faf60caa586af6575c61c41494cc2b656af78d0f0abf741cfc9d6"
+      },
+      "BNB": {
+        "days": 3293,
+        "first": "2017-11-06",
+        "last": "2026-11-11",
+        "sha256": "6f0ef93fc9607c603e3d14f9c614312a1d87c63a27f99ee1252a13cd1130f662"
+      },
+      "SOL": {
+        "days": 2284,
+        "first": "2020-08-11",
+        "last": "2026-11-11",
+        "sha256": "9b40e4eb52631b7dcb235190f7f428005780f065941c4ebe1fd42680f83dac6c"
+      },
+      "XRP": {
+        "days": 3114,
+        "first": "2018-05-04",
+        "last": "2026-11-11",
+        "sha256": "ff675f8e0225b3a7afd7a1ed17ed676d74884a7a9fd64849450f880ae87e3ebf"
+      },
+      "ADA": {
+        "days": 3131,
+        "first": "2018-04-17",
+        "last": "2026-11-11",
+        "sha256": "a117ae1fc3d8ed925cc83209bcaf6e50dbec06b7b9ec7d6c1b04297dd21e4258"
+      },
+      "DOGE": {
+        "days": 2687,
+        "first": "2019-07-05",
+        "last": "2026-11-11",
+        "sha256": "30d1b0b660677884b09ed05362015423ff4042335636dc8c6473b9fd73bccc08"
+      },
+      "AVAX": {
+        "days": 2242,
+        "first": "2020-09-22",
+        "last": "2026-11-11",
+        "sha256": "0242c3b192bc6beac290a97454cf0e9d9619ae36981d58a1cf339529864925ac"
+      },
+      "LINK": {
+        "days": 2857,
+        "first": "2019-01-16",
+        "last": "2026-11-11",
+        "sha256": "8bdbc1fe9a9dce46106e948f6aeb8083c1cee639478c9504d390b81ae387e768"
+      },
+      "DOT": {
+        "days": 2277,
+        "first": "2020-08-18",
+        "last": "2026-11-11",
+        "sha256": "1f101005d14c5859ad1bdef036c305b7026bb5613c92f63208c56724cfdc637d"
+      }
+    }
+  },
+  "seed": 20261112,
+  "results": {
+    "T_all": {
+      "coins": [
+        "BTC",
+        "ETH",
+        "BNB",
+        "SOL",
+        "XRP",
+        "ADA",
+        "DOGE",
+        "AVAX",
+        "LINK",
+        "DOT"
+      ],
+      "first_pnl_day": "2020-01-01",
+      "last_pnl_day": "2026-11-11",
+      "split_day": "2023-06-07",
+      "test": {
+        "days": 2507,
+        "real_bps_day": 10.475513509438024,
+        "control_bps_day": -2.1272933498435025,
+        "control_sd_bps_day": 3.693356800221341,
+        "excess_bps_day": 12.602806859281525,
+        "z": 3.412290645335497,
+        "p": 0.0009995002498750624,
+        "controls": 2000
+      },
+      "halves": [
+        {
+          "days": 1253,
+          "real_bps_day": 11.741668813356172,
+          "control_bps_day": -1.521633935397659,
+          "control_sd_bps_day": 6.198922587703546,
+          "excess_bps_day": 13.263302748753832,
+          "z": 2.1396141928056176,
+          "p": 0.04397801099450275,
+          "controls": 2000
+        },
+        {
+          "days": 1254,
+          "real_bps_day": 9.176150062273782,
+          "control_bps_day": -2.9824966153915127,
+          "control_sd_bps_day": 6.444682934705279,
+          "excess_bps_day": 12.158646677665297,
+          "z": 1.8866167351988314,
+          "p": 0.10294852573713144,
+          "controls": 2000
+        }
+      ],
+      "net": {
+        "ann_return_pct": 38.23562430944879,
+        "ann_vol_pct": 32.820197477226344,
+        "sharpe": 1.165002871660969,
+        "max_drawdown_pct": -35.4826976218962,
+        "total_return_pct": 856.1025182774923,
+        "ci_lo": 0.40442440927497303,
+        "ci_hi": 1.8953327145978256
+      },
+      "gross": {
+        "ann_return_pct": 45.45685274075463,
+        "ann_vol_pct": 32.83040677725398,
+        "sharpe": 1.3845960864624034,
+        "max_drawdown_pct": -31.13217206937312,
+        "total_return_pct": 1469.0030376552745
+      },
+      "halves_net": [
+        {
+          "ann_return_pct": 42.85709116875004,
+          "ann_vol_pct": 32.467251605645785,
+          "sharpe": 1.320009826803373,
+          "max_drawdown_pct": -35.4826976218962,
+          "total_return_pct": 263.85455685815185
+        },
+        {
+          "ann_return_pct": 33.617842830418105,
+          "ann_vol_pct": 33.18030430395792,
+          "sharpe": 1.0131866942042478,
+          "max_drawdown_pct": -34.38166663217703,
+          "total_return_pct": 162.77052197266474
+        }
+      ],
+      "by_year": {
+        "2020": {
+          "net_pct": 105.47429447215539,
+          "sharpe": 2.1391092711025745,
+          "max_drawdown_pct": -13.017218521795371
+        },
+        "2021": {
+          "net_pct": 109.0144649751109,
+          "sharpe": 2.7549752353619845,
+          "max_drawdown_pct": -12.139819734359103
+        },
+        "2022": {
+          "net_pct": 11.076752969840298,
+          "sharpe": 0.47881418024640376,
+          "max_drawdown_pct": -21.241110488319126
+        },
+        "2023": {
+          "net_pct": 31.74753137762536,
+          "sharpe": 1.0255841383626707,
+          "max_drawdown_pct": -27.553868406038838
+        },
+        "2024": {
+          "net_pct": 30.707039020645244,
+          "sharpe": 1.0132862794897528,
+          "max_drawdown_pct": -34.38166663217703
+        },
+        "2025": {
+          "net_pct": -1.4067237457175086,
+          "sharpe": 0.12162223658420372,
+          "max_drawdown_pct": -24.917331835104395
+        },
+        "2026": {
+          "net_pct": 18.048013797815486,
+          "sharpe": 0.7155782993924038,
+          "max_drawdown_pct": -25.813344216307765
+        }
+      },
+      "activity": {
+        "turnover_x_per_year": 46.73979894755177,
+        "trades_per_year": 836.2824092540886,
+        "cost_pct_per_year": 4.356149261911825,
+        "funding_pct_per_year": 2.865079169394014
+      },
+      "legs_pct_per_year": {
+        "long": 44.35920046585549,
+        "short": 1.097652274899136
+      },
+      "coin_pct_per_year": {
+        "BTC": 7.517932854066123,
+        "ETH": 6.019691009161367,
+        "BNB": 4.784074368860904,
+        "SOL": 4.99926046882255,
+        "XRP": 3.643343535638436,
+        "ADA": 5.29687450016469,
+        "DOGE": 6.048853023680827,
+        "AVAX": 3.5034655176800107,
+        "LINK": 1.7267936649397093,
+        "DOT": 1.916563797739976
+      },
+      "each_lookback": {
+        "14": {
+          "net_bps_day": 11.947055806277147,
+          "sharpe": 1.1189138084258783,
+          "ann_return_pct": 43.60675369291158
+        },
+        "28": {
+          "net_bps_day": 11.502495546133344,
+          "sharpe": 1.0910208802884338,
+          "ann_return_pct": 41.98410874338671
+        },
+        "56": {
+          "net_bps_day": 6.780561535188196,
+          "sharpe": 0.6580001581388317,
+          "ann_return_pct": 24.749049603436912
+        }
+      },
+      "neighbours": {
+        "7": {
+          "net_bps_day": 6.31829383504534,
+          "sharpe": 0.5960196113407011,
+          "ann_return_pct": 23.06177249791549
+        },
+        "112": {
+          "net_bps_day": 5.501967023154717,
+          "sharpe": 0.5419266000331077,
+          "ann_return_pct": 20.08217963451472
+        }
+      },
+      "sensitivity": {
+        "one_day_delay": {
+          "net_bps_day": 10.224605343221393,
+          "sharpe": 1.1435387552833352,
+          "ann_return_pct": 37.31980950275808
+        },
+        "cost_20bps": {
+          "net_bps_day": 9.107894186808288,
+          "sharpe": 1.0127949422580214,
+          "ann_return_pct": 33.24381378185025
+        },
+        "fee_only_4.32bps": {
+          "net_bps_day": 11.115784727897635,
+          "sharpe": 1.2362397526230307,
+          "ann_return_pct": 40.57261425682637
+        },
+        "shorts_credited_funding": {
+          "net_bps_day": 11.245600087002714,
+          "sharpe": 1.2508877799764826,
+          "ann_return_pct": 41.0464403175599
+        },
+        "no_funding": {
+          "net_bps_day": 11.260466706532274,
+          "sharpe": 1.251869386227386,
+          "ann_return_pct": 41.100703478842796
+        }
+      },
+      "capital": {
+        "equity_usd": 716.0,
+        "usd_per_year": 273.76707005565333
+      }
+    },
+    "T_majors": {
+      "coins": [
+        "BTC",
+        "ETH"
+      ],
+      "first_pnl_day": "2018-01-01",
+      "last_pnl_day": "2026-11-11",
+      "split_day": "2022-06-07",
+      "test": {
+        "days": 3237,
+        "real_bps_day": 13.03837387660772,
+        "control_bps_day": -2.1073128969634367,
+        "control_sd_bps_day": 4.057754679521012,
+        "excess_bps_day": 15.145686773571157,
+        "z": 3.7325289402066546,
+        "p": 0.0009995002498750624,
+        "controls": 2000
+      },
+      "halves": [
+        {
+          "days": 1618,
+          "real_bps_day": 16.46502374700368,
+          "control_bps_day": -2.654772386609041,
+          "control_sd_bps_day": 4.959631625108145,
+          "excess_bps_day": 19.11979613361272,
+          "z": 3.8550839213176067,
+          "p": 0.0009995002498750624,
+          "controls": 2000
+        },
+        {
+          "days": 1619,
+          "real_bps_day": 9.529100240952163,
+          "control_bps_day": -3.129966574127148,
+          "control_sd_bps_day": 5.190455362092494,
+          "excess_bps_day": 12.65906681507931,
+          "z": 2.438912567774381,
+          "p": 0.02798600699650175,
+          "controls": 2000
+        }
+      ],
+      "net": {
+        "ann_return_pct": 47.59006464961817,
+        "ann_vol_pct": 41.74378484730275,
+        "sharpe": 1.140051502845295,
+        "max_drawdown_pct": -47.92516102593797,
+        "total_return_pct": 3076.6594805226755,
+        "ci_lo": 0.4568304908358592,
+        "ci_hi": 1.7951204920060146
+      },
+      "gross": {
+        "ann_return_pct": 56.32815788714327,
+        "ann_vol_pct": 41.757715541924156,
+        "sharpe": 1.3489281479153377,
+        "max_drawdown_pct": -44.791288472975936,
+        "total_return_pct": 6786.40853280786
+      },
+      "halves_net": [
+        {
+          "ann_return_pct": 60.09733667656343,
+          "ann_vol_pct": 42.48982869816315,
+          "sharpe": 1.4143934799897522,
+          "max_drawdown_pct": -39.7110707752404,
+          "total_return_pct": 869.0586418532196
+        },
+        {
+          "ann_return_pct": 35.090517929669176,
+          "ann_vol_pct": 40.98732146532168,
+          "sharpe": 0.8561310345531693,
+          "max_drawdown_pct": -47.92516102593791,
+          "total_return_pct": 227.80879745808343
+        }
+      ],
+      "by_year": {
+        "2018": {
+          "net_pct": 4.207542584994095,
+          "sharpe": 0.2964701581684545,
+          "max_drawdown_pct": -39.7110707752404
+        },
+        "2019": {
+          "net_pct": 63.504616101515985,
+          "sharpe": 1.2569066992064195,
+          "max_drawdown_pct": -33.33318483512232
+        },
+        "2020": {
+          "net_pct": 196.5723779063128,
+          "sharpe": 2.6213691153180716,
+          "max_drawdown_pct": -17.38933632666385
+        },
+        "2021": {
+          "net_pct": 85.8907495974308,
+          "sharpe": 1.8660782153730116,
+          "max_drawdown_pct": -13.428371907540305
+        },
+        "2022": {
+          "net_pct": 8.792684229533275,
+          "sharpe": 0.40938591826815957,
+          "max_drawdown_pct": -32.131712205649144
+        },
+        "2023": {
+          "net_pct": 50.66727935312252,
+          "sharpe": 1.1393114660822248,
+          "max_drawdown_pct": -34.31789999059508
+        },
+        "2024": {
+          "net_pct": 15.33276480475385,
+          "sharpe": 0.5525520182802096,
+          "max_drawdown_pct": -47.92516102593791
+        },
+        "2025": {
+          "net_pct": 9.758938436777175,
+          "sharpe": 0.4358957310105848,
+          "max_drawdown_pct": -23.42376100022756
+        },
+        "2026": {
+          "net_pct": 62.982799429525386,
+          "sharpe": 1.523517213262055,
+          "max_drawdown_pct": -23.52207703692102
+        }
+      },
+      "activity": {
+        "turnover_x_per_year": 53.65747189875047,
+        "trades_per_year": 167.2211924621563,
+        "cost_pct_per_year": 5.000876380963545,
+        "funding_pct_per_year": 3.737216856561551
+      },
+      "legs_pct_per_year": {
+        "long": 47.854375492848675,
+        "short": 8.473782394294597
+      },
+      "coin_pct_per_year": {
+        "BTC": 30.008533897964824,
+        "ETH": 26.31962398917842
+      },
+      "each_lookback": {
+        "14": {
+          "net_bps_day": 12.75998186491768,
+          "sharpe": 0.9237964696097458,
+          "ann_return_pct": 46.57393380694953
+        },
+        "28": {
+          "net_bps_day": 12.059840215602792,
+          "sharpe": 0.8952464209818678,
+          "ann_return_pct": 44.01841678695019
+        },
+        "56": {
+          "net_bps_day": 12.812625264004604,
+          "sharpe": 0.9582096455468323,
+          "ann_return_pct": 46.766082213616805
+        }
+      },
+      "neighbours": {
+        "7": {
+          "net_bps_day": 7.636340333693072,
+          "sharpe": 0.5659174005698548,
+          "ann_return_pct": 27.872642217979717
+        },
+        "112": {
+          "net_bps_day": 6.458777628621341,
+          "sharpe": 0.47602878172321494,
+          "ann_return_pct": 23.574538344467896
+        }
+      },
+      "sensitivity": {
+        "one_day_delay": {
+          "net_bps_day": 12.170359594543658,
+          "sharpe": 1.0608667852498965,
+          "ann_return_pct": 44.42181252008435
+        },
+        "cost_20bps": {
+          "net_bps_day": 11.468341548173049,
+          "sharpe": 1.0024364580831127,
+          "ann_return_pct": 41.85944665083163
+        },
+        "fee_only_4.32bps": {
+          "net_bps_day": 13.773407738234438,
+          "sharpe": 1.2044450894989847,
+          "ann_return_pct": 50.2729382445557
+        },
+        "shorts_credited_funding": {
+          "net_bps_day": 13.853545943686374,
+          "sharpe": 1.211469393993081,
+          "ann_return_pct": 50.565442694455264
+        },
+        "no_funding": {
+          "net_bps_day": 14.062268905802664,
+          "sharpe": 1.2289674652606304,
+          "ann_return_pct": 51.32728150617972
+        }
+      },
+      "capital": {
+        "equity_usd": 716.0,
+        "usd_per_year": 340.7448628912661
+      }
+    }
+  },
+  "verdict": {
+    "T_all": {
+      "p": 0.0009995002498750624,
+      "p_holm": 0.001999000499750125,
+      "edge": true
+    },
+    "T_majors": {
+      "p": 0.0009995002498750624,
+      "p_holm": 0.001999000499750125,
+      "edge": true
+    },
+    "forward_trial_checks": {
+      "edge_on_T_all": true,
+      "sharpe_at_least_0.7": true,
+      "sharpe_ci_above_0": true,
+      "both_halves_net_positive": true,
+      "each_lookback_net_positive": true,
+      "survives_one_day_delay": true,
+      "survives_20bps_costs": true
+    },
+    "worth_a_forward_trial": true
+  },
+  "seconds": 10.0
+}
