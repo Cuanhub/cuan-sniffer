@@ -89,6 +89,59 @@ def test_downtime_across_a_restart_is_reported(rig):
     assert len(sent) == 1 and "2.0h" in sent[0]
 
 
+def test_a_frozen_service_is_reported_although_the_mac_keeps_sleeping(rig):
+    """2026-11-08: the trader froze while the Mac, on battery, slept every few
+    minutes. Each wake restarted the old count, so nothing was ever said."""
+    clock, sent, logs, w = rig
+    for _ in range(8):                  # 5 awake minutes, then 30 asleep
+        for _ in range(5):
+            clock.t += 60
+            touch(logs, clock, "protect", "scanner")
+            w.tick()
+        clock.t += 30 * 60
+    quiet = [s for s in sent if "trader has gone quiet" in s]
+    assert quiet, sent
+    assert "with the Mac awake" in quiet[0]
+    assert not any("protect has gone quiet" in s for s in sent)
+
+
+def test_quiet_time_survives_a_restart_of_this_loop(rig):
+    clock, sent, logs, w = rig
+    for _ in range(11):                 # ten counted minutes
+        clock.t += 60
+        touch(logs, clock, "protect", "scanner")
+        w.tick()
+    assert sent == []
+    again = liveness.Watch(now=clock, logs=logs, state=logs / "state.json")
+    for _ in range(10):
+        clock.t += 60
+        touch(logs, clock, "protect", "scanner")
+        again.tick()
+    assert any("trader has gone quiet" in s for s in sent)
+
+
+def test_gaps_that_cannot_be_sent_are_added_up_not_replaced(rig):
+    clock, sent, logs, w = rig
+    w.tick()
+    with mock.patch.object(liveness.notify, "send", lambda text, **k: False):
+        clock.t += 3600
+        w.tick()
+        clock.t += 60
+        w.tick()
+        clock.t += 1800
+        w.tick()
+    clock.t += 60
+    touch(logs, clock)
+    w.tick()
+    assert len(sent) == 1, sent
+    assert "2 times, 1.5h in all" in sent[0]
+
+
+def test_long_silences_read_in_days():
+    assert liveness._human(4.9 * 86400) == "4.9 days"
+    assert liveness._human(7200) == "2.0h"
+
+
 def test_a_first_ever_run_reports_no_gap(rig):
     _, sent, _, w = rig
     w.tick()

@@ -50,6 +50,12 @@ FLAT_EPSILON = 1e-9
 # crash loop, and every restart is another request. `urgent` callers skip it --
 # the kill switch must never be throttled by the thing it is trying to escape.
 RATE_LIMIT_SLEEP_SEC = float(os.getenv("VENUE_RATE_LIMIT_SLEEP_SEC", "2.0"))
+# Every request gives up after this long. The SDK's default is to wait forever,
+# and a connection that dies while the Mac sleeps never answers: the trader sat
+# in one SSL read from 2026-11-08 01:24 UTC for five days, trading nothing and
+# logging nothing. A timeout lands in the same handling as any network error --
+# unreadable for a read, unknown for a send, which callers confirm by reading.
+TIMEOUT_SEC = float(os.getenv("VENUE_TIMEOUT_SEC", "15"))
 _EMPTY_SPOT_META: Dict[str, Any] = {"tokens": [], "universe": []}
 
 
@@ -167,10 +173,12 @@ class Venue:
         self.address = (HL_VAULT_ADDRESS or HL_ACCOUNT_ADDRESS).lower()
         base = constants.TESTNET_API_URL if HL_TESTNET else constants.MAINNET_API_URL
         wallet = Account.from_key(HL_SECRET_KEY)
-        self.info = Info(base, skip_ws=True, spot_meta=_EMPTY_SPOT_META)
+        self.info = Info(base, skip_ws=True, spot_meta=_EMPTY_SPOT_META,
+                         timeout=TIMEOUT_SEC)
         self.exchange = Exchange(
             wallet, base, account_address=HL_ACCOUNT_ADDRESS,
-            vault_address=HL_VAULT_ADDRESS, spot_meta=_EMPTY_SPOT_META)
+            vault_address=HL_VAULT_ADDRESS, spot_meta=_EMPTY_SPOT_META,
+            timeout=TIMEOUT_SEC)
         self._sz_decimals: Dict[str, int] = {}
         self._max_leverage: Dict[str, int] = {}
         self._cloid_seq = 0

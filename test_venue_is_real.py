@@ -67,6 +67,33 @@ class TheNetworkIsStated(unittest.TestCase):
         self.assertEqual(lines, ["HL_TESTNET=false"])
 
 
+class EveryRequestTimesOut(unittest.TestCase):
+    """The SDK waits forever unless told otherwise. A connection that died in a
+    sleep held the trader in one SSL read from 2026-11-08 for five days."""
+
+    def test_both_sdk_clients_are_given_the_timeout(self):
+        seen = {}
+
+        def info(*a, **k):
+            seen["info"] = k.get("timeout")
+            client = mock.Mock()
+            client.meta.return_value = {"universe": []}
+            return client
+
+        def exchange(*a, **k):
+            seen["exchange"] = k.get("timeout")
+            return mock.Mock()
+
+        with mock.patch.object(V, "HL_ACCOUNT_ADDRESS", "0x" + "11" * 20), \
+             mock.patch.object(V, "HL_SECRET_KEY", "0x" + "22" * 32), \
+             mock.patch.object(V, "HL_TESTNET_RAW", "false"), \
+             mock.patch.object(V, "Info", side_effect=info), \
+             mock.patch.object(V, "Exchange", side_effect=exchange):
+            V.Venue()
+        self.assertEqual(seen, {"info": V.TIMEOUT_SEC, "exchange": V.TIMEOUT_SEC})
+        self.assertTrue(0 < V.TIMEOUT_SEC <= 60, V.TIMEOUT_SEC)
+
+
 class PrecisionIsReadNotInvented(unittest.TestCase):
     def test_a_coin_without_szdecimals_is_unknown_not_three(self):
         fake = FakeHL()
