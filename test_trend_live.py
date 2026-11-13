@@ -327,17 +327,24 @@ def test_armed_a_band_plan_keeps_a_coin_the_bands():
     assert not books.trend_owns("ARB", None)
 
 
-def test_protect_leaves_the_trend_books_positions_to_it(tmp_path):
-    fake = FakeHL(positions={"BTC": 2.0, "ETH": 1.0, "ARB": 3.0}, mid=100.0)
+def test_protect_leaves_the_trend_books_positions_to_it(tmp_path, captured_alerts):
+    fake = FakeHL(positions={"BTC": 2.0, "SOL": -1.0, "ETH": 1.0, "ARB": 3.0}, mid=100.0)
+    fake.rest_protection("SOL", 1.0, stop_px=125.0)       # the trend pass's stop
     store = MetaStore(tmp_path / "meta.json")
     store.put("ETH", TradeMeta(reason="level", planned_stop=90.0,
                                opened_at="2026-10-17T00:00:00Z"))
-    res = {r.coin: r.action for r in protect.run_once(build_venue(fake), store)}
-    assert "BTC" not in res, "protect managed a trend position"
-    assert store.get("BTC") is None, "a trend position was adopted"
-    assert not [o for o in fake.resting if o["coin"] == "BTC"]
+    results = protect.run_once(build_venue(fake), store)
+    res = {r.coin: r.action for r in results}
+    assert res["SOL"] == "trend" and res["BTC"] == "trend_unstopped"
+    assert store.get("BTC") is None and store.get("SOL") is None, "a trend position was adopted"
+    assert not [o for o in fake.resting if o["coin"] == "BTC"], "protect stopped a trend position"
+    assert len([o for o in fake.resting if o["coin"] == "SOL"]) == 1
     assert res["ETH"] == "placed", "a band trade in a trend coin lost its stop"
     assert res["ARB"] == "placed"
+    assert any("BTC: the trend book's position has no stop" in str(p) for p in captured_alerts)
+    assert not any("SOL" in str(p) for p in captured_alerts)
+    protected = {r.coin: r.protected for r in results}
+    assert protected["SOL"] and not protected["BTC"]
 
 
 def test_unarmed_protect_adopts_as_before(tmp_path, monkeypatch):

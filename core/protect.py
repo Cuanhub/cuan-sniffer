@@ -59,12 +59,16 @@ BID_TTL_HOURS = float(os.getenv("PROTECT_BID_TTL_HOURS", "12"))
 @dataclass
 class Result:
     coin: str
-    action: str          # "ok" | "placed" | "replaced" | "flattened" | "unknown"
+    # "ok" | "placed" | "replaced" | "flattened" | "unknown", or for the trend
+    # book's positions "trend" / "trend_unstopped" (core/books.py)
+    action: str
     detail: str = ""
 
     @property
     def protected(self) -> bool:
-        return self.action in ("ok", "placed", "replaced")
+        # "trend" is not this loop's stop, but nothing here is owed: the trend
+        # pass keeps it. Counted, it would be logged as a failure every pass.
+        return self.action in ("ok", "placed", "replaced", "trend")
 
 
 def desired_stop(venue: Venue, pos: Position, meta: Optional[TradeMeta]
@@ -351,7 +355,22 @@ def run_once(venue: Venue, meta: Optional[MetaStore] = None) -> List[Result]:
             # The trend book's (core/books.py). Its strategy has no stop of
             # this kind, and its disaster stop is kept by the trend pass.
             # Adopting it here would give it a 3% stop and close it on an
-            # ordinary day.
+            # ordinary day. It is still reported, so this log keeps moving
+            # while only trend positions are open, and a missing disaster
+            # stop is said out loud rather than left to the next trend pass.
+            stopped = any(o.coin == coin and o.is_protective and o.is_stop
+                          for o in (resting or []))
+            if stopped or not readable:
+                results.append(Result(coin, "trend", "the trend book's own stop"))
+            else:
+                results.append(Result(coin, "trend_unstopped",
+                                      "no disaster stop resting"))
+                notify.send(
+                    f"⚠️ *{coin}: the trend book's position has no stop*\n"
+                    f"The venue holds {pos.size:g} with no disaster stop "
+                    f"resting. The trend pass restores it on its next hourly "
+                    f"run (com.cuansniffer.trendlive).",
+                    key=f"trend_unstopped_{coin}", cooldown_sec=3600)
             continue
         if row is None:
             # A position with no plan: a timeout-after-fill orphan, or one
