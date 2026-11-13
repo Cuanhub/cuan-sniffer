@@ -52,7 +52,7 @@ SEED = 20261112
 BOOT_B = 10_000
 BOOT_BLOCK = 28
 EQUITY_USD = 716.0                # results/carry, 2026-11-05
-HYPOTHESES = {
+HYPOTHESES: Dict[str, Dict[str, Any]] = {
     "T_all": {"coins": COINS, "start": "2020-01-01", "end": "2026-11-11"},
     "T_majors": {"coins": MAJORS, "start": "2018-01-01", "end": "2026-11-11"},
 }
@@ -80,8 +80,8 @@ def build_archive(src: Path, dst: Path = ARCHIVE) -> Dict[str, Any]:
         series = [[t, rows[t]] for t in sorted(rows)]
         body = json.dumps(series, separators=(",", ":"))
         (dst / f"{coin}.json").write_text(body)
-        manifest["coins"][coin] = {"days": len(series), "first": iso(series[0][0]),
-                                   "last": iso(series[-1][0]),
+        manifest["coins"][coin] = {"days": len(series), "first": iso(int(series[0][0])),
+                                   "last": iso(int(series[-1][0])),
                                    "sha256": hashlib.sha256(body.encode()).hexdigest()}
     (dst / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return manifest
@@ -150,7 +150,7 @@ def next_returns(close: np.ndarray) -> np.ndarray:
 
 # ------------------------------------------------------------------ book --
 def simulate(s: np.ndarray, v: np.ndarray, elig: np.ndarray, rnext: np.ndarray,
-             days: np.ndarray, offsets: Sequence[int] = (0,),
+             days: np.ndarray, offsets: Sequence[int] | np.ndarray = (0,),
              cost_bps: float = COST_BPS, fund_long_bps: float = FUND_LONG_BPS,
              fund_short_bps: float = FUND_SHORT_BPS, lag: int = 0,
              detail: bool = False) -> Dict[str, np.ndarray]:

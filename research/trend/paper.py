@@ -32,6 +32,7 @@ from research.backtest.experiments import trend_daily as T
 DATA_DIR = Path(__file__).resolve().parent / "data"
 STATE_NAME = "state.json"
 LEDGER_NAME = "ledger.jsonl"
+AVAIL_NAME = "availability.json"
 COINS: Tuple[str, ...] = T.COINS
 DAY_MS = T.DAY_MS
 HISTORY_DAYS = 200                      # fetched; the rule needs 120
@@ -43,6 +44,7 @@ G3_MAX_FUNDING_PCT_YEAR = 9.0
 G4_MIN_TRACKING_BPS_DAY = -5.0
 S1_MAX_DRAWDOWN_PCT = 30.0
 S2_MAX_GAP_DAYS = 10
+S3_MISSING_DAYS = 3
 
 
 class Unreadable(Exception):
@@ -226,6 +228,72 @@ def fetch_funding(client: Any, coin: str, since_ms: int, until_ms: int) -> float
         start = max(int(r["time"]) for r in rows) + 1
 
 
+def _write_json(path: Path, obj: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=1))
+    os.replace(tmp, path)
+
+
+def _read_avail(data_dir: Path) -> Dict[str, Any]:
+    p = data_dir / AVAIL_NAME
+    raw = json.loads(p.read_text()) if p.exists() else {}
+    return raw if isinstance(raw, dict) else {}
+
+
+# ------------------------------------------------- S3: a coin goes missing --
+def missing_bars(bars_by: Dict[str, List[Dict[str, Any]]], today_ms: int,
+                 coins: Sequence[str] = COINS) -> List[str]:
+    """Coins whose closed bar for yesterday the venue did not serve. Only an
+    answer counts: a request that failed raised before this is reached, and a
+    failed request is our network, not the venue dropping a coin."""
+    last = today_ms - DAY_MS
+    return [c for c in coins
+            if not any(int(b["t"]) == last for b in bars_by.get(c) or [])]
+
+
+def read_missing(data_dir: Path = DATA_DIR) -> Dict[str, str]:
+    return dict(_read_avail(data_dir).get("missing_since") or {})
+
+
+def note_missing(missing: Sequence[str], today_ms: int,
+                 data_dir: Path = DATA_DIR) -> Dict[str, str]:
+    """Record the first UTC day each coin's bar was found missing, and clear a
+    coin that comes back. Kept apart from the book's state, which an
+    unreadable pass never touches."""
+    raw = _read_avail(data_dir)
+    old = dict(raw.get("missing_since") or {})
+    since = {c: old.get(c, T.iso(today_ms)) for c in missing}
+    if since != old:
+        raw["missing_since"] = since
+        _write_json(data_dir / AVAIL_NAME, raw)
+    return since
+
+
+def s3_fired(missing_since: Dict[str, str], today_ms: int) -> List[str]:
+    """Coins found missing on S3_MISSING_DAYS distinct UTC days, today included."""
+    return sorted(c for c, d in missing_since.items()
+                  if (today_ms - T.day_ms(d)) // DAY_MS >= S3_MISSING_DAYS - 1)
+
+
+def s3_due(today_ms: int, data_dir: Path = DATA_DIR) -> Optional[str]:
+    """The S3 alert, if it holds and has not been delivered today. Each hourly
+    run is a new process, so the once-a-day mark lives in the file."""
+    raw = _read_avail(data_dir)
+    coins = s3_fired(dict(raw.get("missing_since") or {}), today_ms)
+    if not coins or raw.get("s3_alerted") == T.iso(today_ms):
+        return None
+    return (f"TREND PAPER: stop rule S3 -- the venue has not served daily candles "
+            f"for {', '.join(coins)} for {S3_MISSING_DAYS} days. The run stops for "
+            f"review (research/trend/PREREG_forward.md).")
+
+
+def mark_s3_alerted(today_ms: int, data_dir: Path = DATA_DIR) -> None:
+    raw = _read_avail(data_dir)
+    raw["s3_alerted"] = T.iso(today_ms)
+    _write_json(data_dir / AVAIL_NAME, raw)
+
+
 def run_pass(client: Any, now_ms: int, data_dir: Path = DATA_DIR, dry_run: bool = False
              ) -> Optional[Dict[str, Any]]:
     """One pass against the venue. None when today is already done."""
@@ -234,7 +302,13 @@ def run_pass(client: Any, now_ms: int, data_dir: Path = DATA_DIR, dry_run: bool 
     if state["last_day"] is not None and T.day_ms(state["last_day"]) >= today:
         return None
     try:
-        _, close = closes_matrix(fetch_bars(client, now_ms), today)
+        bars = fetch_bars(client, now_ms)
+    except Exception as exc:                       # the client's own fetch errors
+        raise Unreadable(f"venue read failed: {exc}") from exc
+    if not dry_run:
+        note_missing(missing_bars(bars, today), today, data_dir)
+    try:
+        _, close = closes_matrix(bars, today)
         mids = client.get_all_mids()
         since = state["funding_through_ms"]
         funding = {c: fetch_funding(client, c, int(since), now_ms)
@@ -251,9 +325,11 @@ def run_pass(client: Any, now_ms: int, data_dir: Path = DATA_DIR, dry_run: bool 
 
 # --------------------------------------------------------------- status --
 def status(rows: List[Dict[str, Any]], today_ms: int,
-           model_net: Optional[np.ndarray] = None) -> Dict[str, Any]:
+           model_net: Optional[np.ndarray] = None,
+           missing_since: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """The run so far against PREREG_forward.md. `model_net` is replay()'s
-    net per ledger row, on the venue's daily closes."""
+    net per ledger row, on the venue's daily closes; `missing_since` is
+    read_missing()'s record, for S3."""
     if not rows:
         return {"started": False}
     first = T.day_ms(rows[0]["day"])
@@ -283,7 +359,9 @@ def status(rows: List[Dict[str, Any]], today_ms: int,
         "G2_drift": bool(drifts) and float(np.mean(drifts)) <= G2_MAX_DRIFT_BPS,
         "G3_funding": fund_year <= G3_MAX_FUNDING_PCT_YEAR,
         "G4_tracking": tracking is not None and tracking >= G4_MIN_TRACKING_BPS_DAY}
-    out["stop"] = {"S1_drawdown": dd <= -S1_MAX_DRAWDOWN_PCT, "S2_gap": gap >= S2_MAX_GAP_DAYS}
+    out["candles_missing_since"] = dict(missing_since or {})
+    out["stop"] = {"S1_drawdown": dd <= -S1_MAX_DRAWDOWN_PCT, "S2_gap": gap >= S2_MAX_GAP_DAYS,
+                   "S3_candles": bool(s3_fired(missing_since or {}, today_ms))}
     return out
 
 
@@ -331,12 +409,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 model = model_for(rows, client, now_ms)
             except Exception as exc:
                 print(f"model unreadable ({exc}); G4 not computed", file=sys.stderr)
-        print(json.dumps(status(rows, now_ms - now_ms % DAY_MS, model), indent=2))
+        print(json.dumps(status(rows, now_ms - now_ms % DAY_MS, model, read_missing()),
+                         indent=2))
         return 0
     try:
         row = run_pass(client, now_ms, dry_run=a.dry_run)
     except Unreadable as exc:
         print(f"TREND PAPER: unreadable, nothing changed -- {exc}", file=sys.stderr)
+        today = now_ms - now_ms % DAY_MS
+        msg = s3_due(today) if a.notify and not a.dry_run else None
+        if msg and _send(msg):
+            mark_s3_alerted(today)
         return 1
     if row is None:
         print("TREND PAPER: today's pass is already recorded")
@@ -344,14 +427,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     text = line(row) + (" [dry run]" if a.dry_run else "")
     print(text)
     if a.notify and not a.dry_run:
-        try:
-            from dotenv import load_dotenv
-            load_dotenv()
-        except ImportError:
-            pass
-        import notify
-        notify.send(text)
+        _send(text)
     return 0
+
+
+def _send(text: str) -> bool:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+    import notify
+    return notify.send(text)
 
 
 if __name__ == "__main__":

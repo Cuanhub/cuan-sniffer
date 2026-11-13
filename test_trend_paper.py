@@ -41,6 +41,8 @@ class FakeClient:
         rows = self.bars(j, end_ms)
         if self.broken == "hole" and coin == "SOL":
             rows = rows[:-40] + rows[-39:]
+        if self.broken == "stale" and coin == "SOL":
+            rows = rows[:-2]                      # yesterday's bar never arrives
         return rows
 
     def get_all_mids(self):
@@ -158,6 +160,43 @@ class ThePass(unittest.TestCase):
         self.assertNotEqual(row["pnl_price"], 0.0)
         # funding covers the whole gap: 3 days of hourly rates on the held book
         self.assertNotEqual(row["funding"], 0.0)
+
+    def test_a_coin_the_venue_stops_serving_trips_s3_on_the_third_day(self):
+        self.run_day(200)
+        self.client.broken = "stale"
+        for i in (201, 202, 203):
+            with self.assertRaises(P.Unreadable):
+                self.run_day(i)
+        since = P.read_missing(self.dir)
+        self.assertEqual(since, {"SOL": T.iso(T0 + 202 * DAY)})
+        rows = P.read_ledger(self.dir)
+        third = T0 + 204 * DAY
+        self.assertTrue(P.status(rows, third, missing_since=since)["stop"]["S3_candles"])
+        self.assertFalse(P.status(rows, third - DAY, missing_since=since)["stop"]["S3_candles"])
+        self.client.broken = ""
+        self.assertIsNotNone(self.run_day(204))
+        self.assertEqual(P.read_missing(self.dir), {}, "a coin that came back stays missing")
+
+    def test_a_failed_request_is_not_a_missing_candle(self):
+        self.client.broken = "candles"
+        with self.assertRaises(P.Unreadable):
+            self.run_day(200)
+        self.assertEqual(P.read_missing(self.dir), {})
+
+    def test_a_dry_run_records_no_missing_candle(self):
+        self.client.broken = "stale"
+        with self.assertRaises(P.Unreadable):
+            self.run_day(200, dry_run=True)
+        self.assertFalse((self.dir / P.AVAIL_NAME).exists())
+
+    def test_the_s3_alert_is_due_once_a_day_while_it_holds(self):
+        P.note_missing(["SOL"], T0, self.dir)
+        self.assertIsNone(P.s3_due(T0 + DAY, self.dir), "two days is not three")
+        third = T0 + 2 * DAY
+        self.assertIn("SOL", P.s3_due(third, self.dir) or "")
+        P.mark_s3_alerted(third, self.dir)
+        self.assertIsNone(P.s3_due(third, self.dir))
+        self.assertIsNotNone(P.s3_due(third + DAY, self.dir))
 
     def test_a_repeated_day_in_the_ledger_reads_as_its_last_row(self):
         self.run_day(200)
