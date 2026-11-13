@@ -175,6 +175,16 @@ idles rather than trading blind. Confirm with `--status`.
 **Disarm without stopping the scan.** Remove `LEVELS_LIVE_ARMED` from the
 plist, then unload and load. The process keeps scanning in dry mode.
 
+**Band strategy recording only (in force since 2026-11-13).** `.env` has
+`LEVELS_MAX_CONCURRENT=0`, and the trader has been restarted. It stays armed,
+because the account's daily loss and drawdown limits are enforced inside it
+and the trend book relies on them. It keeps recording bands every hour, beside
+the scanner, but opens nothing: the log reads "not opening this pass ... max
+0". Bids already resting still expire or fill under protect as usual. To let
+it trade again, delete the line and restart the trader. That decision belongs
+on the recorded band outcomes (`zone_episodes.csv`, `zone_outcomes.csv`), not
+on a few live trades.
+
 **Check what it thinks it holds.** `--status`. Compare against Hyperliquid
 directly; `venue_sanity` does this every pass and after every entry, but it
 is worth doing by hand after any incident.
