@@ -209,6 +209,30 @@ header says how). The first real pass starts the 90-day clock. One Telegram
 line a day; `trendpaper.err.log` says "unreadable, nothing changed" when the
 venue could not be read, and the next hour retries.
 
+## The trend book, live
+
+The same book with real orders, at a fixed capital: `tools/trend_live.py`,
+pre-registered in `research/trend/PREREG_live.md`. While it is armed its ten
+coins are its own (`core/books.py`): the band trader does not trade them, and
+protect leaves their stops to it. Each position carries a disaster stop 25%
+beyond its mark, reset daily.
+
+**Start**
+
+1. In `.env`: `TREND_LIVE_ARMED=true` and `TREND_CAPITAL_USD=<capital>`.
+2. Restart protect and the trader, so they leave the ten coins to it.
+3. Preview what today's pass would send (sends nothing):
+   `.venv/bin/python -m tools.trend_live --dry-run`
+4. Load `deploy/launchd/com.cuansniffer.trendlive.plist` (the header says how).
+
+**Check:** `.venv/bin/python -m tools.trend_live --status`, the daily Telegram
+line, and `~/Library/Logs/cuan-sniffer/trendlive.log`.
+
+**Stop:** unload the plist. Positions and their disaster stops stay. To close
+the book, `/close` each coin, and only then set `TREND_LIVE_ARMED=false` and
+restart protect and the trader: unarmed, protect would put its 3% stop on any
+position still open in those coins.
+
 ## Tests
 
 ```sh

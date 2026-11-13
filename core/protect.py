@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import notify
-from core import safety
+from core import books, safety
 from core.meta import MetaStore, TradeMeta, now_iso
 from core.venue import Order, Position, Venue
 
@@ -347,6 +347,12 @@ def run_once(venue: Venue, meta: Optional[MetaStore] = None) -> List[Result]:
     for coin in sorted(positions):
         pos = positions[coin]
         row = store.get(coin)
+        if books.trend_owns(coin, row):
+            # The trend book's (core/books.py). Its strategy has no stop of
+            # this kind, and its disaster stop is kept by the trend pass.
+            # Adopting it here would give it a 3% stop and close it on an
+            # ordinary day.
+            continue
         if row is None:
             # A position with no plan: a timeout-after-fill orphan, or one
             # whose metadata was lost to a restart. It gets a default stop

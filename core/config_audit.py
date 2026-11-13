@@ -26,7 +26,7 @@ REPO = Path(__file__).resolve().parents[1]
 # a file not listed here, test_config_audit fails on the missing key.
 SOURCES = ("notify.py", "core/*.py", "tools/live_levels_trader.py",
            "tools/protect_loop.py", "tools/telegram_control.py", "tools/retention.py",
-           "tools/liveness.py",
+           "tools/liveness.py", "tools/trend_live.py",
            "research/levels/*.py")
 _READ = re.compile(r"""(?:\bgetenv|\benviron\.get|\b_f|\b_i|\b_b)\(\s*["']([A-Z][A-Z0-9_]*)["']""")
 _SET = re.compile(r"^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=")

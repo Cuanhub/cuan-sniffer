@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs the trend book's LIVE pass once an hour. THIS PLACES REAL ORDERS.
+
+  It trades nothing unless .env has TREND_LIVE_ARMED=true and a
+  TREND_CAPITAL_USD, and research/trend/PREREG_live.md is committed. The pass
+  acts once per UTC day, on the first run after 00:00 UTC that can read
+  everything; every other run only checks that each position still has its
+  disaster stop. Hourly rather than at a clock time, because launchd schedules
+  in local time and a sleeping Mac skips calendar jobs.
+
+  NOT installed by the commit that added it. Arming is the operator's act:
+    1. set TREND_LIVE_ARMED=true and TREND_CAPITAL_USD in .env
+    2. restart protect and the trader, so they leave the ten coins to this book
+    3. preview:  .venv/bin/python -m tools.trend_live --dry-run
+    4. cp deploy/launchd/com.cuansniffer.trendlive.plist ~/Library/LaunchAgents/
+       launchctl load -w ~/Library/LaunchAgents/com.cuansniffer.trendlive.plist
+  Stop it (positions and stops stay as they are):
+    launchctl unload ~/Library/LaunchAgents/com.cuansniffer.trendlive.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuansniffer.trendlive</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/myair/CuanSniffer/.venv/bin/python</string>
+    <string>-u</string>
+    <string>-m</string>
+    <string>tools.trend_live</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/myair/CuanSniffer</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/trendlive.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/myair/Library/Logs/cuan-sniffer/trendlive.err.log</string>
+</dict>
+</plist>

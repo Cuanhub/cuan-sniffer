@@ -24,7 +24,7 @@ import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import AbstractSet, Any, Dict, List, Optional
 
 from core.venue import Venue
 
@@ -148,7 +148,8 @@ class StandDown:
 
 
 def current(venue: Venue, ignore_before_ms: int = 0,
-            now_ms: Optional[int] = None) -> Optional[StandDown]:
+            now_ms: Optional[int] = None,
+            exclude: AbstractSet[str] = frozenset()) -> Optional[StandDown]:
     """The stand-down in force, or None. Derived, never stored.
 
     It expires on its own: once COOLDOWN_HOURS have passed since the run's
@@ -160,6 +161,9 @@ def current(venue: Venue, ignore_before_ms: int = 0,
     `ignore_before_ms` is the operator's override: trades that closed at or
     before it are not counted, so clearing a stand-down cannot be undone by
     the same trades, while a fresh loss afterwards starts a new run.
+
+    `exclude` names coins another book trades on the same account
+    (core/books.py); their round trips are not this book's losses.
     """
     now = now_ms if now_ms is not None else int(time.time() * 1000)
     if TRIGGER <= 0:
@@ -172,7 +176,7 @@ def current(venue: Venue, ignore_before_ms: int = 0,
         # venue would stop the bot every time the API hiccupped.
         return None
     trades = [t for t in trades_from_fills(fills)
-              if t.closed_ms > ignore_before_ms]
+              if t.closed_ms > ignore_before_ms and t.coin not in exclude]
     run = losing_run(trades)
     if len(run) < TRIGGER:
         return None

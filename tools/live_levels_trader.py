@@ -53,7 +53,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 import notify                                                        # noqa: E402
-from core import config_audit, execute, protect, safety, streak       # noqa: E402
+from core import books, config_audit, execute, protect, safety, streak  # noqa: E402
 from core.meta import MetaStore, TradeMeta                            # noqa: E402
 from core.venue import Venue                                          # noqa: E402
 from research.levels import storage                                   # noqa: E402
@@ -695,6 +695,11 @@ def main():
                            "risk_usd": round(d["risk_usd"], 2),
                            "detail": ",".join(flags)})
                 continue
+            # The trend book's coin while it is armed (core/books.py). One
+            # net position per coin per account: a band entry here would net
+            # against the trend book's position, not sit beside it.
+            if d["coin"] in books.band_excludes():
+                continue
             # Re-read from the VENUE, not from a counter. This is the guard
             # the 2026-09-18 runaway defeated: it asked state["owned"], one
             # parsing bug left that empty, and a single pass opened twelve
@@ -852,7 +857,10 @@ def slots_in_use(venue) -> Optional[Tuple[Dict[str, Any], Set[str]]]:
     orders = venue.open_orders()
     if orders is None:
         return None
-    return positions, {o.coin for o in orders if o.is_entry}
+    # The trend book's coins are not this book's slots (core/books.py).
+    other = books.band_excludes()
+    return ({c: p for c, p in positions.items() if c not in other},
+            {o.coin for o in orders if o.is_entry and o.coin not in other})
 
 
 def preflight(venue, state: Dict[str, Any], halt: "safety.HaltState",
@@ -891,7 +899,11 @@ def preflight(venue, state: Dict[str, Any], halt: "safety.HaltState",
         # Not "no bids". See slots_in_use.
         safety.record_error("open_orders", "preflight could not read the book")
         return "open orders unreadable -- not opening blind"
-    bidding = {o.coin for o in orders if o.is_entry}
+    # The trend book's ten positions are not this book's slots; counted, they
+    # would hold MAX_CONCURRENT full for as long as it is armed.
+    other = books.band_excludes()
+    positions = {c: p for c, p in positions.items() if c not in other}
+    bidding = {o.coin for o in orders if o.is_entry and o.coin not in other}
     if len(positions) + len(bidding) >= MAX_CONCURRENT:
         return (f"holding {len(positions)} and bidding on {len(bidding)}, "
                 f"max {MAX_CONCURRENT}")
@@ -1267,7 +1279,9 @@ def announce_closes(venue, state: Dict[str, Any]) -> int:
     fills = venue.fills(since)
     if fills is None:
         return 0                       # unreadable: say nothing, keep the mark
-    trades = streak.trades_from_fills(fills)
+    # The trend book's round trips are its own to report (core/books.py).
+    other = books.band_excludes()
+    trades = [t for t in streak.trades_from_fills(fills) if t.coin not in other]
     if not trades:
         return 0
     mark = int(state.get("announced_close_ms") or 0)
@@ -1321,6 +1335,10 @@ def rest_one_bid(venue, meta, client, universe, coin: str, level: str,
     bid placed by hand and a bid placed by the loop are the same order with
     the same metadata and the same expiry.
     """
+    if coin.upper() in books.band_excludes():
+        print(f"[LEVELS_LIVE] {coin} belongs to the trend book while it is "
+              f"armed -- no band bid (core/books.py)")
+        return 1
     intents, _, _ = zone_pass.plans_by_coin(client, [{"symbol": coin}],
                                             min_rr=MIN_RR)
     want = f"{float(level):.10g}"

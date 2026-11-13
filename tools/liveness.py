@@ -32,6 +32,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import requests
 
 import notify
+from core import books
 from core.meta import DATA, read_json, write_json
 
 LOG_DIR = pathlib.Path(os.getenv("CUAN_LOG_DIR",
@@ -43,6 +44,15 @@ STATE = DATA / "_liveness.json"
 # minutes, the scanner when a pass completes, every 900s or longer if outcomes
 # are due.
 STALE_SEC: Dict[str, float] = {"protect": 300.0, "trader": 1200.0, "scanner": 2700.0}
+# The live trend pass runs hourly while armed and logs every run.
+TREND_STALE_SEC = 3 * 3600.0
+
+
+def services() -> Dict[str, float]:
+    out = dict(STALE_SEC)
+    if books.trend_armed():
+        out["trendlive"] = TREND_STALE_SEC
+    return out
 # A longer gap between ticks of this loop means nothing here was running. Its
 # worst normal gap is a long poll plus the failure backoff, about a minute.
 GAP_SEC = float(os.getenv("LIVENESS_GAP_SEC", "300"))
@@ -123,7 +133,7 @@ class Watch:
         """Each service's awake seconds since its log last moved."""
         quiet = {k: float(v) for k, v in (row.get("quiet") or {}).items()}
         seen = {k: float(v) for k, v in (row.get("seen") or {}).items()}
-        for name in STALE_SEC:
+        for name in services():
             m = self._mtime(name)
             if m is not None and m != seen.get(name):
                 quiet[name], seen[name] = 0.0, m
@@ -134,7 +144,7 @@ class Watch:
     def _stale(self, t: float, quiet: Dict[str, float],
                seen: Dict[str, float]) -> List[str]:
         out = []
-        for name, limit in STALE_SEC.items():
+        for name, limit in services().items():
             q = quiet.get(name, 0.0)
             if q < limit:
                 continue

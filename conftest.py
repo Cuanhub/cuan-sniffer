@@ -17,6 +17,11 @@ import os
 # lag; a fake answers at once, and the suite would take many minutes otherwise.
 os.environ.setdefault("PROTECT_CONFIRM_WAIT_SEC", "0")
 os.environ.setdefault("LEVELS_MIN_REQUEST_GAP_SEC", "0")
+# Forced, not defaulted: the trader loads the operator's .env at import, and an
+# armed trend book changes what the band trader and protect do with ten coins.
+# A test that needs it armed says so with monkeypatch.setenv.
+os.environ["TREND_LIVE_ARMED"] = "false"
+os.environ["TREND_CAPITAL_USD"] = ""
 
 import pytest
 

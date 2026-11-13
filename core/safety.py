@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import notify
-from core import execute, streak
+from core import books, execute, streak
 from core.meta import DATA, now_iso, read_json, write_json
 from core.venue import Venue
 
@@ -466,7 +466,8 @@ def standing_down(venue: Venue,
                   ) -> Optional[streak.StandDown]:
     """The loss-streak stand-down in force, or None. Blocks entries only."""
     ov = override or StandDownOverride()
-    sd = streak.current(venue, ignore_before_ms=ov.ignore_before_ms())
+    sd = streak.current(venue, ignore_before_ms=ov.ignore_before_ms(),
+                        exclude=books.band_excludes())
     if sd is not None:
         print(f"[SAFETY] standing down {sd.hours_left:.1f}h more -- {sd.reason}")
         notify.send(
