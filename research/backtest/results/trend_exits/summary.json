@@ -1,0 +1,813 @@
+{
+ "source": "github.com/finom/static-klines @ 2a160c07c975d4e569bd5a264a9351073e6778db (Binance spot 1d klines)",
+ "archive": {
+  "source": "github.com/finom/static-klines @ 2a160c07c975d4e569bd5a264a9351073e6778db (Binance spot 1d klines)",
+  "closes_verified_against": "results/trend_daily/summary.json",
+  "coins": {
+   "BTC": {
+    "days": 3374,
+    "first": "2017-08-17",
+    "last": "2026-11-11",
+    "close_sha256": "a48207bc71a7043f3184c92acd3765ddf399b229125b245275a4fe9c48198439",
+    "sha256": "1939fc1f30c8efe21726767dc5e798bc8369ba9eaae526fe2ec8a3565968e1fb"
+   },
+   "ETH": {
+    "days": 3374,
+    "first": "2017-08-17",
+    "last": "2026-11-11",
+    "close_sha256": "58cb0daff27faf60caa586af6575c61c41494cc2b656af78d0f0abf741cfc9d6",
+    "sha256": "57e4b32a94b23c542cf8dff5cee8d401807d057c1d6718bc78655d582dada789"
+   },
+   "BNB": {
+    "days": 3293,
+    "first": "2017-11-06",
+    "last": "2026-11-11",
+    "close_sha256": "6f0ef93fc9607c603e3d14f9c614312a1d87c63a27f99ee1252a13cd1130f662",
+    "sha256": "8347797b3bd26f2d86b22bc88e072093119586a1b4874674e7cbec8cc8ad5e51"
+   },
+   "SOL": {
+    "days": 2284,
+    "first": "2020-08-11",
+    "last": "2026-11-11",
+    "close_sha256": "9b40e4eb52631b7dcb235190f7f428005780f065941c4ebe1fd42680f83dac6c",
+    "sha256": "8ab3992cffa9d40a3a45a9afbe3ad49b483a24cb27cade480defa23a32ecc8dd"
+   },
+   "XRP": {
+    "days": 3114,
+    "first": "2018-05-04",
+    "last": "2026-11-11",
+    "close_sha256": "ff675f8e0225b3a7afd7a1ed17ed676d74884a7a9fd64849450f880ae87e3ebf",
+    "sha256": "224c9adc45a1e4d4bddd75c21ce945041b2ed233a6b215f13e538bad1b8ff872"
+   },
+   "ADA": {
+    "days": 3131,
+    "first": "2018-04-17",
+    "last": "2026-11-11",
+    "close_sha256": "a117ae1fc3d8ed925cc83209bcaf6e50dbec06b7b9ec7d6c1b04297dd21e4258",
+    "sha256": "148a63f758d28e4e8d513246c5fa29d661247ad9bdfc40eb0c5abb58b5405fd3"
+   },
+   "DOGE": {
+    "days": 2687,
+    "first": "2019-07-05",
+    "last": "2026-11-11",
+    "close_sha256": "30d1b0b660677884b09ed05362015423ff4042335636dc8c6473b9fd73bccc08",
+    "sha256": "15bf831545a3957e89256e273cb31dbb65678c102ce93e300f38cfb6e9e5bd93"
+   },
+   "AVAX": {
+    "days": 2242,
+    "first": "2020-09-22",
+    "last": "2026-11-11",
+    "close_sha256": "0242c3b192bc6beac290a97454cf0e9d9619ae36981d58a1cf339529864925ac",
+    "sha256": "63aedc32b9b1bd70b97c38b88b0a7c99babf4a9efb64faff52fc845a0f489ebf"
+   },
+   "LINK": {
+    "days": 2857,
+    "first": "2019-01-16",
+    "last": "2026-11-11",
+    "close_sha256": "8bdbc1fe9a9dce46106e948f6aeb8083c1cee639478c9504d390b81ae387e768",
+    "sha256": "7ffb4f3971c8e2214c2a8c4993693f1428bb8b7e55b066e6256f24b26f07bab4"
+   },
+   "DOT": {
+    "days": 2277,
+    "first": "2020-08-18",
+    "last": "2026-11-11",
+    "close_sha256": "1f101005d14c5859ad1bdef036c305b7026bb5613c92f63208c56724cfdc637d",
+    "sha256": "aecebf1c2ff17ab4e6c20a6c77cf78ee0e6d4a7410e40aea62d4d45b78351271"
+   }
+  }
+ },
+ "integrity": {
+  "BTC": {
+   "days": 3374,
+   "first": "2017-08-17",
+   "last": "2026-11-11",
+   "high_below_open_or_close": 0,
+   "low_above_open_or_close": 0,
+   "non_positive": 0,
+   "open_off_prev_close_over_100bps": 0,
+   "open_off_prev_close_max_bps": 81.30335812384982
+  },
+  "ETH": {
+   "days": 3374,
+   "first": "2017-08-17",
+   "last": "2026-11-11",
+   "high_below_open_or_close": 0,
+   "low_above_open_or_close": 0,
+   "non_positive": 0,
+   "open_off_prev_close_over_100bps": 4,
+   "open_off_prev_close_max_bps": 151.89393939393892
+  },
+  "BNB": {
+   "days": 3293,
+   "first": "2017-11-06",
+   "last": "2026-11-11",
+   "high_below_open_or_close": 0,
+   "low_above_open_or_close": 0,
+   "non_positive": 0,
+   "open_off_prev_close_over_100bps": 6,
+   "open_off_prev_close_max_bps": 447.6740792622413
+  },
+  "SOL": {
+   "days": 2284,
+   "first": "2020-08-11",
+   "last": "2026-11-11",
+   "high_below_open_or_close": 0,
+   "low_above_open_or_close": 0,
+   "non_positive": 0,
+   "open_off_prev_close_over_100bps": 0,
+   "open_off_prev_close_max_bps": 72.06753757807438
+  },
+  "XRP": {
+   "days": 3114,
+   "first": "2018-05-04",
+   "last": "2026-11-11",
+   "high_below_open_or_close": 0,
+   "low_above_open_or_close": 0,
+   "non_positive": 0,
+   "open_off_prev_close_over_100bps": 0,
+   "open_off_prev_close_max_bps": 50.57731812708077
+  },
+  "ADA": {
+   "days": 3131,
+   "first": "2018-04-17",
+   "last": "2026-11-11",
+   "high_below_open_or_close": 0,
+   "low_above_open_or_close": 0,
+   "non_positive": 0,
+   "open_off_prev_close_over_100bps": 0,
+   "open_off_prev_close_max_bps": 41.176045654842675
+  },
+  "DOGE": {
+   "days": 2687,
+   "first": "2019-07-05",
+   "last": "2026-11-11",
+   "high_below_open_or_close": 0,
+   "low_above_open_or_close": 0,
+   "non_positive": 0,
+   "open_off_prev_close_over_100bps": 2,
+   "open_off_prev_close_max_bps": 640.7851962990762
+  },
+  "AVAX": {
+   "days": 2242,
+   "first": "2020-09-22",
+   "last": "2026-11-11",
+   "high_below_open_or_close": 0,
+   "low_above_open_or_close": 0,
+   "non_positive": 0,
+   "open_off_prev_close_over_100bps": 0,
+   "open_off_prev_close_max_bps": 53.21550667612751
+  },
+  "LINK": {
+   "days": 2857,
+   "first": "2019-01-16",
+   "last": "2026-11-11",
+   "high_below_open_or_close": 0,
+   "low_above_open_or_close": 0,
+   "non_positive": 0,
+   "open_off_prev_close_over_100bps": 1,
+   "open_off_prev_close_max_bps": 108.74293170943905
+  },
+  "DOT": {
+   "days": 2277,
+   "first": "2020-08-18",
+   "last": "2026-11-11",
+   "high_below_open_or_close": 0,
+   "low_above_open_or_close": 0,
+   "non_positive": 0,
+   "open_off_prev_close_over_100bps": 0,
+   "open_off_prev_close_max_bps": 47.14227989045084
+  }
+ },
+ "prereg_sha256": "459cf3ceb6e86b82dbb1c0628e097b2ae41c40832963d09b5f614099e9fbd1fe",
+ "calibration": {
+  "datasets": 20,
+  "fired_better": 0,
+  "fired_worse": 0,
+  "passed": true,
+  "mechanical_effect": {
+   "DS10": {
+    "mean_bps_day": -0.2189184960373447,
+    "se": 0.0730513990544564,
+    "p_raw_below_alpha": 0
+   },
+   "SL10": {
+    "mean_bps_day": 0.37943871765356146,
+    "se": 0.21521766329799502,
+    "p_raw_below_alpha": 2
+   },
+   "BE10": {
+    "mean_bps_day": -0.06330751360336084,
+    "se": 0.2854079775558036,
+    "p_raw_below_alpha": 2
+   },
+   "TP10": {
+    "mean_bps_day": 0.26330650397917366,
+    "se": 0.39988133577522067,
+    "p_raw_below_alpha": 1
+   }
+  }
+ },
+ "days": 2507,
+ "first_pnl_day": "2020-01-01",
+ "last_pnl_day": "2026-11-11",
+ "split_day": "2023-06-07",
+ "engine_vs_plain_max_abs": {
+  "BASE": 2.7755575615628914e-17,
+  "DS10": 2.7755575615628914e-17,
+  "SL10": 2.7755575615628914e-17,
+  "BE10": 2.7755575615628914e-17,
+  "TP10": 6.938893903907228e-18
+ },
+ "verdicts": {
+  "DS10": {
+   "rule": {
+    "name": "DS10",
+    "daily_stop": 0.1,
+    "entry_stop": null,
+    "breakeven_at": null,
+    "take_at": null,
+    "take_frac": 0.5,
+    "stop_slip_bps": 25.0,
+    "tp_through_bps": 5.0
+   },
+   "mean_bps_day": -1.6517820240851318,
+   "p": 0.011698830116988301,
+   "ci_lo_bps_day": -2.954018849324885,
+   "ci_hi_bps_day": -0.42136323115083285,
+   "p_holm": 0.046795320467953205,
+   "halves_bps_day": [
+    -2.0611362673855704,
+    -1.242754219575203
+   ],
+   "neighbours_bps_day": {
+    "DS05": -4.817475067964676,
+    "DS15": -0.8432095538086589
+   },
+   "harsh_bps_day": -2.0756781358918084,
+   "usd_per_year_at_350": -21.101515357687557,
+   "checks": {
+    "holm_p_below_0.05_and_positive": false,
+    "positive_in_both_halves": false,
+    "drawdown_no_deeper_than_base": false,
+    "both_neighbours_positive": false,
+    "positive_under_harsh_fills": false
+   },
+   "verdict": "worse"
+  },
+  "SL10": {
+   "rule": {
+    "name": "SL10",
+    "daily_stop": 0.25,
+    "entry_stop": 0.1,
+    "breakeven_at": null,
+    "take_at": null,
+    "take_frac": 0.5,
+    "stop_slip_bps": 25.0,
+    "tp_through_bps": 5.0
+   },
+   "mean_bps_day": -1.338294632503518,
+   "p": 0.07179282071792821,
+   "ci_lo_bps_day": -2.91223097641604,
+   "ci_hi_bps_day": 0.04350225181727552,
+   "p_holm": 0.12538746125387462,
+   "halves_bps_day": [
+    -1.9807286984908212,
+    -0.6963728743838286
+   ],
+   "neighbours_bps_day": {
+    "SL05": -3.5260485057942597,
+    "SL20": 0.10556954947717508
+   },
+   "harsh_bps_day": -1.4668838818618484,
+   "usd_per_year_at_350": -17.096713930232443,
+   "checks": {
+    "holm_p_below_0.05_and_positive": false,
+    "positive_in_both_halves": false,
+    "drawdown_no_deeper_than_base": true,
+    "both_neighbours_positive": false,
+    "positive_under_harsh_fills": false
+   },
+   "verdict": "not established"
+  },
+  "BE10": {
+   "rule": {
+    "name": "BE10",
+    "daily_stop": 0.25,
+    "entry_stop": null,
+    "breakeven_at": 0.1,
+    "take_at": null,
+    "take_frac": 0.5,
+    "stop_slip_bps": 25.0,
+    "tp_through_bps": 5.0
+   },
+   "mean_bps_day": -2.446224453493343,
+   "p": 0.06269373062693731,
+   "ci_lo_bps_day": -5.231887765585243,
+   "ci_hi_bps_day": -0.051444270151130386,
+   "p_holm": 0.12538746125387462,
+   "halves_bps_day": [
+    -4.2056449899050135,
+    -0.6882069637614264
+   ],
+   "neighbours_bps_day": {
+    "BE05": -4.209982088396528,
+    "BE20": -0.8417075724594943
+   },
+   "harsh_bps_day": -2.6036927124924674,
+   "usd_per_year_at_350": -31.250517393377454,
+   "checks": {
+    "holm_p_below_0.05_and_positive": false,
+    "positive_in_both_halves": false,
+    "drawdown_no_deeper_than_base": true,
+    "both_neighbours_positive": false,
+    "positive_under_harsh_fills": false
+   },
+   "verdict": "not established"
+  },
+  "TP10": {
+   "rule": {
+    "name": "TP10",
+    "daily_stop": 0.25,
+    "entry_stop": null,
+    "breakeven_at": null,
+    "take_at": 0.1,
+    "take_frac": 0.5,
+    "stop_slip_bps": 25.0,
+    "tp_through_bps": 5.0
+   },
+   "mean_bps_day": -4.134787439551761,
+   "p": 0.0221977802219778,
+   "ci_lo_bps_day": -7.7413212828101585,
+   "ci_hi_bps_day": -0.6679996499328331,
+   "p_holm": 0.0665933406659334,
+   "halves_bps_day": [
+    -3.974881612640838,
+    -4.294565749854304
+   ],
+   "neighbours_bps_day": {
+    "TP05": -5.20282006219156,
+    "TP20": -1.3171169683608943
+   },
+   "harsh_bps_day": -3.9375329321891526,
+   "usd_per_year_at_350": -52.82190954027375,
+   "checks": {
+    "holm_p_below_0.05_and_positive": false,
+    "positive_in_both_halves": false,
+    "drawdown_no_deeper_than_base": true,
+    "both_neighbours_positive": false,
+    "positive_under_harsh_fills": false
+   },
+   "verdict": "not established"
+  }
+ },
+ "rules": {
+  "BASE": {
+   "ann_return_pct": 36.40068077128929,
+   "ann_vol_pct": 32.5902366542074,
+   "sharpe": 1.1169198050787996,
+   "max_drawdown_pct": -15.237437448554891,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 250.01782655786914,
+   "usd_per_year_at_350": 127.4023826995125,
+   "cost_pct_per_year": 4.455867870965971,
+   "funding_pct_per_year": 2.8868386652072786,
+   "long_pct_per_year": 42.13813828456264,
+   "short_pct_per_year": 1.6052490228998912,
+   "per_year": {
+    "pass_trades": 878.940965297168,
+    "daily_stops": 14.122457120063823,
+    "exit_stops": 0.0,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "NOSTOP": {
+   "ann_return_pct": 38.33041378810448,
+   "ann_vol_pct": 32.42161483535935,
+   "sharpe": 1.1822487554290764,
+   "max_drawdown_pct": -14.201329359979386,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 263.27218456651485,
+   "usd_per_year_at_350": 134.15644825836569,
+   "cost_pct_per_year": 4.431804990154752,
+   "funding_pct_per_year": 2.8864862062819654,
+   "long_pct_per_year": 44.189101285932374,
+   "short_pct_per_year": 1.4596036986088083,
+   "per_year": {
+    "pass_trades": 872.6804946150778,
+    "daily_stops": 0.0,
+    "exit_stops": 0.0,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "DS10": {
+   "ann_return_pct": 30.371676383378553,
+   "ann_vol_pct": 32.42143944699709,
+   "sharpe": 0.9367775429289771,
+   "max_drawdown_pct": -15.286285880186934,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 208.6076512140549,
+   "usd_per_year_at_350": 106.30086734182494,
+   "cost_pct_per_year": 4.940600841469485,
+   "funding_pct_per_year": 2.885294594849222,
+   "long_pct_per_year": 35.34673373251057,
+   "short_pct_per_year": 2.8508380871866903,
+   "per_year": {
+    "pass_trades": 975.1775029916236,
+    "daily_stops": 173.4004786597527,
+    "exit_stops": 0.0,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "SL10": {
+   "ann_return_pct": 31.51590536265145,
+   "ann_vol_pct": 30.45124284037446,
+   "sharpe": 1.0349628594096454,
+   "max_drawdown_pct": -14.88015191511387,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 216.46678012100597,
+   "usd_per_year_at_350": 110.30566876928006,
+   "cost_pct_per_year": 4.146502693625071,
+   "funding_pct_per_year": 2.7051131379430355,
+   "long_pct_per_year": 36.96774309336065,
+   "short_pct_per_year": 1.3997781008589025,
+   "per_year": {
+    "pass_trades": 790.857598723574,
+    "daily_stops": 5.969285999202234,
+    "exit_stops": 64.20622257678501,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "BE10": {
+   "ann_return_pct": 27.471961516038583,
+   "ann_vol_pct": 27.49932084108675,
+   "sharpe": 0.9990050908818339,
+   "max_drawdown_pct": -14.707362754223908,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 188.69097950879103,
+   "usd_per_year_at_350": 96.15186530613505,
+   "cost_pct_per_year": 3.938566914939353,
+   "funding_pct_per_year": 2.3330782611271927,
+   "long_pct_per_year": 32.66239564105849,
+   "short_pct_per_year": 1.0812110510466382,
+   "per_year": {
+    "pass_trades": 735.3869166334265,
+    "daily_stops": 8.298763462305544,
+    "exit_stops": 46.88073394495413,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "TP10": {
+   "ann_return_pct": 21.308706616925356,
+   "ann_vol_pct": 17.700085392305976,
+   "sharpe": 1.203875921761824,
+   "max_drawdown_pct": -12.220797492622737,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 146.35870544830647,
+   "usd_per_year_at_350": 74.58047315923874,
+   "cost_pct_per_year": 3.107885162847546,
+   "funding_pct_per_year": 1.8577261565205883,
+   "long_pct_per_year": 25.145684996919055,
+   "short_pct_per_year": 1.128632939374437,
+   "per_year": {
+    "pass_trades": 539.5652173913044,
+    "daily_stops": 10.91942560829677,
+    "exit_stops": 0.0,
+    "takes": 79.78460311128839,
+    "pass_takes": 0.0
+   }
+  },
+  "DS05": {
+   "ann_return_pct": 18.816896773218218,
+   "ann_vol_pct": 29.915301346028684,
+   "sharpe": 0.6290057571396049,
+   "max_drawdown_pct": -19.01334868502188,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 129.2437266039947,
+   "usd_per_year_at_350": 65.85913870626376,
+   "cost_pct_per_year": 7.172642446126795,
+   "funding_pct_per_year": 2.879341975859703,
+   "long_pct_per_year": 24.843629356503254,
+   "short_pct_per_year": 4.025251838701472,
+   "per_year": {
+    "pass_trades": 1335.3729557239728,
+    "daily_stops": 698.9888312724372,
+    "exit_stops": 0.0,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "DS15": {
+   "ann_return_pct": 33.32296589988768,
+   "ann_vol_pct": 32.87831270197375,
+   "sharpe": 1.0135242097714834,
+   "max_drawdown_pct": -15.562641938480992,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 228.87856304388606,
+   "usd_per_year_at_350": 116.63038064960686,
+   "cost_pct_per_year": 4.577559280779314,
+   "funding_pct_per_year": 2.888125280698153,
+   "long_pct_per_year": 39.35434970718899,
+   "short_pct_per_year": 1.434300754176163,
+   "per_year": {
+    "pass_trades": 903.1092939768648,
+    "daily_stops": 56.7810131631432,
+    "exit_stops": 0.0,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "SL05": {
+   "ann_return_pct": 23.53060372514024,
+   "ann_vol_pct": 24.189921430381055,
+   "sharpe": 0.972744115472291,
+   "max_drawdown_pct": -13.579979122826735,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 161.61979051760707,
+   "usd_per_year_at_350": 82.35711303799084,
+   "cost_pct_per_year": 3.4982547440008296,
+   "funding_pct_per_year": 2.1619939939288138,
+   "long_pct_per_year": 27.593668112888476,
+   "short_pct_per_year": 1.597184350181404,
+   "per_year": {
+    "pass_trades": 662.445153570004,
+    "daily_stops": 3.3486238532110093,
+    "exit_stops": 151.56162744315915,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "SL20": {
+   "ann_return_pct": 36.786009626880976,
+   "ann_vol_pct": 32.25880697176996,
+   "sharpe": 1.1403400522242755,
+   "max_drawdown_pct": -14.58363696529007,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 252.66445516326192,
+   "usd_per_year_at_350": 128.7510336940834,
+   "cost_pct_per_year": 4.402560389180431,
+   "funding_pct_per_year": 2.871708697622449,
+   "long_pct_per_year": 42.32892749045073,
+   "short_pct_per_year": 1.7313512232331247,
+   "per_year": {
+    "pass_trades": 855.5005983246909,
+    "daily_stops": 8.153171120861588,
+    "exit_stops": 13.103310729956123,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "BE05": {
+   "ann_return_pct": 21.034246148641948,
+   "ann_vol_pct": 21.940549094829016,
+   "sharpe": 0.9586927864808694,
+   "max_drawdown_pct": -14.95955956543541,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 144.47357560176815,
+   "usd_per_year_at_350": 73.61986152024683,
+   "cost_pct_per_year": 3.5540998166141695,
+   "funding_pct_per_year": 1.9734769599840014,
+   "long_pct_per_year": 27.013553855366318,
+   "short_pct_per_year": -0.4517309301261928,
+   "per_year": {
+    "pass_trades": 651.0889509373753,
+    "daily_stops": 6.114878340646191,
+    "exit_stops": 74.54327881930595,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "BE20": {
+   "ann_return_pct": 33.328448131812124,
+   "ann_vol_pct": 30.924802300667924,
+   "sharpe": 1.0777255035545459,
+   "max_drawdown_pct": -14.793815826280476,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 228.91621771630957,
+   "usd_per_year_at_350": 116.64956846134244,
+   "cost_pct_per_year": 4.257976219377161,
+   "funding_pct_per_year": 2.652182807080968,
+   "long_pct_per_year": 37.55258822863405,
+   "short_pct_per_year": 2.686018929636211,
+   "per_year": {
+    "pass_trades": 818.8113282808138,
+    "daily_stops": 10.337056242520942,
+    "exit_stops": 21.25648185081771,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "TP05": {
+   "ann_return_pct": 17.41038754429009,
+   "ann_vol_pct": 13.51076002009396,
+   "sharpe": 1.2886312478643973,
+   "max_drawdown_pct": -9.197809276863788,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 119.58312759872673,
+   "usd_per_year_at_350": 60.93635640501532,
+   "cost_pct_per_year": 2.425543653102067,
+   "funding_pct_per_year": 1.4674273956601471,
+   "long_pct_per_year": 21.349416752423345,
+   "short_pct_per_year": -0.046058159371036,
+   "per_year": {
+    "pass_trades": 428.3326685281213,
+    "daily_stops": 10.91942560829677,
+    "exit_stops": 0.0,
+    "takes": 129.72277622656563,
+    "pass_takes": 0.0
+   }
+  },
+  "TP20": {
+   "ann_return_pct": 31.593203836772027,
+   "ann_vol_pct": 23.916945476057087,
+   "sharpe": 1.3209547961883144,
+   "max_drawdown_pct": -11.393050996658548,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 216.99770416106156,
+   "usd_per_year_at_350": 110.57621342870209,
+   "cost_pct_per_year": 3.733572485523711,
+   "funding_pct_per_year": 2.292372938336569,
+   "long_pct_per_year": 32.925619366265785,
+   "short_pct_per_year": 4.693529894366522,
+   "per_year": {
+    "pass_trades": 662.8819305943359,
+    "daily_stops": 10.91942560829677,
+    "exit_stops": 0.0,
+    "takes": 44.11447945751895,
+    "pass_takes": 0.0
+   }
+  },
+  "BASE_harsh": {
+   "ann_return_pct": 36.30739294288931,
+   "ann_vol_pct": 32.603200076264265,
+   "sharpe": 1.1136143954568976,
+   "max_drawdown_pct": -15.282129959159963,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 249.3770797474616,
+   "usd_per_year_at_350": 127.07587530011257,
+   "cost_pct_per_year": 4.455865473370892,
+   "funding_pct_per_year": 2.8868386652072786,
+   "long_pct_per_year": 42.08871817726049,
+   "short_pct_per_year": 1.5613789042069894,
+   "per_year": {
+    "pass_trades": 878.940965297168,
+    "daily_stops": 14.122457120063823,
+    "exit_stops": 0.0,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "DS10_harsh": {
+   "ann_return_pct": 28.73116774688421,
+   "ann_vol_pct": 32.5622076720559,
+   "sharpe": 0.8823470458835199,
+   "max_drawdown_pct": -16.019826288355176,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 197.33982888065404,
+   "usd_per_year_at_350": 100.55908711409474,
+   "cost_pct_per_year": 4.940536996682663,
+   "funding_pct_per_year": 2.885294594849222,
+   "long_pct_per_year": 34.45255306267785,
+   "short_pct_per_year": 2.1044462757382436,
+   "per_year": {
+    "pass_trades": 975.1775029916236,
+    "daily_stops": 173.4004786597527,
+    "exit_stops": 0.0,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "SL10_harsh": {
+   "ann_return_pct": 30.953266774093564,
+   "ann_vol_pct": 30.48666082989534,
+   "sharpe": 1.0153052492958057,
+   "max_drawdown_pct": -15.279852917716685,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 212.6023008291851,
+   "usd_per_year_at_350": 108.33643370932747,
+   "cost_pct_per_year": 4.146531378722088,
+   "funding_pct_per_year": 2.7051131379430355,
+   "long_pct_per_year": 36.71963848539916,
+   "short_pct_per_year": 1.0852728053595284,
+   "per_year": {
+    "pass_trades": 790.857598723574,
+    "daily_stops": 5.969285999202234,
+    "exit_stops": 64.20622257678501,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "BE10_harsh": {
+   "ann_return_pct": 26.8039145422918,
+   "ann_vol_pct": 27.540593656970813,
+   "sharpe": 0.9732511534117729,
+   "max_drawdown_pct": -14.881540460121778,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 184.1025034452755,
+   "usd_per_year_at_350": 93.81370089802131,
+   "cost_pct_per_year": 3.938560487451026,
+   "funding_pct_per_year": 2.3330782611271927,
+   "long_pct_per_year": 32.32092971784065,
+   "short_pct_per_year": 0.7546235730293686,
+   "per_year": {
+    "pass_trades": 735.3869166334265,
+    "daily_stops": 8.298763462305544,
+    "exit_stops": 46.88073394495413,
+    "takes": 0.0,
+    "pass_takes": 0.0
+   }
+  },
+  "TP10_harsh": {
+   "ann_return_pct": 21.9353977403989,
+   "ann_vol_pct": 17.81101866126138,
+   "sharpe": 1.2315633461273028,
+   "max_drawdown_pct": -12.096889418422984,
+   "k1_would_fire": false,
+   "total_pnl_pct_of_capital": 150.6631291374796,
+   "usd_per_year_at_350": 76.77389209139615,
+   "cost_pct_per_year": 3.1126670475991784,
+   "funding_pct_per_year": 1.8602217239927685,
+   "long_pct_per_year": 25.580178531706473,
+   "short_pct_per_year": 1.3281079802843787,
+   "per_year": {
+    "pass_trades": 540.5843637814121,
+    "daily_stops": 10.91942560829677,
+    "exit_stops": 0.0,
+    "takes": 79.49341842840049,
+    "pass_takes": 0.0
+   }
+  }
+ },
+ "by_year_pnl_pct_of_capital": {
+  "2020": {
+   "BASE": 77.21475373591535,
+   "NOSTOP": 79.06795265225406,
+   "DS10": 63.520378770183385,
+   "SL10": 67.82088867926157,
+   "BE10": 45.380767546819115,
+   "TP10": 41.14591466139355
+  },
+  "2021": {
+   "BASE": 72.2801265662224,
+   "NOSTOP": 79.08137568301257,
+   "DS10": 55.896550242157076,
+   "SL10": 59.13698783996425,
+   "BE10": 49.65404559611068,
+   "TP10": 41.04447152510495
+  },
+  "2022": {
+   "BASE": 12.411681323202588,
+   "NOSTOP": 15.71129116926101,
+   "DS10": 15.241625290592259,
+   "SL10": 9.417106669769023,
+   "BE10": 6.392547536041626,
+   "TP10": 12.583898561131287
+  },
+  "2023": {
+   "BASE": 31.272959888568895,
+   "NOSTOP": 31.272509309258425,
+   "DS10": 27.107821645708114,
+   "SL10": 31.74359823498829,
+   "BE10": 36.835598412758046,
+   "TP10": 25.767003643554215
+  },
+  "2024": {
+   "BASE": 28.15254706137278,
+   "NOSTOP": 31.493419585075532,
+   "DS10": 17.804587318664677,
+   "SL10": 18.949925409177293,
+   "BE10": 22.31084505309006,
+   "TP10": 11.700720105566033
+  },
+  "2025": {
+   "BASE": 7.330591173364209,
+   "NOSTOP": 5.506605423932595,
+   "DS10": 6.208540149924434,
+   "SL10": 6.622789920192271,
+   "BE10": 6.955417386673399,
+   "TP10": 1.8781068506896093
+  },
+  "2026": {
+   "BASE": 21.355166809222904,
+   "NOSTOP": 21.13903074372067,
+   "DS10": 22.828147796824943,
+   "SL10": 22.775483367653276,
+   "BE10": 21.16175797729812,
+   "TP10": 12.238590100866826
+  }
+ },
+ "h_trend_simulate_same_days": {
+  "ann_return_pct": 38.23562430944878,
+  "ann_vol_pct": 32.820197477226344,
+  "sharpe": 1.1650028716609688,
+  "max_drawdown_pct": -14.04899186756584,
+  "k1_would_fire": false,
+  "total_pnl_pct_of_capital": 262.62112368161115,
+  "usd_per_year_at_350": 133.82468508307073
+ },
+ "seconds": 3.4
+}
