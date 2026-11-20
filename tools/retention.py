@@ -28,6 +28,7 @@ Dry run is the default. --apply is required to change anything.
 import argparse
 import csv
 import gzip
+import os
 import pathlib
 import shutil
 import sys
@@ -44,7 +45,8 @@ from research.levels.config import (                              # noqa: E402
 DATA = pathlib.Path(__file__).resolve().parent.parent / "research/levels/data"
 ARCHIVE = DATA / "archive"
 TRADE_LOG = DATA / "live_trades.csv"
-LOG_DIR = pathlib.Path.home() / "Library/Logs/cuan-sniffer"
+LOG_DIR = pathlib.Path(os.getenv("CUAN_LOG_DIR",
+                                 str(pathlib.Path.home() / "Library/Logs/cuan-sniffer")))
 ROTATABLE = ("trader.log", "scanner.log", "protect.log", "telegram.log")
 # The stderr streams rotate too, on ERR_ROTATE_KB rather than LOG_ROTATE_MB.
 # They are normally empty, so anything in one is a traceback.

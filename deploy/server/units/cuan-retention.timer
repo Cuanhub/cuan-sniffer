@@ -1,0 +1,10 @@
+[Unit]
+Description=CuanSniffer retention schedule
+
+[Timer]
+OnCalendar=*-*-* 04:20:00 UTC
+Persistent=true
+RandomizedDelaySec=0
+
+[Install]
+WantedBy=timers.target

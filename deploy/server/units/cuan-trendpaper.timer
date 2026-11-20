@@ -1,0 +1,10 @@
+[Unit]
+Description=CuanSniffer trendpaper schedule
+
+[Timer]
+OnCalendar=*-*-* *:15:00 UTC
+Persistent=true
+RandomizedDelaySec=0
+
+[Install]
+WantedBy=timers.target

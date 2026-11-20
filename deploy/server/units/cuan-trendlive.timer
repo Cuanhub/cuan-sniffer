@@ -1,0 +1,10 @@
+[Unit]
+Description=CuanSniffer trendlive schedule
+
+[Timer]
+OnCalendar=*-*-* *:10:00 UTC
+Persistent=true
+RandomizedDelaySec=0
+
+[Install]
+WantedBy=timers.target

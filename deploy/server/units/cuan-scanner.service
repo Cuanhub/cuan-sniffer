@@ -1,0 +1,19 @@
+[Unit]
+Description=CuanSniffer scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=cuan
+WorkingDirectory=/home/cuan/CuanSniffer
+Environment=CUAN_LOG_DIR=/home/cuan/logs
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/home/cuan/CuanSniffer/.venv/bin/python -u -m research.levels.scanner
+Restart=on-failure
+RestartSec=60
+StandardOutput=append:/home/cuan/logs/scanner.log
+StandardError=append:/home/cuan/logs/scanner.err.log
+
+[Install]
+WantedBy=multi-user.target

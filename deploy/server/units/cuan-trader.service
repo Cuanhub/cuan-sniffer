@@ -1,0 +1,19 @@
+[Unit]
+Description=CuanSniffer trader
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=cuan
+WorkingDirectory=/home/cuan/CuanSniffer
+Environment=CUAN_LOG_DIR=/home/cuan/logs
+Environment=PYTHONUNBUFFERED=1
+Environment=LEVELS_LIVE_ARMED=yes
+ExecStart=/home/cuan/CuanSniffer/.venv/bin/python -u -m tools.live_levels_trader --arm
+Restart=on-failure
+RestartSec=60
+StandardOutput=append:/home/cuan/logs/trader.log
+StandardError=append:/home/cuan/logs/trader.err.log
+
+[Install]
+WantedBy=multi-user.target

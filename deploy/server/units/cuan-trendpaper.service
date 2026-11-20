@@ -1,0 +1,14 @@
+[Unit]
+Description=CuanSniffer trendpaper (run by cuan-trendpaper.timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cuan
+WorkingDirectory=/home/cuan/CuanSniffer
+Environment=CUAN_LOG_DIR=/home/cuan/logs
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/cuan/CuanSniffer/.venv/bin/python -u -m research.trend.paper --notify
+StandardOutput=append:/home/cuan/logs/trendpaper.log
+StandardError=append:/home/cuan/logs/trendpaper.err.log
